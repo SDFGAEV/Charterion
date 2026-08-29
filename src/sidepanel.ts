@@ -163,8 +163,9 @@ function renderTask(managed: ManagedTask): HTMLElement {
     reviewError.textContent = `Review protocol error: ${managed.reviewError}`;
     card.append(reviewError);
   }
+  const actions = el('div', 'task-actions');
+  let hasAction = false;
   if (managed.status === 'error' || managed.status === 'attention') {
-    const actions = el('div', 'task-actions');
     const retry = el('button');
     retry.type = 'button';
     retry.textContent = 'Retry';
@@ -174,8 +175,38 @@ function renderTask(managed: ManagedTask): HTMLElement {
         .catch((error) => setStatus(taskStatus, String(error), true));
     });
     actions.append(retry);
-    card.append(actions);
+    hasAction = true;
   }
+  if (['pending', 'ready', 'error', 'attention', 'blocked'].includes(managed.status)) {
+    const skip = el('button');
+    skip.type = 'button';
+    skip.textContent = 'Skip';
+    skip.addEventListener('click', () => {
+      void request({ type: 'manager:skip-task', taskId: managed.task.id })
+        .then(async () => { setStatus(taskStatus, 'Task skipped.'); await refresh(); })
+        .catch((error) => setStatus(taskStatus, String(error), true));
+    });
+    actions.append(skip);
+    hasAction = true;
+  }
+  if (!['completed', 'skipped', 'cancelled'].includes(managed.status)) {
+    const cancel = el('button');
+    cancel.type = 'button';
+    cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', () => {
+      void request({ type: 'manager:cancel-task', taskId: managed.task.id })
+        .then(async () => {
+          setStatus(taskStatus, managed.status === 'running'
+            ? 'Task orchestration cancelled; any already-sent ChatGPT generation may still finish.'
+            : 'Task cancelled.');
+          await refresh();
+        })
+        .catch((error) => setStatus(taskStatus, String(error), true));
+    });
+    actions.append(cancel);
+    hasAction = true;
+  }
+  if (hasAction) card.append(actions);
   return card;
 }
 

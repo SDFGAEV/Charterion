@@ -93,4 +93,21 @@ describe('task status derivation', () => {
     expect(deriveManagedTasks([retried], [bad])[0]?.status).toBe('ready');
   });
 
+  it('treats skipped dependencies as satisfied but cancelled dependencies as blocked', () => {
+    const skipped = { ...task('a'), skippedAt: 10 };
+    const downstream = task('b', ['a']);
+    expect(deriveManagedTasks([skipped, downstream], []).map((item) => item.status))
+      .toEqual(['skipped', 'ready']);
+
+    const cancelled = { ...task('a'), cancelledAt: 10 };
+    expect(deriveManagedTasks([cancelled, downstream], []).map((item) => item.status))
+      .toEqual(['cancelled', 'blocked']);
+  });
+
+  it('keeps cancellation authoritative even if a late reply arrives', () => {
+    const cancelled = { ...task('a', [], ['attempt-a']), cancelledAt: 10 };
+    expect(deriveManagedTasks([cancelled], [attempt('attempt-a', 'reply-observed')])[0]?.status)
+      .toBe('cancelled');
+  });
+
 });

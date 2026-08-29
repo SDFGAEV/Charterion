@@ -69,9 +69,9 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .task-title strong, .task-title small { display: block; }
 .task-title small { margin-top: 2px; opacity: .66; }
 .task-state { border-radius: 999px; padding: 3px 7px; font-size: 10px; text-transform: uppercase; }
-.task-state-ready, .task-state-completed { background: color-mix(in srgb, #28a745 18%, Canvas); }
+.task-state-ready, .task-state-completed, .task-state-skipped { background: color-mix(in srgb, #28a745 18%, Canvas); }
 .task-state-running { background: color-mix(in srgb, #d39e00 20%, Canvas); }
-.task-state-error, .task-state-attention, .task-state-blocked { background: color-mix(in srgb, #c62828 18%, Canvas); }
+.task-state-error, .task-state-attention, .task-state-blocked, .task-state-cancelled { background: color-mix(in srgb, #c62828 18%, Canvas); }
 .task-state-pending { background: color-mix(in srgb, #777 18%, Canvas); }
 .task-id { display: block; margin-top: 6px; font-size: 10px; opacity: .58; overflow-wrap: anywhere; }
 .task-deps, .task-instruction, .task-error { margin-top: 7px; font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; }

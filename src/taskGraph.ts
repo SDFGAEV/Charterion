@@ -76,13 +76,17 @@ export function deriveManagedTasks(
     );
     const evaluation = retryRequested ? {} : evaluateAttempt(task, lastAttempt);
     let status: TaskDisplayStatus;
-    if (evaluation.status) {
+    if (task.cancelledAt !== undefined) {
+      status = 'cancelled';
+    } else if (task.skippedAt !== undefined) {
+      status = 'skipped';
+    } else if (evaluation.status) {
       status = evaluation.status;
     } else {
       const dependencies = task.dependsOn.map((id) => tasks.find((candidate) => candidate.id === id)).filter(Boolean) as AgentTask[];
       const dependencyStates = dependencies.map((dependency) => derive(dependency).status);
-      if (dependencyStates.some((state) => ['error', 'attention', 'blocked'].includes(state))) status = 'blocked';
-      else if (dependencyStates.every((state) => state === 'completed')) status = 'ready';
+      if (dependencyStates.some((state) => ['error', 'attention', 'blocked', 'cancelled'].includes(state))) status = 'blocked';
+      else if (dependencyStates.every((state) => state === 'completed' || state === 'skipped')) status = 'ready';
       else status = task.dependsOn.length === 0 ? 'ready' : 'pending';
     }
     const managed: ManagedTask = { task, status };

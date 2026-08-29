@@ -2,6 +2,7 @@ import { advanceAttempt } from './attempts';
 import { deriveManagedTasks, isRetryableTaskAttempt, validateTaskGraph } from './taskGraph';
 import { planReadyDispatches } from './supervisor';
 import { buildTaskDispatchPrompt } from './taskPrompt';
+import { applyTaskDisposition } from './taskLifecycle';
 import { recoverAttempt, type AttemptRecoveryObservation } from './recovery';
 import {
   EMPTY_BINDING,
@@ -333,6 +334,18 @@ async function requestTaskRetry(taskId: string): Promise<AgentTask> {
     return updated;
   });
 }
+async function setTaskDisposition(taskId: string, action: 'skip' | 'cancel', reason = ''): Promise<AgentTask> {
+  return serializeStateMutation(async () => {
+    const state = await readWorkState();
+    const managed = deriveManagedTasks(state.tasks, state.attempts).find((item) => item.task.id === taskId);
+    if (!managed) throw new Error(`Task ${taskId} does not exist`);
+    const updated = applyTaskDisposition(managed.task, managed.status, action, Date.now(), reason);
+    const tasks = state.tasks.map((task) => task.id === taskId ? updated : task);
+    await chrome.storage.local.set({ [TASKS_KEY]: tasks });
+    return updated;
+  });
+}
+
 async function supervisorEnabled(): Promise<boolean> {
   const stored = await chrome.storage.local.get(SUPERVISOR_KEY);
   return stored[SUPERVISOR_KEY] === true;
@@ -457,7 +470,19 @@ chrome.runtime.onMessage.addListener((message: ManagerRequest | RuntimeNotice, s
       .then(async (task) => { await notifyManagerChanged(); kickSupervisor(); sendResponse({ ok: true, task }); })
       .catch((error) => sendResponse({ ok: false, error: String(error) }));
     return true;
-  }  if (message.type === 'manager:set-supervisor-enabled') {
+  }  if (message.type === 'manager:skip-task') {
+    void setTaskDisposition(message.taskId, 'skip', message.reason ?? '')
+      .then(async (task) => { await notifyManagerChanged(); kickSupervisor(); sendResponse({ ok: true, task }); })
+      .catch((error) => sendResponse({ ok: false, error: String(error) }));
+    return true;
+  }
+  if (message.type === 'manager:cancel-task') {
+    void setTaskDisposition(message.taskId, 'cancel', message.reason ?? '')
+      .then(async (task) => { await notifyManagerChanged(); kickSupervisor(); sendResponse({ ok: true, task }); })
+      .catch((error) => sendResponse({ ok: false, error: String(error) }));
+    return true;
+  }
+  if (message.type === 'manager:set-supervisor-enabled') {
     void setSupervisorEnabled(message.enabled)
       .then(async () => { await notifyManagerChanged(); if (message.enabled) kickSupervisor(); sendResponse({ ok: true }); })
       .catch((error) => sendResponse({ ok: false, error: String(error) }));

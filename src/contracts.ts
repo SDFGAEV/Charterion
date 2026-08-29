@@ -81,7 +81,7 @@ export interface ContentRecoveryState {
 }
 
 export type TaskKind = 'work' | 'review';
-export type TaskDisplayStatus = 'pending' | 'ready' | 'running' | 'completed' | 'blocked' | 'error' | 'attention';
+export type TaskDisplayStatus = 'pending' | 'ready' | 'running' | 'completed' | 'skipped' | 'cancelled' | 'blocked' | 'error' | 'attention';
 
 export type ReviewDecision = 'pass' | 'fail';
 
@@ -101,6 +101,10 @@ export interface AgentTask {
   dependsOn: string[];
   attemptIds: string[];
   retryAfterAttemptId?: string;
+  skippedAt?: number;
+  skipReason?: string;
+  cancelledAt?: number;
+  cancelReason?: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -141,6 +145,8 @@ export type ManagerRequest =
   | { type: 'manager:create-task'; input: CreateTaskInput }
   | { type: 'manager:run-ready-tasks' }
   | { type: 'manager:retry-task'; taskId: string }
+  | { type: 'manager:skip-task'; taskId: string; reason?: string }
+  | { type: 'manager:cancel-task'; taskId: string; reason?: string }
   | { type: 'manager:set-supervisor-enabled'; enabled: boolean }
   | { type: 'manager:focus'; tabId: number };
 
