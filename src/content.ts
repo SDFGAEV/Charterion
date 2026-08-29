@@ -1,6 +1,6 @@
 import { sendPrompt, snapshotFromDocument, snapshotSemanticKey } from './chatgptAdapter';
 import { hasNewAssistantReply } from './replyCorrelation';
-import type { ContentRequest, RuntimeNotice } from './contracts';
+import type { ContentRecoveryState, ContentRequest, PendingPromptEvidence, RuntimeNotice } from './contracts';
 
 const DELIVERED_ATTEMPTS_KEY = 'gpt-agent-manager.delivered-attempts.v1';
 const PENDING_PROMPT_KEY = 'gpt-agent-manager.pending-prompt.v1';
@@ -9,13 +9,6 @@ let lastSemanticKey = '';
 let publishTimer: number | undefined;
 const inflightAttempts = new Set<string>();
 const deliveredInMemory = new Set<string>();
-
-interface PendingPrompt {
-  attemptId: string;
-  baselineAssistantMessageCount: number;
-  baselineAssistantMessageId?: string;
-  startedAt: number;
-}
 
 function snapshot() {
   return snapshotFromDocument(document, location.href);
@@ -38,11 +31,11 @@ function rememberDelivered(attemptId: string): void {
   try { sessionStorage.setItem(DELIVERED_ATTEMPTS_KEY, JSON.stringify(next)); } catch { /* in-memory fence still applies */ }
 }
 
-function readPendingPrompt(): PendingPrompt | undefined {
+function readPendingPrompt(): PendingPromptEvidence | undefined {
   try {
-    const parsed = JSON.parse(sessionStorage.getItem(PENDING_PROMPT_KEY) ?? 'null') as Partial<PendingPrompt> | null;
+    const parsed = JSON.parse(sessionStorage.getItem(PENDING_PROMPT_KEY) ?? 'null') as Partial<PendingPromptEvidence> | null;
     if (!parsed || typeof parsed.attemptId !== 'string' || typeof parsed.baselineAssistantMessageCount !== 'number') return undefined;
-    const pending: PendingPrompt = {
+    const pending: PendingPromptEvidence = {
       attemptId: parsed.attemptId,
       baselineAssistantMessageCount: parsed.baselineAssistantMessageCount,
       startedAt: typeof parsed.startedAt === 'number' ? parsed.startedAt : 0,
@@ -54,7 +47,7 @@ function readPendingPrompt(): PendingPrompt | undefined {
   } catch { return undefined; }
 }
 
-function writePendingPrompt(pending: PendingPrompt): void {
+function writePendingPrompt(pending: PendingPromptEvidence): void {
   sessionStorage.setItem(PENDING_PROMPT_KEY, JSON.stringify(pending));
 }
 
@@ -71,10 +64,10 @@ async function reportReplyIfReady(next = snapshot()): Promise<void> {
   })) return;
   const notice: RuntimeNotice = { type: 'content:reply-observed', attemptId: pending.attemptId, snapshot: next };
   try {
-    await chrome.runtime.sendMessage(notice);
-    clearPendingPrompt(pending.attemptId);
+    const response = await chrome.runtime.sendMessage(notice) as { ok?: boolean } | undefined;
+    if (response?.ok) clearPendingPrompt(pending.attemptId);
   } catch {
-    // Keep pending evidence so a later content-script lifecycle can retry.
+    // Keep pending evidence until the service worker durably acknowledges it.
   }
 }
 
@@ -99,6 +92,16 @@ chrome.runtime.onMessage.addListener((message: ContentRequest, _sender, sendResp
     sendResponse({ ok: true, snapshot: snapshot() });
     return false;
   }
+  if (message.type === 'content:get-recovery-state') {
+    const state: ContentRecoveryState = {
+      snapshot: snapshot(),
+      deliveredAttemptIds: deliveredAttempts(),
+    };
+    const pending = readPendingPrompt();
+    if (pending) state.pendingAttempt = pending;
+    sendResponse({ ok: true, state });
+    return false;
+  }
   if (message.type === 'content:send') {
     void (async () => {
       if (wasDelivered(message.attemptId)) {
@@ -116,7 +119,7 @@ chrome.runtime.onMessage.addListener((message: ContentRequest, _sender, sendResp
       }
       inflightAttempts.add(message.attemptId);
       const baseline = snapshot();
-      const pending: PendingPrompt = {
+      const pending: PendingPromptEvidence = {
         attemptId: message.attemptId,
         baselineAssistantMessageCount: baseline.assistantMessageCount,
         startedAt: Date.now(),

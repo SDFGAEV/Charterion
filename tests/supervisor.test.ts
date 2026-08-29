@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { planReadyDispatches } from '../src/supervisor';
-import type { AgentTask, ManagedTab, ManagedTask } from '../src/contracts';
+import type { AgentTask, ManagedTab, ManagedTask, SendAttemptRecord } from '../src/contracts';
 
 function task(id: string, role: string, project = ''): AgentTask {
   return { id, kind: 'work', title: id, project, instruction: id, targetRole: role, dependsOn: [], attemptIds: [], createdAt: 1, updatedAt: 1 };
@@ -10,8 +10,14 @@ function managed(id: string, role: string, status: ManagedTask['status'] = 'read
   return { task: task(id, role, project), status };
 }
 
-function tab(tabId: number, role: string, project = '', status: ManagedTab['snapshot']['status'] = 'idle'): ManagedTab {
-  return {
+function tab(
+  tabId: number,
+  role: string,
+  project = '',
+  status: ManagedTab['snapshot']['status'] = 'idle',
+  attemptState?: SendAttemptRecord['state'],
+): ManagedTab {
+  const result: ManagedTab = {
     tabId, windowId: 1, active: false,
     binding: { role, project, notes: '' },
     snapshot: {
@@ -19,6 +25,14 @@ function tab(tabId: number, role: string, project = '', status: ManagedTab['snap
       status, confidence: 'direct', signals: [], assistantMessageCount: 0, latestAssistantText: '', observedAt: 1,
     },
   };
+  if (attemptState) {
+    result.lastAttempt = {
+      attemptId: 'last-attempt', batchId: 'batch', tabId,
+      conversationKey: `conversation:${tabId}`, state: attemptState, textLength: 1,
+      baselineAssistantMessageCount: 0, createdAt: 1, updatedAt: 1,
+    };
+  }
+  return result;
 }
 
 describe('supervisor dispatch planning', () => {
@@ -48,4 +62,19 @@ describe('supervisor dispatch planning', () => {
     expect(planReadyDispatches([managed('a', 'worker', 'pending')], [tab(1, 'worker')])).toEqual([]);
     expect(planReadyDispatches([managed('a', 'worker')], [tab(1, 'worker', '', 'generating')])[0]?.error).toMatch(/No idle/);
   });
+  it('does not reuse a DOM-idle tab with an unresolved durable attempt', () => {
+    for (const state of ['prepared', 'dispatched', 'acknowledged'] as const) {
+      expect(planReadyDispatches([managed('a', 'worker')], [tab(1, 'worker', '', 'idle', state)])[0]?.tabId)
+        .toBeUndefined();
+    }
+  });
+
+  it('requires an explicit retry fact before reusing an uncertain tab', () => {
+    const uncertainTab = tab(1, 'worker', '', 'idle', 'uncertain');
+    expect(planReadyDispatches([managed('a', 'worker')], [uncertainTab])[0]?.tabId).toBeUndefined();
+    const retried = managed('a', 'worker');
+    retried.task.retryAfterAttemptId = 'last-attempt';
+    expect(planReadyDispatches([retried], [uncertainTab])).toEqual([{ taskId: 'a', tabId: 1 }]);
+  });
+
 });

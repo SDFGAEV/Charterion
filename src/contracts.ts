@@ -66,6 +66,19 @@ export interface SendResult {
   error?: string;
 }
 
+export interface PendingPromptEvidence {
+  attemptId: string;
+  baselineAssistantMessageCount: number;
+  baselineAssistantMessageId?: string;
+  startedAt: number;
+}
+
+export interface ContentRecoveryState {
+  snapshot: ChatSnapshot;
+  deliveredAttemptIds: string[];
+  pendingAttempt?: PendingPromptEvidence;
+}
+
 export type TaskKind = 'work' | 'review';
 export type TaskDisplayStatus = 'pending' | 'ready' | 'running' | 'completed' | 'blocked' | 'error' | 'attention';
 
@@ -107,6 +120,7 @@ export interface TaskDispatchResult {
 
 export type ContentRequest =
   | { type: 'content:get-snapshot' }
+  | { type: 'content:get-recovery-state' }
   | { type: 'content:send'; text: string; attemptId: string };
 
 export type ManagerRequest =

@@ -6,8 +6,17 @@ export interface DispatchDecision {
   error?: string;
 }
 
+function attemptAllowsDispatch(task: AgentTask, tab: ManagedTab): boolean {
+  const last = tab.lastAttempt;
+  if (!last) return true;
+  if (last.state === 'prepared' || last.state === 'dispatched' || last.state === 'acknowledged') return false;
+  if (last.state === 'uncertain') return task.retryAfterAttemptId === last.attemptId;
+  return true;
+}
+
 function matchesTask(task: AgentTask, tab: ManagedTab): boolean {
   return tab.snapshot.status === 'idle' &&
+    attemptAllowsDispatch(task, tab) &&
     tab.binding.role.trim() === task.targetRole &&
     (!task.project || tab.binding.project.trim() === task.project);
 }

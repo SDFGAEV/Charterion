@@ -3,7 +3,7 @@ import type { SendAttemptRecord, SendAttemptState } from './contracts';
 const ALLOWED: Record<SendAttemptState, ReadonlySet<SendAttemptState>> = {
   prepared: new Set(['dispatched', 'failed']),
   dispatched: new Set(['acknowledged', 'reply-observed', 'failed', 'uncertain']),
-  acknowledged: new Set(['reply-observed']),
+  acknowledged: new Set(['reply-observed', 'uncertain']),
   'reply-observed': new Set(),
   failed: new Set(),
   uncertain: new Set(['reply-observed']),

@@ -1,11 +1,13 @@
 import { advanceAttempt } from './attempts';
 import { deriveManagedTasks, validateTaskGraph } from './taskGraph';
 import { planReadyDispatches } from './supervisor';
+import { recoverAttempt, type AttemptRecoveryObservation } from './recovery';
 import {
   EMPTY_BINDING,
   unavailableSnapshot,
   type AgentTask,
   type ChatSnapshot,
+  type ContentRecoveryState,
   type CreateTaskInput,
   type ManagedTab,
   type ManagerRequest,
@@ -86,17 +88,61 @@ async function transitionAttempt(record: SendAttemptRecord, state: SendAttemptSt
   });
 }
 
-async function markReplyObserved(attemptId: string, snapshot: ChatSnapshot, senderTabId?: number): Promise<void> {
-  await serializeStateMutation(async () => {
+async function markReplyObserved(attemptId: string, snapshot: ChatSnapshot, senderTabId?: number): Promise<boolean> {
+  return serializeStateMutation(async () => {
     const state = await readWorkState();
     const current = state.attempts.find((item) => item.attemptId === attemptId);
-    if (!current || (senderTabId !== undefined && current.tabId !== senderTabId)) return;
+    if (!current || (senderTabId !== undefined && current.tabId !== senderTabId)) return false;
+    if (current.state === 'reply-observed') return true;
     const advanced = advanceAttempt(current, 'reply-observed');
-    if (advanced.state !== 'reply-observed') return;
+    if (advanced.state !== 'reply-observed') return false;
     const next: SendAttemptRecord = { ...advanced, replyObservedAt: Date.now() };
     if (snapshot.latestAssistantMessageId) next.replyMessageId = snapshot.latestAssistantMessageId;
     const attempts = [...state.attempts.filter((item) => item.attemptId !== next.attemptId), next].slice(-MAX_SEND_ATTEMPTS);
     await chrome.storage.local.set({ [SEND_ATTEMPTS_KEY]: attempts });
+    return true;
+  });
+}
+
+async function recoveryStateForTab(tab: chrome.tabs.Tab): Promise<AttemptRecoveryObservation | undefined> {
+  if (tab.id === undefined) return undefined;
+  try {
+    const response = await chrome.tabs.sendMessage(tab.id, { type: 'content:get-recovery-state' });
+    if (!response?.ok || !response.state) return undefined;
+    return { tabId: tab.id, state: response.state as ContentRecoveryState };
+  } catch {
+    return undefined;
+  }
+}
+
+async function reconcileAfterRestart(): Promise<void> {
+  const state = await workState();
+  const active = state.attempts.filter((attempt) =>
+    attempt.state === 'prepared' || attempt.state === 'dispatched' || attempt.state === 'acknowledged',
+  );
+  if (active.length === 0) return;
+
+  const tabs = await chrome.tabs.query({ url: ['https://chatgpt.com/*'] });
+  const observations = (await Promise.all(tabs.map(recoveryStateForTab))).filter(
+    (value): value is AttemptRecoveryObservation => value !== undefined,
+  );
+  const byTab = new Map(observations.map((observation) => [observation.tabId, observation]));
+
+  await serializeStateMutation(async () => {
+    const current = await readWorkState();
+    let attempts = current.attempts;
+    let changed = false;
+    for (const record of active) {
+      const latest = attempts.find((attempt) => attempt.attemptId === record.attemptId);
+      if (!latest || latest.state !== record.state) continue;
+      const decision = recoverAttempt(latest, byTab.get(latest.tabId));
+      if (!decision.nextState) continue;
+      const next = advanceAttempt(latest, decision.nextState, Date.now(), decision.error);
+      if (next.state === latest.state && next.error === latest.error) continue;
+      attempts = [...attempts.filter((attempt) => attempt.attemptId !== next.attemptId), next].slice(-MAX_SEND_ATTEMPTS);
+      changed = true;
+    }
+    if (changed) await chrome.storage.local.set({ [SEND_ATTEMPTS_KEY]: attempts });
   });
 }
 
@@ -349,11 +395,16 @@ chrome.runtime.onMessage.addListener((message: ManagerRequest | RuntimeNotice, s
     return false;
   }
   if (message.type === 'content:reply-observed') {
-    void markReplyObserved(message.attemptId, message.snapshot, sender.tab?.id).then(async () => {
-      await notifyManagerChanged();
-      kickSupervisor();
-    });
-    return false;
+    void markReplyObserved(message.attemptId, message.snapshot, sender.tab?.id)
+      .then(async (persisted) => {
+        if (persisted) {
+          await notifyManagerChanged();
+          kickSupervisor();
+        }
+        sendResponse({ ok: persisted });
+      })
+      .catch((error) => sendResponse({ ok: false, error: String(error) }));
+    return true;
   }
   if (message.type === 'manager:list') {
     void (async () => {
@@ -426,4 +477,11 @@ chrome.tabs.onRemoved.addListener((tabId) => {
     await saveSession(bindings);
     await notifyManagerChanged();
   })();
+});
+
+void reconcileAfterRestart().then(() => {
+  void notifyManagerChanged();
+  kickSupervisor();
+}).catch(() => {
+  // Recovery is fail-closed: unresolved attempts remain non-ready until inspected.
 });

@@ -97,7 +97,8 @@ When enabled, extension events can trigger another scheduling pass. A task is se
 2. every dependency is complete;
 3. exactly one open ChatGPT tab matches its Role and optional Project;
 4. that tab is directly observed as `idle`;
-5. the tab is not already claimed by another task in the same scheduling pass.
+5. the tab has no unresolved `prepared`, `dispatched`, or `acknowledged` attempt;
+6. the tab is not already claimed by another task in the same scheduling pass.
 
 Reply observation completes the task and can make dependent tasks eligible on the next pass.
 
@@ -110,6 +111,18 @@ Each attempt carries a unique ID. The content script keeps a page-session delive
 A successful browser-message round trip is only an acknowledgement of delivery. Task completion requires a later assistant reply that is new relative to the pre-send baseline and is observed after ChatGPT returns to idle.
 
 If the extension loses the browser-message channel after dispatch, it records `uncertain` instead of pretending the prompt definitely failed.
+
+## Restart and recovery safety
+
+The content script keeps a per-tab prompt baseline in `sessionStorage`, while the service worker keeps the durable attempt ledger in `chrome.storage.local`. A reply baseline is cleared only after the service worker confirms that `reply-observed` was durably persisted.
+
+On service-worker restart:
+
+- `prepared` attempts are failed safely because browser dispatch had not started;
+- `dispatched` attempts require matching page evidence, otherwise they become `uncertain` and are never automatically resent;
+- `acknowledged` attempts keep waiting only while the exact pending baseline survives on the same tab and conversation;
+- lost or mismatched reply-correlation evidence becomes `uncertain`;
+- an `uncertain` tab can be retried automatically only after the user records an explicit retry for that same task, and the content script still rejects the retry if an older pending prompt survives.
 
 ## Security and privacy
 
@@ -135,6 +148,7 @@ gpt-agent-manager/
 │  ├─ content.ts            # page observation, delivery fence and reply reporting
 │  ├─ contracts.ts          # typed shared contracts
 │  ├─ replyCorrelation.ts   # reply-baseline logic
+│  ├─ recovery.ts           # restart reconciliation decisions
 │  ├─ supervisor.ts         # pure dispatch planning
 │  ├─ taskGraph.ts          # DAG validation and derived task state
 │  ├─ sidepanel.ts          # UI behavior

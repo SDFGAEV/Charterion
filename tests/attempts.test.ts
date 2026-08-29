@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+﻿import { describe, expect, it } from 'vitest';
 import { advanceAttempt, canAdvanceAttempt } from '../src/attempts';
 import type { SendAttemptRecord } from '../src/contracts';
 
@@ -38,4 +38,11 @@ describe('send attempt state machine', () => {
     const failed = record('failed');
     expect(advanceAttempt(failed, 'reply-observed')).toBe(failed);
   });
+  it('can conservatively downgrade acknowledged delivery to uncertain during recovery', () => {
+    const acknowledged = advanceAttempt(advanceAttempt(record('prepared'), 'dispatched', 2), 'acknowledged', 3);
+    const recovered = advanceAttempt(acknowledged, 'uncertain', 4, 'reply baseline lost');
+    expect(recovered.state).toBe('uncertain');
+    expect(recovered.error).toBe('reply baseline lost');
+  });
+
 });
