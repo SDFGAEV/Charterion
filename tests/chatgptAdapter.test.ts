@@ -4,12 +4,18 @@ import {
   conversationKey,
   extractConversationId,
   normalizePageTitle,
+  observePageStatus,
+  findSendButton,
+  readComposerText,
+  setComposerText,
   snapshotFromDocument,
+  snapshotSemanticKey,
 } from '../src/chatgptAdapter';
 
 describe('ChatGPT adapter identity', () => {
-  it('extracts stable conversation ids only from /c/ routes', () => {
+  it('extracts direct and custom-GPT conversation ids', () => {
     expect(extractConversationId('https://chatgpt.com/c/abc-123')).toBe('abc-123');
+    expect(extractConversationId('https://chatgpt.com/g/g-123-helper/c/custom-1')).toBe('custom-1');
     expect(extractConversationId('https://chatgpt.com/')).toBeUndefined();
     expect(conversationKey('https://chatgpt.com/c/a%20b')).toBe('conversation:a b');
   });
@@ -20,29 +26,71 @@ describe('ChatGPT adapter identity', () => {
   });
 });
 
-describe('ChatGPT adapter snapshots', () => {
+describe('ChatGPT page observation', () => {
   it('marks a ready composer idle and captures the latest assistant message', () => {
     const dom = new JSDOM(`<!doctype html><title>Role 02 - ChatGPT</title>
-      <div data-message-author-role="assistant">first</div>
-      <div data-message-author-role="assistant">latest result</div>
+      <div data-message-author-role="assistant" data-message-id="m1">first</div>
+      <div data-message-author-role="assistant" data-message-id="m2">latest result</div>
       <textarea id="prompt-textarea"></textarea>`);
     const snapshot = snapshotFromDocument(dom.window.document, 'https://chatgpt.com/c/session-2');
     expect(snapshot.status).toBe('idle');
+    expect(snapshot.confidence).toBe('direct');
+    expect(snapshot.signals).toContain('composer-ready');
+    expect(snapshot.assistantMessageCount).toBe(2);
+    expect(snapshot.latestAssistantMessageId).toBe('message:m2');
     expect(snapshot.latestAssistantText).toBe('latest result');
-    expect(snapshot.conversationId).toBe('session-2');
-  });
-  it('marks a page generating when the stop control is present', () => {
-    const dom = new JSDOM(`<!doctype html><title>ChatGPT</title>
-      <textarea id="prompt-textarea"></textarea>
-      <button data-testid="stop-button"></button>`);
-    const snapshot = snapshotFromDocument(dom.window.document, 'https://chatgpt.com/c/live');
-    expect(snapshot.status).toBe('generating');
   });
 
-  it('fails closed when no known composer exists', () => {
+  it('uses direct generation indicators instead of composer presence', () => {
+    const dom = new JSDOM(`<!doctype html><title>ChatGPT</title>
+      <textarea id="prompt-textarea"></textarea><button data-testid="stop-button"></button>`);
+    expect(observePageStatus(dom.window.document, 'https://chatgpt.com/c/live').status).toBe('generating');
+  });
+
+  it('classifies access, login, and explicit error surfaces before readiness', () => {
+    const blocked = new JSDOM('<!doctype html><title>Access Denied</title><main></main>');
+    expect(observePageStatus(blocked.window.document, 'https://chatgpt.com/').status).toBe('blocked');
+
+    const login = new JSDOM('<!doctype html><title>ChatGPT</title>');
+    expect(observePageStatus(login.window.document, 'https://chatgpt.com/auth/login').status).toBe('unauthorized');
+
+    const errored = new JSDOM('<!doctype html><title>ChatGPT</title><div class="error-message">Try again</div>');
+    const observation = observePageStatus(errored.window.document, 'https://chatgpt.com/c/x');
+    expect(observation.status).toBe('error');
+    expect(observation.detail).toBe('Try again');
+  });
+
+  it('fails closed to unknown when the content script has no trusted readiness signal', () => {
     const dom = new JSDOM('<!doctype html><title>ChatGPT</title><main>loading</main>');
     const snapshot = snapshotFromDocument(dom.window.document, 'https://chatgpt.com/');
-    expect(snapshot.status).toBe('unavailable');
-    expect(snapshot.latestAssistantText).toBe('');
+    expect(snapshot.status).toBe('unknown');
+    expect(snapshot.confidence).toBe('unknown');
+  });
+
+  it('does not treat observedAt-only changes as semantic state changes', () => {
+    const dom = new JSDOM('<!doctype html><title>ChatGPT</title><textarea id="prompt-textarea"></textarea>');
+    const first = snapshotFromDocument(dom.window.document, 'https://chatgpt.com/c/a');
+    const second = { ...first, observedAt: first.observedAt + 10_000 };
+    expect(snapshotSemanticKey(first)).toBe(snapshotSemanticKey(second));
+  });
+
+  it('writes ChatGPT contenteditable composers using editor-style input events', () => {
+    const dom = new JSDOM('<!doctype html><div id="prompt-textarea" contenteditable="true"></div>');
+    const editor = dom.window.document.querySelector<HTMLElement>('#prompt-textarea')!;
+    const events: string[] = [];
+    for (const type of ['beforeinput', 'input', 'change']) editor.addEventListener(type, () => events.push(type));
+    setComposerText(editor, 'hello world');
+    expect(readComposerText(editor)).toBe('hello world');
+    expect(editor.querySelector('p')?.textContent).toBe('hello world');
+    expect(events).toEqual(['beforeinput', 'input', 'change']);
+  });
+
+  it('ignores hidden stop controls and recognizes localized send controls', () => {
+    const dom = new JSDOM(`<!doctype html>
+      <textarea id="prompt-textarea"></textarea>
+      <button data-testid="stop-button" style="display:none"></button>
+      <button aria-label="发送消息"></button>`);
+    expect(observePageStatus(dom.window.document, 'https://chatgpt.com/c/x').status).toBe('idle');
+    expect(findSendButton(dom.window.document)).not.toBeNull();
   });
 });

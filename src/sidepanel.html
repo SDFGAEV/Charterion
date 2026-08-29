@@ -17,7 +17,7 @@
   <main>
     <section class="composer-card">
       <label for="instruction">Instruction for selected agents</label>
-      <textarea id="instruction" rows="4" placeholder="e.g. Continue your assigned task and report blockers."></textarea>
+      <textarea id="instruction" rows="3" placeholder="Send a one-off instruction."></textarea>
       <div class="actions">
         <button id="send-selected" class="primary" type="button">Send selected</button>
         <button id="select-idle" type="button">Select idle</button>
@@ -25,11 +25,24 @@
       </div>
       <p id="send-status" class="muted" aria-live="polite"></p>
     </section>
-    <section>
-      <div class="section-heading">
-        <h2>Agents</h2>
-        <span id="summary" class="muted"></span>
+
+    <section class="composer-card task-editor">
+      <div class="section-heading"><h2>Task DAG</h2><div class="actions compact"><label class="toggle"><input id="supervisor-enabled" type="checkbox"> Auto supervisor</label><button id="run-ready" class="primary" type="button">Run ready</button></div></div>
+      <div class="task-form-grid">
+        <label>Title<input id="task-title" autocomplete="off" placeholder="Implement feature"></label>
+        <label>Role<input id="task-role" autocomplete="off" placeholder="worker-1"></label>
+        <label>Project<input id="task-project" autocomplete="off" placeholder="optional exact project"></label>
+        <label>Kind<select id="task-kind"><option value="work">Work</option><option value="review">Review</option></select></label>
+        <label class="wide">Depends on task IDs<input id="task-deps" autocomplete="off" placeholder="id-a, id-b"></label>
+        <label class="wide">Instruction<textarea id="task-instruction" rows="3" placeholder="Exact instruction for this ChatGPT role"></textarea></label>
       </div>
+      <div class="actions"><button id="create-task" type="button">Create task</button></div>
+      <p id="task-status" class="muted" aria-live="polite"></p>
+      <div id="tasks" class="tasks"></div>
+    </section>
+
+    <section>
+      <div class="section-heading"><h2>Agents</h2><span id="summary" class="muted"></span></div>
       <div id="agents" class="agents"></div>
       <div id="empty" class="empty" hidden>No open ChatGPT conversations were detected.</div>
     </section>

@@ -7,7 +7,7 @@
 
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; }
-button, input, textarea { font: inherit; }
+button, input, textarea, select { font: inherit; }
 button { cursor: pointer; }
 
 .topbar {
@@ -36,7 +36,7 @@ main { padding: 14px; }
 
 .composer-card { padding: 12px; margin-bottom: 16px; }
 .composer-card label { display: block; margin-bottom: 8px; font-weight: 600; font-size: 13px; }
-textarea, input {
+textarea, input, select {
   width: 100%;
   border: 1px solid color-mix(in srgb, CanvasText 20%, transparent);
   border-radius: 8px;
@@ -44,7 +44,7 @@ textarea, input {
   color: CanvasText;
 }
 textarea { resize: vertical; padding: 9px; }
-input { padding: 7px 8px; }
+input, select { padding: 7px 8px; }
 
 .actions, .section-heading, .agent-head, .agent-actions {
   display: flex;
@@ -52,10 +52,32 @@ input { padding: 7px 8px; }
   gap: 8px;
 }
 .actions { margin-top: 9px; flex-wrap: wrap; }
+.actions.compact { margin-top: 0; }
+.toggle { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; opacity: .8; }
+.toggle input { width: auto; }
 .section-heading { justify-content: space-between; margin: 0 2px 8px; }
 button { border: 1px solid color-mix(in srgb, CanvasText 22%, transparent); border-radius: 8px; padding: 7px 10px; background: Canvas; color: CanvasText; }
 button.primary { font-weight: 650; }
 button:disabled { cursor: not-allowed; opacity: .55; }
+.task-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.task-form-grid label { font-size: 11px; opacity: .8; }
+.task-form-grid .wide { grid-column: 1 / -1; }
+.tasks { display: grid; gap: 8px; margin-top: 12px; }
+.task-card { padding: 9px; border: 1px solid color-mix(in srgb, CanvasText 12%, transparent); border-radius: 9px; }
+.task-head { display: flex; align-items: flex-start; gap: 8px; }
+.task-title { min-width: 0; flex: 1; }
+.task-title strong, .task-title small { display: block; }
+.task-title small { margin-top: 2px; opacity: .66; }
+.task-state { border-radius: 999px; padding: 3px 7px; font-size: 10px; text-transform: uppercase; }
+.task-state-ready, .task-state-completed { background: color-mix(in srgb, #28a745 18%, Canvas); }
+.task-state-running { background: color-mix(in srgb, #d39e00 20%, Canvas); }
+.task-state-error, .task-state-attention, .task-state-blocked { background: color-mix(in srgb, #c62828 18%, Canvas); }
+.task-state-pending { background: color-mix(in srgb, #777 18%, Canvas); }
+.task-id { display: block; margin-top: 6px; font-size: 10px; opacity: .58; overflow-wrap: anywhere; }
+.task-deps, .task-instruction, .task-error { margin-top: 7px; font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.task-actions { display: flex; justify-content: flex-end; margin-top: 7px; }
+.task-deps { opacity: .65; }
+.task-error { color: #c62828; }
 .agents { display: grid; gap: 10px; }
 .agent-card { padding: 11px; }
 .agent-head { align-items: flex-start; }
@@ -66,17 +88,22 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .status { flex: 0 0 auto; border-radius: 999px; padding: 3px 7px; font-size: 11px; text-transform: uppercase; }
 .status-idle { background: color-mix(in srgb, #28a745 18%, Canvas); }
 .status-generating { background: color-mix(in srgb, #d39e00 20%, Canvas); }
-.status-unavailable { background: color-mix(in srgb, #777 18%, Canvas); }
+.status-unavailable, .status-unknown { background: color-mix(in srgb, #777 18%, Canvas); }
+.status-blocked, .status-error { background: color-mix(in srgb, #c62828 18%, Canvas); }
+.status-unauthorized { background: color-mix(in srgb, #b26a00 18%, Canvas); }
 .binding-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
 .binding-grid label { font-size: 11px; opacity: .75; }
 .binding-grid .wide { grid-column: 1 / -1; }
 .latest { margin-top: 10px; padding: 8px; max-height: 120px; overflow: auto; white-space: pre-wrap; font-size: 12px; border-radius: 8px; background: color-mix(in srgb, CanvasText 5%, Canvas); }
+.attempt { margin-top: 8px; font-size: 11px; opacity: .78; overflow-wrap: anywhere; }
+.attempt-failed, .attempt-uncertain { color: #c62828; opacity: 1; }
+.attempt-reply-observed { font-weight: 650; }
 .agent-actions { margin-top: 9px; justify-content: flex-end; }
 .muted { font-size: 12px; opacity: .68; }
 .empty { padding: 24px 12px; text-align: center; opacity: .7; }
 .error { color: #c62828; }
 
 @media (max-width: 380px) {
-  .binding-grid { grid-template-columns: 1fr; }
-  .binding-grid .wide { grid-column: auto; }
+  .binding-grid, .task-form-grid { grid-template-columns: 1fr; }
+  .binding-grid .wide, .task-form-grid .wide { grid-column: auto; }
 }
