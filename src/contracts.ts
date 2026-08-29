@@ -52,6 +52,7 @@ export interface SendAttemptRecord {
   baselineAssistantMessageCount: number;
   baselineAssistantMessageId?: string;
   replyMessageId?: string;
+  replyTextTail?: string;
   replyObservedAt?: number;
   createdAt: number;
   updatedAt: number;
@@ -82,6 +83,14 @@ export interface ContentRecoveryState {
 export type TaskKind = 'work' | 'review';
 export type TaskDisplayStatus = 'pending' | 'ready' | 'running' | 'completed' | 'blocked' | 'error' | 'attention';
 
+export type ReviewDecision = 'pass' | 'fail';
+
+export interface ReviewResult {
+  decision: ReviewDecision;
+  reason: string;
+  nextInstruction: string;
+}
+
 export interface AgentTask {
   id: string;
   kind: TaskKind;
@@ -100,6 +109,8 @@ export interface ManagedTask {
   task: AgentTask;
   status: TaskDisplayStatus;
   lastAttempt?: SendAttemptRecord;
+  reviewResult?: ReviewResult;
+  reviewError?: string;
 }
 
 export interface CreateTaskInput {

@@ -1,6 +1,7 @@
 import { advanceAttempt } from './attempts';
-import { deriveManagedTasks, validateTaskGraph } from './taskGraph';
+import { deriveManagedTasks, isRetryableTaskAttempt, validateTaskGraph } from './taskGraph';
 import { planReadyDispatches } from './supervisor';
+import { buildTaskDispatchPrompt } from './taskPrompt';
 import { recoverAttempt, type AttemptRecoveryObservation } from './recovery';
 import {
   EMPTY_BINDING,
@@ -96,7 +97,11 @@ async function markReplyObserved(attemptId: string, snapshot: ChatSnapshot, send
     if (current.state === 'reply-observed') return true;
     const advanced = advanceAttempt(current, 'reply-observed');
     if (advanced.state !== 'reply-observed') return false;
-    const next: SendAttemptRecord = { ...advanced, replyObservedAt: Date.now() };
+    const next: SendAttemptRecord = {
+      ...advanced,
+      replyObservedAt: Date.now(),
+      replyTextTail: snapshot.latestAssistantText.slice(-8000),
+    };
     if (snapshot.latestAssistantMessageId) next.replyMessageId = snapshot.latestAssistantMessageId;
     const attempts = [...state.attempts.filter((item) => item.attemptId !== next.attemptId), next].slice(-MAX_SEND_ATTEMPTS);
     await chrome.storage.local.set({ [SEND_ATTEMPTS_KEY]: attempts });
@@ -319,8 +324,8 @@ async function requestTaskRetry(taskId: string): Promise<AgentTask> {
     const lastAttemptId = task.attemptIds.at(-1);
     if (!lastAttemptId) throw new Error('Task has no failed or uncertain attempt to retry');
     const lastAttempt = state.attempts.find((attempt) => attempt.attemptId === lastAttemptId);
-    if (!lastAttempt || (lastAttempt.state !== 'failed' && lastAttempt.state !== 'uncertain')) {
-      throw new Error('Only failed or uncertain tasks can be retried');
+    if (!isRetryableTaskAttempt(task, lastAttempt)) {
+      throw new Error('This task does not have a retryable failed, uncertain, or non-passing review attempt');
     }
     const updated: AgentTask = { ...task, retryAfterAttemptId: lastAttemptId, updatedAt: Date.now() };
     const tasks = state.tasks.map((item) => item.id === taskId ? updated : item);
@@ -354,7 +359,11 @@ async function runReadyTasks(): Promise<TaskDispatchResult[]> {
     }
     const managed = byTaskId.get(decision.taskId);
     if (!managed) continue;
-    const sent = await dispatchToTab(decision.tabId, managed.task.instruction, batchId, managed.task.id);
+    const dependencies = managed.task.dependsOn
+      .map((taskId) => byTaskId.get(taskId))
+      .filter((dependency): dependency is NonNullable<typeof dependency> => dependency !== undefined);
+    const instruction = buildTaskDispatchPrompt(managed.task, dependencies);
+    const sent = await dispatchToTab(decision.tabId, instruction, batchId, managed.task.id);
     const result: TaskDispatchResult = { taskId: managed.task.id, ok: sent.ok, attemptId: sent.attemptId };
     if (sent.error) result.error = sent.error;
     results.push(result);

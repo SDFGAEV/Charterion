@@ -149,6 +149,20 @@ function renderTask(managed: ManagedTask): HTMLElement {
     error.textContent = managed.lastAttempt.error;
     card.append(error);
   }
+  if (managed.reviewResult) {
+    const review = el('div', `task-review task-review-${managed.reviewResult.decision}`);
+    review.textContent = `Review ${managed.reviewResult.decision.toUpperCase()}: ${managed.reviewResult.reason}`;
+    card.append(review);
+    if (managed.reviewResult.nextInstruction) {
+      const remediation = el('div', 'task-review-remediation');
+      remediation.textContent = `Next: ${managed.reviewResult.nextInstruction}`;
+      card.append(remediation);
+    }
+  } else if (managed.reviewError) {
+    const reviewError = el('div', 'task-error');
+    reviewError.textContent = `Review protocol error: ${managed.reviewError}`;
+    card.append(reviewError);
+  }
   if (managed.status === 'error' || managed.status === 'attention') {
     const actions = el('div', 'task-actions');
     const retry = el('button');

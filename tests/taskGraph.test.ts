@@ -67,4 +67,30 @@ describe('task status derivation', () => {
     const retried = { ...failedTask, retryAfterAttemptId: 'attempt-a' };
     expect(deriveManagedTasks([retried], [attempt('attempt-a', 'failed')])[0]?.status).toBe('ready');
   });
+  it('requires an explicit passing review before dependents can continue', () => {
+    const review = { ...task('review', ['a'], ['review-attempt']), kind: 'review' as const };
+    const downstream = task('downstream', ['review']);
+    const workDone = attempt('work-attempt', 'reply-observed');
+    const work = task('a', [], ['work-attempt']);
+
+    const failedReview = { ...attempt('review-attempt', 'reply-observed'), replyTextTail: '<GAM_REVIEW>{"decision":"fail","reason":"needs fix","nextInstruction":"fix it"}</GAM_REVIEW>' };
+    const failed = deriveManagedTasks([work, review, downstream], [workDone, failedReview]);
+    expect(failed.map((item) => item.status)).toEqual(['completed', 'attention', 'blocked']);
+    expect(failed[1]?.reviewResult?.decision).toBe('fail');
+
+    const passReview = { ...failedReview, replyTextTail: '<GAM_REVIEW>{"decision":"pass","reason":"verified","nextInstruction":""}</GAM_REVIEW>' };
+    const passed = deriveManagedTasks([work, review, downstream], [workDone, passReview]);
+    expect(passed.map((item) => item.status)).toEqual(['completed', 'completed', 'ready']);
+  });
+
+  it('treats invalid review output as attention and permits only explicit review retry', () => {
+    const review = { ...task('review', [], ['review-attempt']), kind: 'review' as const };
+    const bad = { ...attempt('review-attempt', 'reply-observed'), replyTextTail: 'PASS probably' };
+    const first = deriveManagedTasks([review], [bad])[0]!;
+    expect(first.status).toBe('attention');
+    expect(first.reviewError).toMatch(/GAM_REVIEW|JSON block/i);
+    const retried = { ...review, retryAfterAttemptId: 'review-attempt' };
+    expect(deriveManagedTasks([retried], [bad])[0]?.status).toBe('ready');
+  });
+
 });

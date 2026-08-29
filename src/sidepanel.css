@@ -78,6 +78,9 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .task-actions { display: flex; justify-content: flex-end; margin-top: 7px; }
 .task-deps { opacity: .65; }
 .task-error { color: #c62828; }
+.task-review, .task-review-remediation { margin-top: 7px; font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.task-review-pass { font-weight: 650; }
+.task-review-fail, .task-review-remediation { color: #c62828; }
 .agents { display: grid; gap: 10px; }
 .agent-card { padding: 11px; }
 .agent-head { align-items: flex-start; }

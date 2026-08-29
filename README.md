@@ -28,6 +28,8 @@ GPT Agent Manager moves that coordination into a small local control plane while
 - Fence duplicate delivery with per-attempt IDs inside the ChatGPT page session.
 - Correlate replies using ChatGPT message/turn identity first and assistant-count baselines as fallback.
 - Persist a project-independent task DAG with explicit role targets and dependencies.
+- Route direct dependency replies into downstream ChatGPT prompts with task/role/message provenance and bounded context.
+- Require `review` tasks to return a strict machine-readable PASS/FAIL block; natural-language guesses never unlock downstream tasks.
 - Derive task display state from task facts + send-attempt facts instead of persisting duplicate status fields.
 - Dispatch only when exactly one idle ChatGPT tab matches the requested role/project.
 - Enable an **opt-in Auto Supervisor** that automatically advances ready DAG tasks.
@@ -102,6 +104,14 @@ When enabled, extension events can trigger another scheduling pass. A task is se
 
 Reply observation completes the task and can make dependent tasks eligible on the next pass.
 
+### Dependency evidence routing
+
+When a ready task has direct dependencies, the dispatcher appends their captured reply tails to the new prompt with task ID, role, and ChatGPT reply-message identity. Dependency output is explicitly labeled as context/evidence; the current task instruction remains authoritative. Routed dependency context is bounded to avoid unbounded prompt growth.
+
+### Review tasks
+
+A `review` task does **not** complete merely because the reviewer replied. The reviewer is required to end with exactly one `<GAM_REVIEW>` JSON block containing `decision`, `reason`, and `nextInstruction`. Only a valid `pass` completes the review and unlocks downstream tasks. `fail` or malformed output becomes `attention` and requires explicit handling/retry.
+
 ## Delivery and reply safety
 
 Before a task prompt is sent, the service worker persists an attempt record. Task-linked attempts and the task's attempt history are written together in one `chrome.storage.local.set` operation.
@@ -149,8 +159,10 @@ gpt-agent-manager/
 │  ├─ contracts.ts          # typed shared contracts
 │  ├─ replyCorrelation.ts   # reply-baseline logic
 │  ├─ recovery.ts           # restart reconciliation decisions
+│  ├─ review.ts             # strict review output protocol
 │  ├─ supervisor.ts         # pure dispatch planning
 │  ├─ taskGraph.ts          # DAG validation and derived task state
+│  ├─ taskPrompt.ts         # bounded dependency evidence routing
 │  ├─ sidepanel.ts          # UI behavior
 │  ├─ sidepanel.html
 │  └─ sidepanel.css

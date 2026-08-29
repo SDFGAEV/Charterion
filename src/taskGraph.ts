@@ -1,4 +1,5 @@
-import type { AgentTask, ManagedTask, SendAttemptRecord, TaskDisplayStatus } from './contracts';
+import { parseReviewResult } from './review';
+import type { AgentTask, ManagedTask, ReviewResult, SendAttemptRecord, TaskDisplayStatus } from './contracts';
 
 export function validateTaskGraph(tasks: readonly AgentTask[]): void {
   const byId = new Map(tasks.map((task) => [task.id, task]));
@@ -26,16 +27,34 @@ export function validateTaskGraph(tasks: readonly AgentTask[]): void {
   for (const task of tasks) visit(task.id);
 }
 
-function statusFromAttempt(attempt: SendAttemptRecord | undefined): TaskDisplayStatus | undefined {
+function evaluateAttempt(task: AgentTask, attempt: SendAttemptRecord | undefined): {
+  status?: TaskDisplayStatus;
+  reviewResult?: ReviewResult;
+  reviewError?: string;
+} {
   switch (attempt?.state) {
-    case 'reply-observed': return 'completed';
+    case 'reply-observed': {
+      if (task.kind !== 'review') return { status: 'completed' };
+      const parsed = parseReviewResult(attempt.replyTextTail ?? '');
+      if (!parsed.ok) return { status: 'attention', reviewError: parsed.error };
+      if (parsed.result.decision === 'fail') return { status: 'attention', reviewResult: parsed.result };
+      return { status: 'completed', reviewResult: parsed.result };
+    }
     case 'prepared':
     case 'dispatched':
-    case 'acknowledged': return 'running';
-    case 'failed': return 'error';
-    case 'uncertain': return 'attention';
-    default: return undefined;
+    case 'acknowledged': return { status: 'running' };
+    case 'failed': return { status: 'error' };
+    case 'uncertain': return { status: 'attention' };
+    default: return {};
   }
+}
+
+export function isRetryableTaskAttempt(task: AgentTask, attempt: SendAttemptRecord | undefined): boolean {
+  if (!attempt) return false;
+  if (attempt.state === 'failed' || attempt.state === 'uncertain') return true;
+  if (task.kind !== 'review' || attempt.state !== 'reply-observed') return false;
+  const parsed = parseReviewResult(attempt.replyTextTail ?? '');
+  return !parsed.ok || parsed.result.decision === 'fail';
 }
 
 export function deriveManagedTasks(
@@ -53,12 +72,12 @@ export function deriveManagedTasks(
     const retryRequested = Boolean(
       lastAttempt &&
       task.retryAfterAttemptId === lastAttempt.attemptId &&
-      (lastAttempt.state === 'failed' || lastAttempt.state === 'uncertain'),
+      isRetryableTaskAttempt(task, lastAttempt),
     );
-    const attemptStatus = retryRequested ? undefined : statusFromAttempt(lastAttempt);
+    const evaluation = retryRequested ? {} : evaluateAttempt(task, lastAttempt);
     let status: TaskDisplayStatus;
-    if (attemptStatus) {
-      status = attemptStatus;
+    if (evaluation.status) {
+      status = evaluation.status;
     } else {
       const dependencies = task.dependsOn.map((id) => tasks.find((candidate) => candidate.id === id)).filter(Boolean) as AgentTask[];
       const dependencyStates = dependencies.map((dependency) => derive(dependency).status);
@@ -68,6 +87,8 @@ export function deriveManagedTasks(
     }
     const managed: ManagedTask = { task, status };
     if (lastAttempt) managed.lastAttempt = lastAttempt;
+    if (evaluation.reviewResult) managed.reviewResult = evaluation.reviewResult;
+    if (evaluation.reviewError) managed.reviewError = evaluation.reviewError;
     result.set(task.id, managed);
     return managed;
   };
