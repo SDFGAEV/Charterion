@@ -1,34 +1,27 @@
 # GPT Agent Manager
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Chrome MV3](https://img.shields.io/badge/Chrome-Manifest%20V3-4285F4)](manifest.json)
 
-GPT Agent Manager is a local-first control surface for coordinating multiple ChatGPT conversations as explicit workers, roles, and projects.
+GPT Agent Manager is a local-first Chrome side panel for coordinating multiple open ChatGPT conversations as explicit agents, roles, and projects.
 
-The project is designed for workflows where several ChatGPT tabs are used in parallel and a human operator needs one place to see status, send instructions, collect results, and keep role ownership clear.
+It is designed for workflows where several `chatgpt.com` tabs run in parallel and an operator needs one place to inspect status, label workers, send the same instruction to selected conversations, collect recent outputs, and jump directly to a worker tab.
 
-> Status: early development. The repository is being built in small, reviewable slices and does not yet claim production readiness.
+> **Status:** early development. The first usable extension slice is implemented and tested, but the project does not yet claim production readiness.
 
-## Goals
+## Current features
 
-- Discover and organize open `chatgpt.com` conversations.
-- Assign stable role names, project groups, and operator notes.
-- Show whether each conversation is idle, generating, waiting for input, or unavailable.
-- Send an instruction to one or more selected conversations through an explicit user action.
-- Provide fast actions such as `Continue` without hiding what will be sent.
-- Collect the latest assistant output for supervisor review.
-- Keep state local by default and avoid introducing a required backend service.
-- Minimize browser permissions and avoid collecting analytics or conversation data.
-
-## Non-goals
-
-- Circumventing ChatGPT limits, rate limits, authentication, or product safeguards.
-- Running hidden or autonomous browser actions without user-visible controls.
-- Reading unrelated websites, credentials, passwords, or browser data.
-- Replacing a durable project control plane when a repository already has one.
-
+- Discover all open `chatgpt.com` tabs.
+- Detect `idle`, `generating`, and `unavailable` page states.
+- Persist Role / Project / Notes bindings for stable ChatGPT conversation IDs.
+- Keep temporary bindings session-scoped until a new chat receives a durable conversation ID.
+- Select one or many agents and send an explicit operator-entered instruction.
+- Select all currently idle agents with one action.
+- Display the latest assistant response from every managed conversation.
+- Focus any managed ChatGPT tab from the side panel.
+- Refresh automatically when a managed ChatGPT page changes.
+- Run entirely locally with no required backend and no API key.
 ## Architecture
-
-The initial architecture targets a Chrome-compatible Manifest V3 extension:
 
 ```text
 Side Panel UI
@@ -36,64 +29,105 @@ Side Panel UI
     v
 Extension Service Worker
     |
-    +---- chrome.tabs / chrome.storage
+    +---- tab discovery / role bindings / explicit fan-out
     |
     v
 ChatGPT Content Script
     |
     +---- conversation identity
-    +---- composer interaction
-    +---- generation-state observation
+    +---- DOM observation
+    +---- composer adapter
     +---- latest-response extraction
 ```
 
-The extension is intentionally split into small boundaries so DOM adaptation, orchestration state, and UI rendering can evolve independently.
+The extension deliberately separates observation, persistence, mutation, and presentation. DOM selectors stay inside the ChatGPT adapter instead of leaking into orchestration state.
 
 ## Security and privacy
 
-The default design is local-first:
-
 - No hosted control server is required.
-- Role mappings and UI state are stored locally in the browser.
-- Host access is limited to ChatGPT pages needed for the manager to function.
-- Conversation content is not sent to third-party analytics services.
-- Batch sends are explicit user actions rather than background automation.
-
-## Planned repository layout
+- No analytics or telemetry are included.
+- Host permission is limited to `https://chatgpt.com/*`.
+- The extension requests only `tabs`, `storage`, and `sidePanel` permissions.
+- Detecting page changes never sends a prompt.
+- Multi-tab sends happen only after an explicit operator action.
+- If the known ChatGPT composer cannot be identified safely, the adapter fails closed.
+## Repository layout
 
 ```text
 gpt-agent-manager/
 ├─ src/
-│  ├─ background/      # service-worker orchestration
-│  ├─ content/         # ChatGPT page adapter
-│  ├─ sidepanel/       # operator dashboard
-│  ├─ contracts/       # typed shared messages and state
-│  └─ storage/         # local persistence boundary
-├─ tests/
-├─ docs/
+│  ├─ background.ts       # service worker and multi-tab control plane
+│  ├─ chatgptAdapter.ts   # ChatGPT-specific DOM integration
+│  ├─ content.ts          # page observation and explicit send execution
+│  ├─ contracts.ts        # shared typed message/state contracts
+│  ├─ sidepanel.ts        # operator UI behavior
+│  ├─ sidepanel.html
+│  └─ sidepanel.css
+├─ tests/                 # focused adapter regression tests
+├─ scripts/build.mjs      # extension build
 ├─ manifest.json
+├─ package.json
 ├─ README.md
 └─ LICENSE
 ```
 
-## Development principles
-
-1. Prefer typed contracts over ad-hoc message payloads.
-2. Keep browser/DOM details behind adapters.
-3. Separate observation from mutation: detecting state must not send prompts.
-4. Make all multi-tab mutations deliberate and auditable.
-5. Treat DOM selectors as unstable integration points and cover them with focused tests.
-6. Fail closed when a page cannot be identified safely.
-7. Keep third-party reference source outside this repository.
+Third-party reference repositories are intentionally kept outside this repository.
 
 ## Getting started
 
-Implementation is not yet published in the initial repository commit. As source lands, this section will contain reproducible build, test, and Chrome `Load unpacked` instructions.
+### Requirements
+
+- Chrome 114 or newer with Side Panel support.
+- Node.js 20 or newer.
+- npm.
+### Install dependencies
+
+```bash
+npm install
+```
+
+### Verify and build
+
+```bash
+npm run verify
+```
+
+`npm run verify` runs the strict TypeScript check, the unit test suite, and the extension build. Generated assets are written to `dist/`.
+
+### Load in Chrome
+
+1. Open `chrome://extensions`.
+2. Enable **Developer mode**.
+3. Choose **Load unpacked**.
+4. Select this repository root, the directory containing `manifest.json`.
+5. Open one or more `chatgpt.com` conversations.
+6. Click the extension action to open the GPT Agent Manager side panel.
+
+No remote service or OpenAI API key is required.
+## Development principles
+
+1. Prefer typed contracts over ad-hoc browser messages.
+2. Keep provider/DOM details behind adapters.
+3. Separate observation from mutation.
+4. Persist durable facts; derive display state from current observations.
+5. Treat browser selectors as unstable integration points and regression-test them.
+6. Fail closed on ambiguous execution state.
+7. Reuse mature upstream components where they fit instead of duplicating them.
+
+## Roadmap
+
+- Durable task and dependency graph independent of any one project.
+- Structured agent-to-agent messages routed through a supervisor.
+- Optional Git/worktree/PR/CI adapters.
+- Auditable send history and idempotent command IDs.
+- Pluggable browser adapters beyond ChatGPT.
+- Recovery-aware orchestration and explicit human decision queues.
+- Optional local supervisor daemon while keeping the browser extension usable standalone.
 
 ## Contributing
 
-Issues and pull requests are welcome once the first implementation slice is published. Please keep changes focused, tested, and explicit about any new browser permission they require.
+Issues and pull requests are welcome. Keep changes focused and tested, and explain any new browser permission or external service dependency.
 
 ## License
 
-This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
+Licensed under the [MIT License](LICENSE).

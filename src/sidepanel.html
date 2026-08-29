@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GPT Agent Manager</title>
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>GPT Agent Manager</h1>
+      <p>Coordinate open ChatGPT conversations locally.</p>
+    </div>
+    <button id="refresh" type="button">Refresh</button>
+  </header>
+  <main>
+    <section class="composer-card">
+      <label for="instruction">Instruction for selected agents</label>
+      <textarea id="instruction" rows="4" placeholder="e.g. Continue your assigned task and report blockers."></textarea>
+      <div class="actions">
+        <button id="send-selected" class="primary" type="button">Send selected</button>
+        <button id="select-idle" type="button">Select idle</button>
+        <button id="clear-selection" type="button">Clear</button>
+      </div>
+      <p id="send-status" class="muted" aria-live="polite"></p>
+    </section>
+    <section>
+      <div class="section-heading">
+        <h2>Agents</h2>
+        <span id="summary" class="muted"></span>
+      </div>
+      <div id="agents" class="agents"></div>
+      <div id="empty" class="empty" hidden>No open ChatGPT conversations were detected.</div>
+    </section>
+  </main>
+  <script src="sidepanel.js"></script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+{
+  "name": "gpt-agent-manager",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-first Chrome side panel for coordinating multiple ChatGPT conversations.",
+  "license": "MIT",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check": "tsc --noEmit",
+    "test": "vitest run",
+    "verify": "npm run check && npm run test && npm run build"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.1.4",
+    "@types/jsdom": "^30.0.0",
+    "esbuild": "^0.25.9",
+    "jsdom": "^26.1.0",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  }
+}
