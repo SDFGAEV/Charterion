@@ -226,6 +226,7 @@ export interface SubmitSupervisorReviewInput {
 export interface RpcRequest {
   id: string;
   method: string;
+  instanceId?: string;
   params?: Record<string, unknown>;
   auth?: { adminToken?: string; browserToken?: string; capabilityToken?: string };
 }
@@ -246,6 +247,7 @@ export type RpcResponse = RpcSuccess | RpcFailure;
 
 export interface DaemonConfig {
   homeDir: string;
+  instanceId: string;
   databasePath: string;
   adminTokenPath: string;
   browserTokenPath: string;

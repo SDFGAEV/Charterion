@@ -58,7 +58,7 @@ describe('named-pipe transport', () => {
     const server = await startIpcServer(pipe, router);
     cleanups.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
     const response = await sendRpc(pipe, { id: 'health', method: 'health' });
-    expect(response).toEqual({ id: 'health', ok: true, result: { status: 'ok', protocolVersion: 1 } });
+    expect(response).toEqual({ id: 'health', ok: true, result: { status: 'ok', protocolVersion: 2, instanceId: null } });
   });
 });
 

@@ -60,13 +60,14 @@ function invokeNative(request) {
 }
 
 try {
-  await waitReady();
+  const health = await waitReady();
+  if (!/^[0-9a-f]{16}$/.test(health.instanceId ?? '')) throw new Error('gamd health did not expose a valid instanceId');
   const project = cli('project.create', {
     name: 'Native Host Project', rootPath: 'E:/native-host-smoke', isolationTier: 'c1-container',
   });
   const browserTokenPath = join(home, 'browser.token');
   if (readFileSync(browserTokenPath, 'utf8').trim().length < 32) throw new Error('browser.token was not created');
-  writeFileSync(hostConfig, JSON.stringify({ pipeName: pipe, browserTokenPath, allowedOrigin: origin }, null, 2));
+  writeFileSync(hostConfig, JSON.stringify({ pipeName: pipe, instanceId: health.instanceId, browserTokenPath, allowedOrigin: origin }, null, 2));
   const listed = invokeNative({ id: 'list', method: 'project.list', params: {} });
   if (!listed.ok || !Array.isArray(listed.result) || !listed.result.some((item) => item.id === project.id)) {
     throw new Error('Native host did not return the expected project');

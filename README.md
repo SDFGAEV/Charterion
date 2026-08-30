@@ -212,6 +212,12 @@ SETUP.cmd
 
 The prebuilt installer verifies Node 22+, registers the bundled Native Host, creates a persistent launcher in `GAM_HOME`, optionally creates a desktop shortcut, and starts GAM. It does not rebuild the project.
 
+### Runtime instance identity
+
+Every canonical `GAM_HOME` deterministically derives a 16-character `instanceId`. The default Windows pipe is `\\.\pipe\gpt-agent-manager-<instanceId>` rather than a machine-global pipe. `gamd`, `GAM`, `gamctl`, the installed launcher, `runtime.json`, and the Native Messaging Host all bind to that same identity.
+
+`health` exposes the daemon instance identity, and every non-health production RPC carries the expected `instanceId`. A client that reaches a pipe owned by another GAM home fails closed with `INSTANCE_MISMATCH` before authentication or control dispatch. `GAM.cmd doctor --json` reports both `instanceId` and `pipeName` for diagnostics.
+
 The stable v0.4 extension identity is derived from the public `manifest.key` and is regression-checked during builds. No private signing key is stored in this repository.
 
 ### Browser selection
@@ -233,7 +239,7 @@ A dedicated profile is stored under `<GAM_HOME>\chrome-profile`.
 - Worker capabilities are project/task/resource/lease scoped and stored in SQLite only by token hash.
 - gamctl has no implicit administrator fallback: agent calls require a capability token/file, while privileged human/bootstrap operations must opt in explicitly with --admin.
 - Browser runtime reporting cannot create projects, acquire leases, issue capabilities, approve reviews, or merge changes.
-- `gamd` listens on a local named pipe rather than an unauthenticated TCP port.
+- `gamd` listens on an instance-scoped local named pipe rather than an unauthenticated TCP port; RPC instance fencing prevents another `GAM_HOME` from being mistaken for the current Kernel.
 - Unknown, stale, ambiguous, or conflicting authority fails closed.
 
 The extension and GAM Kernel are coordination and policy layers, **not an OS sandbox**. If ChatGPT agents receive filesystem/terminal access through a Remote connector, those execution tools still require an appropriate container/VM/capability boundary.

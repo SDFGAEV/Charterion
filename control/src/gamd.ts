@@ -10,7 +10,7 @@ async function main(): Promise<void> {
   const browserToken = ensureBrowserToken(config);
   const database = new ControlDatabase(config.databasePath);
   const plane = new ControlPlane(database, config.gitPath);
-  const router = new RpcRouter(plane, adminToken, browserToken);
+  const router = new RpcRouter(plane, adminToken, browserToken, config.instanceId);
   const server = await startIpcServer(config.pipeName, router);
 
   let closing = false;
@@ -28,7 +28,7 @@ async function main(): Promise<void> {
     console.error(error);
     close();
   });
-  console.error(`gamd ready (${config.pipeName})`);
+  console.error(`gamd ready instance=${config.instanceId} pipe=${config.pipeName}`);
 }
 
 void main().catch((error) => {

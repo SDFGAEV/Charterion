@@ -68,14 +68,24 @@ function failure(id: string, code: string, message: string): RpcFailure {
 }
 
 export class RpcRouter {
-  constructor(private readonly plane: ControlPlane, private readonly adminToken: string, private readonly browserToken: string) {}
+  constructor(
+    private readonly plane: ControlPlane,
+    private readonly adminToken: string,
+    private readonly browserToken: string,
+    private readonly instanceId?: string,
+  ) {}
 
   handle(request: RpcRequest): RpcResponse {
     const id = typeof request?.id === 'string' && request.id ? request.id : 'unknown';
     try {
       if (!request || typeof request !== 'object') return failure(id, 'INVALID_REQUEST', 'Request must be an object');
       if (typeof request.method !== 'string' || !request.method.trim()) return failure(id, 'INVALID_REQUEST', 'method is required');
-      if (request.method === 'health') return { id, ok: true, result: { status: 'ok', protocolVersion: 1 } };
+      if (request.method === 'health') {
+        return { id, ok: true, result: { status: 'ok', protocolVersion: 2, instanceId: this.instanceId ?? null } };
+      }
+      if (this.instanceId && request.instanceId !== this.instanceId) {
+        return failure(id, 'INSTANCE_MISMATCH', `RPC instance mismatch: expected ${this.instanceId}`);
+      }
       return { id, ok: true, result: this.dispatch(request) };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
