@@ -12,7 +12,7 @@ import { assertMessageDeliveryAvailable, buildSemanticMessagePrompt, createAgent
 import { createPortableManagerState, parsePortableManagerState, stringifyPortableManagerState } from './stateTransfer';
 import { recoverAttempt, type AttemptRecoveryObservation } from './recovery';
 import { readNativeControlSnapshot, reportNativeBrowserRuntime, reportNativeAgentBrowser } from './nativeControl';
-import { filterFleetTaskTabs, planFleetReconciliation } from './fleet';
+import { filterFleetTaskTabs, planFleetReconciliation, workerRequestMessage } from './fleet';
 import {
   EMPTY_BINDING,
   unavailableSnapshot,
@@ -38,6 +38,7 @@ const TASKS_KEY = 'tasks.v1';
 const MESSAGES_KEY = 'messages.v1';
 const SUPERVISOR_KEY = 'supervisor.v1';
 const FLEET_TABS_KEY = 'fleetTabs.v1';
+const CONTROL_REQUEST_MESSAGE_PREFIX = 'control-request:';
 let stateMutationTail: Promise<void> = Promise.resolve();
 
 async function localBindings(): Promise<Record<string, RoleBinding>> {
@@ -591,6 +592,51 @@ async function clearFleetBinding(conversationKey: string | undefined, tabId: num
   await Promise.all([saveLocal(persistent), saveSession(ephemeral)]);
 }
 
+async function syncWorkerRequestMessages(snapshot: import('./nativeControl').NativeControlSnapshot): Promise<void> {
+  await serializeStateMutation(async () => {
+    const state = await readWorkState();
+    const existing = new Set(state.messages.map((message) => message.id));
+    const projects = new Map(snapshot.projects.map((project) => [project.id, project]));
+    const agents = new Map(snapshot.agents.map((agent) => [agent.id, agent]));
+    const created: AgentMessage[] = [];
+    for (const request of snapshot.workerRequests) {
+      if (request.status !== 'open') continue;
+      const messageId = CONTROL_REQUEST_MESSAGE_PREFIX + request.id;
+      if (existing.has(messageId)) continue;
+      const project = projects.get(request.projectId);
+      if (!project) continue;
+      const supervisors = snapshot.agents.filter((agent) =>
+        agent.projectId === request.projectId && agent.desiredState === 'active' &&
+        agent.role.trim().toUpperCase() === 'SUPERVISOR',
+      );
+      if (supervisors.length !== 1) continue;
+      const supervisor = supervisors[0];
+      if (!supervisor) continue;
+      const senderRole = agents.get(request.fromSubject)?.role ?? request.fromSubject;
+      created.push(workerRequestMessage(request, project.name, senderRole, supervisor.role));
+    }
+    if (created.length) {
+      await chrome.storage.local.set({ [MESSAGES_KEY]: [...state.messages, ...created] });
+    }
+  });
+}
+
+async function deliverWorkerRequestMessages(snapshot: import('./nativeControl').NativeControlSnapshot): Promise<void> {
+  await syncWorkerRequestMessages(snapshot);
+  const openIds = new Set(snapshot.workerRequests
+    .filter((request) => request.status === 'open')
+    .map((request) => CONTROL_REQUEST_MESSAGE_PREFIX + request.id));
+  const state = await workState();
+  for (const message of state.messages) {
+    if (!openIds.has(message.id)) continue;
+    try {
+      await dispatchMessage(message.id);
+    } catch {
+      // Busy/missing/uncertain delivery is retried or held by the existing message ledger.
+    }
+  }
+}
+
 async function reconcileAgentFleet(): Promise<void> {
   if (fleetReconcileRun) return fleetReconcileRun;
   fleetReconcileRun = (async () => {
@@ -632,6 +678,7 @@ async function reconcileAgentFleet(): Promise<void> {
         await reportNativeAgentBrowser({ slotId: agent.id, profileId: 'gam-default', browserState: 'absent', observedAt: Date.now() });
       }
     }
+    await deliverWorkerRequestMessages(snapshot);
   })().finally(() => { fleetReconcileRun = undefined; });
   return fleetReconcileRun;
 }

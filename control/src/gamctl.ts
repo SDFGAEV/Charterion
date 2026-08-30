@@ -19,10 +19,10 @@ function parseObjectJson(raw: string, label: string): Record<string, unknown> {
 
 function parseArgs(argv: string[]): CliOptions {
   const method = argv[0];
-  if (!method) throw new Error('Usage: gamctl <rpc-method> [--params JSON|--params-file PATH|--stdin] [--capability-file PATH]');
+  if (!method) throw new Error('Usage: gamctl <rpc-method> [--params JSON|--params-file PATH|--stdin] [--capability-file PATH|--admin]');
   let params: Record<string, unknown> = {};
   let capabilityToken = process.env.GAM_CAPABILITY_TOKEN?.trim() || undefined;
-  let useAdmin = capabilityToken === undefined;
+  let useAdmin = false;
   for (let i = 1; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--params') {
@@ -40,6 +40,9 @@ function parseArgs(argv: string[]): CliOptions {
       if (!path) throw new Error('--capability-file requires a path');
       capabilityToken = readFileSync(path, 'utf8').trim();
       useAdmin = false;
+    } else if (arg === '--admin') {
+      if (capabilityToken) throw new Error('--admin cannot be combined with a capability token');
+      useAdmin = true;
     } else if (arg === '--no-admin') {
       useAdmin = false;
     } else throw new Error(`Unknown argument ${arg}`);

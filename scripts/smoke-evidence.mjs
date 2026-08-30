@@ -34,7 +34,8 @@ daemon.stderr.setEncoding('utf8');
 daemon.stderr.on('data', (chunk) => { daemonError += chunk; });
 
 function invoke(method, params = {}, extraEnv = {}) {
-  return spawnSync(process.execPath, [join(repo, 'dist-control', 'gamctl.cjs'), method, '--stdin'], {
+  const args = [join(repo, 'dist-control', 'gamctl.cjs'), method, ...(extraEnv.GAM_CAPABILITY_TOKEN ? [] : ['--admin']), '--stdin'];
+  return spawnSync(process.execPath, args, {
     cwd: repo, env: { ...env, ...extraEnv }, input: JSON.stringify(params), encoding: 'utf8', timeout: 10_000,
   });
 }

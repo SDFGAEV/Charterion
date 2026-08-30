@@ -17,7 +17,8 @@ let daemonError = '';
 daemon.stderr.setEncoding('utf8');
 daemon.stderr.on('data', (chunk) => { daemonError += chunk; });
 function call(method, params = {}, extraEnv = {}) {
-  const result = spawnSync(process.execPath, [join(repo, 'dist-control', 'gamctl.cjs'), method, '--stdin'], {
+  const args = [join(repo, 'dist-control', 'gamctl.cjs'), method, ...(extraEnv.GAM_CAPABILITY_TOKEN ? [] : ['--admin']), '--stdin'];
+  const result = spawnSync(process.execPath, args, {
     cwd: repo,
     env: { ...env, ...extraEnv },
     input: JSON.stringify(params),
@@ -33,7 +34,8 @@ function call(method, params = {}, extraEnv = {}) {
 }
 
 function callExpectFailure(method, params, extraEnv = {}) {
-  const result = spawnSync(process.execPath, [join(repo, 'dist-control', 'gamctl.cjs'), method, '--stdin'], {
+  const args = [join(repo, 'dist-control', 'gamctl.cjs'), method, ...(extraEnv.GAM_CAPABILITY_TOKEN ? [] : ['--admin']), '--stdin'];
+  const result = spawnSync(process.execPath, args, {
     cwd: repo, env: { ...env, ...extraEnv }, input: JSON.stringify(params), encoding: 'utf8', timeout: 10_000,
   });
   const response = JSON.parse(result.stdout.trim());

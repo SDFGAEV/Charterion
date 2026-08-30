@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { agentConversationUrl, filterFleetTaskTabs, planFleetReconciliation } from '../src/fleet';
+import { agentConversationUrl, filterFleetTaskTabs, planFleetReconciliation, workerRequestMessage } from '../src/fleet';
 import type { ManagedTab } from '../src/contracts';
-import type { ControlAgentView } from '../src/nativeControl';
+import type { ControlAgentView, ControlWorkerRequestView } from '../src/nativeControl';
 
 function agent(overrides: Partial<ControlAgentView> = {}): ControlAgentView {
   return {
@@ -57,5 +57,21 @@ describe('agent fleet reconciliation', () => {
     ]);
     expect(planFleetReconciliation([suspended], [], {})).toEqual([{ kind: 'report-absent', slotId: 'slot-1' }]);
     expect(planFleetReconciliation([agent({ desiredState: 'retired', status: 'retired' })], [], {})).toEqual([]);
+  });
+});
+
+describe('worker request supervisor notification', () => {
+  it('maps one kernel request into one deterministic semantic message', () => {
+    const request: ControlWorkerRequestView = {
+      id: 'request-1', projectId: 'p', fromSubject: 'slot-1', type: 'suggestion',
+      title: 'Add capacity', body: 'Parallel work is available.', suggestedAction: 'spawn ROLE02',
+      status: 'open', createdAt: 10, updatedAt: 11,
+    };
+    const message = workerRequestMessage(request, 'Project P', 'ROLE01', 'SUPERVISOR');
+    expect(message.id).toBe('control-request:request-1');
+    expect(message.target).toEqual({ kind: 'role', role: 'SUPERVISOR' });
+    expect(message.type).toBe('announcement');
+    expect(message.content).toContain('Request ID');
+    expect(message.content).toContain('spawn ROLE02');
   });
 });

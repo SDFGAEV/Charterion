@@ -39,7 +39,10 @@ async function waitReady() {
 }
 try {
   await waitReady();
-  const created = run(gamctl, ['project.create', '--stdin'], JSON.stringify({
+  const denied = spawnSync(process.execPath, [gamctl, 'project.create', '--stdin'], { cwd: repo, env, input: JSON.stringify({ name: 'Denied', rootPath: repo }), encoding: 'utf8', timeout: 10_000 });
+  const deniedResponse = JSON.parse(denied.stdout.trim());
+  if (deniedResponse.ok) throw new Error('gamctl unexpectedly used implicit admin authority');
+  const created = run(gamctl, ['project.create', '--admin', '--stdin'], JSON.stringify({
     name: 'Launcher Smoke', rootPath: repo, isolationTier: 'c0-host',
   }));
   if (!created.ok) throw new Error('project.create failed');

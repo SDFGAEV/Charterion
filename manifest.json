@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "GPT Agent Manager",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Coordinate multiple ChatGPT conversations from one local-first side panel.",
   "permissions": [
     "tabs",

@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Chrome MV3](https://img.shields.io/badge/Chromium-Manifest%20V3-4285F4)](manifest.json)
-[![Version](https://img.shields.io/badge/version-0.4.0-blue.svg)](manifest.json)
+[![Version](https://img.shields.io/badge/version-0.4.1-blue.svg)](manifest.json)
 
 GPT Agent Manager (GAM) coordinates multiple **ChatGPT web conversations** as persistent, role-bound agents and adds a local durable control plane for projects, Git work, reviews, resources, and recovery.
 
@@ -231,6 +231,7 @@ A dedicated profile is stored under `<GAM_HOME>\chrome-profile`.
 - Chromium Native Messaging calls are restricted to the pinned extension origin.
 - The Native Host holds only a browser token and exposes a small allowlist; it never holds the GAM admin token.
 - Worker capabilities are project/task/resource/lease scoped and stored in SQLite only by token hash.
+- gamctl has no implicit administrator fallback: agent calls require a capability token/file, while privileged human/bootstrap operations must opt in explicitly with --admin.
 - Browser runtime reporting cannot create projects, acquire leases, issue capabilities, approve reviews, or merge changes.
 - `gamd` listens on a local named pipe rather than an unauthenticated TCP port.
 - Unknown, stale, ambiguous, or conflicting authority fails closed.
@@ -262,8 +263,8 @@ npm run release
 Produces both:
 
 ```text
-release/gpt-agent-manager-v0.4.0.zip
-release/gpt-agent-manager-v0.4.0-windows-runtime.zip
+release/gpt-agent-manager-v0.4.1.zip
+release/gpt-agent-manager-v0.4.1-windows-runtime.zip
 ```
 
 with SHA256 sidecar files. The first archive is the browser-extension payload; the second contains the prebuilt extension, GAM launcher, `gamd`/`gamctl`, Native Host, and Windows runtime installer.
@@ -302,8 +303,8 @@ retired                      closing -> absent
 ```
 
 The Extension reconciles these states. Active slots get a ChatGPT page (or their durable conversation is reopened); suspended/retired slots stop receiving new tasks and their page closes only after an in-flight generation finishes.
-Worker capabilities can be bound to an exact `agentSlotId`. Suspending or retiring that slot atomically revokes its bound capabilities, releases leases held by the slot, increments the slot epoch, and leaves old tokens revoked even after a later resume.
+Worker capabilities can be bound to an exact `agentSlotId`. A suspend/retire request immediately removes the slot from new task dispatch and blocks new leases or capabilities. If the page is still generating, existing authority is retained only for the drain; when Browser Plane reports the tab absent, the Kernel releases the slot leases, revokes bound capabilities, increments the slot epoch, and leaves old tokens revoked even after a later resume.
 
-Workers may instead raise durable requests to the Supervisor with types including `suggestion`, `blocker`, `question`, `resource-request`, `scope-change`, `dependency-request`, `cross-system-request`, `review-request`, and `risk-alert`. A request is advisory: submitting it never changes fleet or project state. The Supervisor explicitly accepts or rejects it, performs any authorized action, and then resolves it. Open requests are visible in the Local Control Plane panel.
+Workers may instead raise durable requests to the Supervisor with types including `suggestion`, `blocker`, `question`, `resource-request`, `scope-change`, `dependency-request`, `cross-system-request`, `review-request`, and `risk-alert`. A request is advisory: submitting it never changes fleet or project state. The Supervisor explicitly accepts or rejects it, performs any authorized action, and then resolves it. Open requests are visible in the Local Control Plane panel and, when exactly one active AgentSlot uses the reserved `SUPERVISOR` role, are deterministically mirrored into that Supervisor conversation through the existing duplicate-fenced Semantic Message Bus.
 
 This preserves the core rule: **maximize worker autonomy while minimizing worker authority**. Workers can identify problems and propose organizational changes; the Supervisor decides; the Kernel enforces the resulting transition.

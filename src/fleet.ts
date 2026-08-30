@@ -1,5 +1,5 @@
-import type { ManagedTab } from './contracts';
-import type { ControlAgentView } from './nativeControl';
+import type { AgentMessage, ManagedTab } from './contracts';
+import type { ControlAgentView, ControlWorkerRequestView } from './nativeControl';
 
 export type FleetAction =
   | { kind: 'open'; slotId: string; url: string }
@@ -58,4 +58,40 @@ export function filterFleetTaskTabs(
     if (agent.conversationKey) for (const tab of tabs) if (tab.snapshot.conversationKey === agent.conversationKey) blocked.add(tab.tabId);
   }
   return tabs.filter((tab) => !blocked.has(tab.tabId));
+}
+
+export function workerRequestMessage(
+  request: ControlWorkerRequestView,
+  projectName: string,
+  fromRole: string,
+  supervisorRole: string,
+): AgentMessage {
+  const type: AgentMessage['type'] = request.type === 'blocker'
+    ? 'blocker'
+    : request.type === 'question'
+      ? 'question'
+      : request.type === 'review-request'
+        ? 'review-request'
+        : 'announcement';
+  const content = [
+    `Request ID: ${request.id}`,
+    `Type: ${request.type}`,
+    `Title: ${request.title}`,
+    '', request.body,
+    ...(request.suggestedAction ? ['', `Suggested action: ${request.suggestedAction}`] : []),
+    '', 'Inspect the relevant project state, then accept or reject this request through the GAM Kernel.',
+  ].join('\n');
+  const message: AgentMessage = {
+    id: `control-request:${request.id}`,
+    project: projectName,
+    fromRole,
+    target: { kind: 'role', role: supervisorRole },
+    type,
+    content,
+    attemptIds: [],
+    createdAt: request.createdAt,
+    updatedAt: request.updatedAt,
+  };
+  if (request.taskId) message.taskId = request.taskId;
+  return message;
 }

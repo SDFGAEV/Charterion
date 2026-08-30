@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 const repo = process.cwd();
+const packageVersion = JSON.parse(readFileSync(join(repo, 'package.json'), 'utf8')).version;
 const home = mkdtempSync(join(tmpdir(), 'gam-native-smoke-'));
 const pipe = process.platform === 'win32' ? `\\\\.\\pipe\\gam-native-${randomUUID()}` : join(home, 'gamd.sock');
 const env = { ...process.env, GAM_HOME: home, GAM_PIPE_NAME: pipe };
@@ -19,7 +20,7 @@ const hostExe = join(hostDir, 'GamNativeHost.exe');
 const hostConfig = join(hostDir, 'gam-native-host.json');
 const origin = 'chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/';
 function cli(method, params = {}) {
-  const result = spawnSync(process.execPath, [join(repo, 'dist-control', 'gamctl.cjs'), method, '--stdin'], {
+  const result = spawnSync(process.execPath, [join(repo, 'dist-control', 'gamctl.cjs'), method, '--admin', '--stdin'], {
     cwd: repo, env, input: JSON.stringify(params), encoding: 'utf8', timeout: 10_000,
   });
   if (result.error) throw result.error;
@@ -71,7 +72,7 @@ try {
     throw new Error('Native host did not return the expected project');
   }
   const reported = invokeNative({ id: 'browser-report', method: 'browser.report', params: {
-    profileId: 'gam-default', authStatus: 'authenticated', openTabs: 2, extensionVersion: '0.4.0', observedAt: Date.now(),
+    profileId: 'gam-default', authStatus: 'authenticated', openTabs: 2, extensionVersion: packageVersion, observedAt: Date.now(),
   }});
   if (!reported.ok || reported.result?.authStatus !== 'authenticated') throw new Error('Native host did not accept browser runtime report');
   const browserStatus = invokeNative({ id: 'browser-status', method: 'browser.status', params: {} });
