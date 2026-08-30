@@ -11,6 +11,8 @@ import { parseReviewResult } from './review';
 import { assertMessageDeliveryAvailable, buildSemanticMessagePrompt, createAgentMessage, planMessageDispatch } from './messageBus';
 import { createPortableManagerState, parsePortableManagerState, stringifyPortableManagerState } from './stateTransfer';
 import { recoverAttempt, type AttemptRecoveryObservation } from './recovery';
+import { readNativeControlSnapshot, reportNativeBrowserRuntime, reportNativeAgentBrowser } from './nativeControl';
+import { filterFleetTaskTabs, planFleetReconciliation } from './fleet';
 import {
   EMPTY_BINDING,
   unavailableSnapshot,
@@ -35,6 +37,7 @@ const SEND_ATTEMPTS_KEY = 'sendAttempts.v1';
 const TASKS_KEY = 'tasks.v1';
 const MESSAGES_KEY = 'messages.v1';
 const SUPERVISOR_KEY = 'supervisor.v1';
+const FLEET_TABS_KEY = 'fleetTabs.v1';
 let stateMutationTail: Promise<void> = Promise.resolve();
 
 async function localBindings(): Promise<Record<string, RoleBinding>> {
@@ -53,6 +56,15 @@ async function saveLocal(bindings: Record<string, RoleBinding>): Promise<void> {
 
 async function saveSession(bindings: Record<string, RoleBinding>): Promise<void> {
   await chrome.storage.session.set({ [TAB_BINDINGS_KEY]: bindings });
+}
+
+async function fleetTabMap(): Promise<Record<string, number>> {
+  const stored = await chrome.storage.session.get(FLEET_TABS_KEY);
+  return (stored[FLEET_TABS_KEY] as Record<string, number> | undefined) ?? {};
+}
+
+async function saveFleetTabMap(value: Record<string, number>): Promise<void> {
+  await chrome.storage.session.set({ [FLEET_TABS_KEY]: value });
 }
 
 interface WorkState {
@@ -499,8 +511,10 @@ async function runReadyTasks(): Promise<TaskDispatchResult[]> {
   validateTaskGraph(state.tasks);
   const tasks = deriveManagedTasks(state.tasks, state.attempts);
   const tabs = await managedTabs(state.attempts);
+  let dispatchTabs = tabs;
+  try { const [snapshot, mapping] = await Promise.all([readNativeControlSnapshot(), fleetTabMap()]); dispatchTabs = filterFleetTaskTabs(tabs, snapshot.agents, mapping); } catch { /* local control plane is optional for browser-only orchestration */ }
   const byTaskId = new Map(tasks.map((managed) => [managed.task.id, managed]));
-  const decisions = planReadyDispatches(tasks, tabs);
+  const decisions = planReadyDispatches(tasks, dispatchTabs);
   const results: TaskDispatchResult[] = [];
   const batchId = crypto.randomUUID();
 
@@ -544,6 +558,89 @@ async function focusTab(tabId: number): Promise<void> {
   await chrome.windows.update(tab.windowId, { focused: true });
 }
 
+const AUTHENTICATED_BROWSER_STATES = new Set(['idle', 'generating', 'blocked', 'error']);
+let browserReportTimer: number | undefined;
+
+async function reportBrowserRuntimeFromTabs(tabs: ManagedTab[]): Promise<void> {
+  const hasAuthenticated = tabs.some((tab) => AUTHENTICATED_BROWSER_STATES.has(tab.snapshot.status));
+  const hasUnauthorized = tabs.some((tab) => tab.snapshot.status === 'unauthorized');
+  const authStatus = hasAuthenticated ? 'authenticated' : hasUnauthorized ? 'authentication-required' : 'unknown';
+  await reportNativeBrowserRuntime({
+    profileId: 'gam-default',
+    authStatus,
+    openTabs: tabs.length,
+    extensionVersion: chrome.runtime.getManifest().version,
+    observedAt: Date.now(),
+  });
+}
+
+function scheduleBrowserRuntimeReport(): void {
+  if (browserReportTimer !== undefined) clearTimeout(browserReportTimer);
+  browserReportTimer = setTimeout(() => {
+    browserReportTimer = undefined;
+    void workState().then((state) => managedTabs(state.attempts)).then(reportBrowserRuntimeFromTabs).catch(() => undefined);
+  }, 250) as unknown as number;
+}
+let fleetReconcileRun: Promise<void> | undefined;
+let fleetReconcileTimer: number | undefined;
+
+async function clearFleetBinding(conversationKey: string | undefined, tabId: number | undefined): Promise<void> {
+  const [persistent, ephemeral] = await Promise.all([localBindings(), sessionBindings()]);
+  if (conversationKey) delete persistent[conversationKey];
+  if (tabId !== undefined) delete ephemeral[String(tabId)];
+  await Promise.all([saveLocal(persistent), saveSession(ephemeral)]);
+}
+
+async function reconcileAgentFleet(): Promise<void> {
+  if (fleetReconcileRun) return fleetReconcileRun;
+  fleetReconcileRun = (async () => {
+    const snapshot = await readNativeControlSnapshot();
+    const state = await workState();
+    const currentTabs = await managedTabs(state.attempts);
+    const mapping = await fleetTabMap();
+    const actions = planFleetReconciliation(snapshot.agents, currentTabs, mapping);
+    const latestRuntime = [...snapshot.browserRuntime].sort((a, b) => b.observedAt - a.observedAt)[0];
+    const authenticationRequired = currentTabs.some((tab) => tab.snapshot.status === 'unauthorized') || latestRuntime?.authStatus === 'authentication-required';
+    const projects = new Map(snapshot.projects.map((project) => [project.id, project]));
+    const agents = new Map(snapshot.agents.map((agent) => [agent.id, agent]));
+    for (const action of actions) {
+      const agent = agents.get(action.slotId); if (!agent) continue;
+      const project = projects.get(agent.projectId); if (!project) continue;
+      if (action.kind === 'open') {
+        if (authenticationRequired) continue;
+        const tab = await chrome.tabs.create({ url: action.url, active: false });
+        if (tab.id === undefined) throw new Error(`Chrome did not return a tab id for agent slot ${agent.id}`);
+        mapping[agent.id] = tab.id; await saveFleetTabMap(mapping);
+        const key = agent.conversationKey ?? `url:${action.url}`;
+        await updateBinding(tab.id, key, { role: agent.role, project: project.name, notes: `GAM fleet slot ${agent.id}` });
+        await reportNativeAgentBrowser({ slotId: agent.id, profileId: 'gam-default', browserState: 'opening', tabId: tab.id, observedAt: Date.now() });
+      } else if (action.kind === 'close') {
+        await reportNativeAgentBrowser({ slotId: agent.id, profileId: 'gam-default', browserState: 'closing', tabId: action.tabId, observedAt: Date.now() });
+        await clearFleetBinding(agent.conversationKey, action.tabId);
+        try { await chrome.tabs.remove(action.tabId); } catch { /* tab may already be gone */ }
+        delete mapping[agent.id]; await saveFleetTabMap(mapping);
+        await reportNativeAgentBrowser({ slotId: agent.id, profileId: 'gam-default', browserState: 'absent', observedAt: Date.now() });
+      } else if (action.kind === 'report-open') {
+        mapping[agent.id] = action.tabId; await saveFleetTabMap(mapping);
+        const tab = currentTabs.find((item) => item.tabId === action.tabId);
+        if (tab && (tab.binding.role !== agent.role || tab.binding.project !== project.name)) {
+          await updateBinding(tab.tabId, action.conversationKey ?? tab.snapshot.conversationKey, { role: agent.role, project: project.name, notes: `GAM fleet slot ${agent.id}` });
+        }
+        await reportNativeAgentBrowser({ slotId: agent.id, profileId: 'gam-default', browserState: 'open', tabId: action.tabId, ...(action.conversationKey ? { conversationKey: action.conversationKey } : {}), observedAt: Date.now() });
+      } else {
+        delete mapping[agent.id]; await saveFleetTabMap(mapping);
+        await reportNativeAgentBrowser({ slotId: agent.id, profileId: 'gam-default', browserState: 'absent', observedAt: Date.now() });
+      }
+    }
+  })().finally(() => { fleetReconcileRun = undefined; });
+  return fleetReconcileRun;
+}
+
+function scheduleFleetReconcile(delayMs = 150): void {
+  if (fleetReconcileTimer !== undefined) clearTimeout(fleetReconcileTimer);
+  fleetReconcileTimer = setTimeout(() => { fleetReconcileTimer = undefined; void reconcileAgentFleet().catch(() => undefined); }, delayMs) as unknown as number;
+}
+
 async function notifyManagerChanged(): Promise<void> {
   const notice: RuntimeNotice = { type: 'manager:changed' };
   try { await chrome.runtime.sendMessage(notice); } catch { /* no side panel open */ }
@@ -552,6 +649,8 @@ async function notifyManagerChanged(): Promise<void> {
 chrome.runtime.onMessage.addListener((message: ManagerRequest | RuntimeNotice, sender, sendResponse) => {
   if (message.type === 'content:changed') {
     void notifyManagerChanged();
+    scheduleBrowserRuntimeReport();
+    scheduleFleetReconcile();
     kickSupervisor();
     return false;
   }
@@ -580,6 +679,7 @@ chrome.runtime.onMessage.addListener((message: ManagerRequest | RuntimeNotice, s
         message,
         attemptHistory: message.attemptIds.map((id) => attemptsById.get(id)).filter(Boolean),
       }));
+      void reportBrowserRuntimeFromTabs(tabs).catch(() => undefined);
       sendResponse({ ok: true, tabs, tasks, messages, supervisorEnabled: await supervisorEnabled() });
     })().catch((error) => sendResponse({ ok: false, error: String(error) }));
     return true;
@@ -650,6 +750,16 @@ chrome.runtime.onMessage.addListener((message: ManagerRequest | RuntimeNotice, s
       .catch((error) => sendResponse({ ok: false, error: String(error) }));
     return true;
   }
+  if (message.type === 'manager:control-snapshot') {
+    if (sender.tab) {
+      sendResponse({ ok: false, error: 'Native control requests are only accepted from extension UI contexts' });
+      return false;
+    }
+    void readNativeControlSnapshot()
+      .then((snapshot) => sendResponse({ ok: true, snapshot }))
+      .catch((error) => sendResponse({ ok: false, error: String(error) }));
+    return true;
+  }
   if (message.type === 'manager:export-state') {
     void exportStateDocument()
       .then((document) => sendResponse({ ok: true, document }))
@@ -681,6 +791,7 @@ void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
   if (tab.url?.startsWith('https://chatgpt.com/') && (changeInfo.status === 'complete' || changeInfo.url !== undefined)) {
     void notifyManagerChanged();
+    scheduleFleetReconcile();
   }
 });
 chrome.tabs.onRemoved.addListener((tabId) => {
@@ -690,12 +801,15 @@ chrome.tabs.onRemoved.addListener((tabId) => {
     delete bindings[String(tabId)];
     await saveSession(bindings);
     await notifyManagerChanged();
+    scheduleFleetReconcile();
   })();
 });
 
 void reconcileAfterRestart().then(() => {
   void notifyManagerChanged();
   kickSupervisor();
+  scheduleFleetReconcile(0);
 }).catch(() => {
   // Recovery is fail-closed: unresolved attempts remain non-ready until inspected.
 });
+setInterval(() => scheduleFleetReconcile(0), 5000);

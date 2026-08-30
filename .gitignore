@@ -10,3 +10,9 @@ Thumbs.db
 .vscode/
 .idea/
 release/
+dist-control/
+dist-native-host/
+native-host/**/bin/
+native-host/**/obj/
+
+.build-cache/

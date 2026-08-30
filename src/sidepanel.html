@@ -12,6 +12,11 @@
     <button id="refresh" type="button">Refresh</button>
   </header>
   <main>
+    <section class="composer-card control-plane-card">
+      <div class="section-heading"><h2>Local control plane</h2><span id="control-status" class="muted">Checking…</span></div>
+      <p id="control-summary" class="muted">GAM Kernel / SQLite authority, ChatGPT authentication, Change Requests, reviews, and merge queue.</p>
+      <div id="control-projects" class="control-projects"></div>
+    </section>
     <section class="composer-card">
       <label for="instruction">Instruction for selected agents</label>
       <textarea id="instruction" rows="3" placeholder="Send a one-off instruction."></textarea>

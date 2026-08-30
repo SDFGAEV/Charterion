@@ -12,7 +12,11 @@ import type {
   TaskDispatchResult,
   TaskKind,
 } from './contracts';
+import type { NativeControlSnapshot } from './nativeControl';
 
+const controlStatus = required<HTMLSpanElement>('control-status');
+const controlSummary = required<HTMLParagraphElement>('control-summary');
+const controlProjects = required<HTMLDivElement>('control-projects');
 const agentsRoot = required<HTMLDivElement>('agents');
 const tasksRoot = required<HTMLDivElement>('tasks');
 const messagesRoot = required<HTMLDivElement>('messages');
@@ -29,6 +33,8 @@ let tabs: ManagedTab[] = [];
 let tasks: ManagedTask[] = [];
 let messages: ManagedMessage[] = [];
 let supervisorEnabled = false;
+let controlSnapshot: NativeControlSnapshot | undefined;
+let lastControlRefresh = 0;
 let refreshTimer: number | undefined;
 
 function required<T extends HTMLElement>(id: string): T {
@@ -370,6 +376,53 @@ function ensureReviewTargetDependency(): void {
   }
 }
 
+function renderControl(): void {
+  if (!controlSnapshot) { controlProjects.replaceChildren(); controlSummary.textContent = 'Browser orchestration remains available without the local control plane.'; return; }
+  const runtime = [...controlSnapshot.browserRuntime].sort((x, y) => y.observedAt - x.observedAt)[0];
+  const auth = runtime?.authStatus ?? 'unknown';
+  const cards = controlSnapshot.projects.map((project) => {
+    const card = el('article', 'control-project-card'); const title = el('strong'); title.textContent = project.name; const meta = el('small');
+    const agentCount = controlSnapshot!.agents.filter((x) => x.projectId === project.id).length; const resourceCount = controlSnapshot!.resources.filter((x) => x.projectId === project.id).length; const leaseCount = controlSnapshot!.leases.filter((x) => x.projectId === project.id && x.status === 'active').length;
+    const changes = controlSnapshot!.changeRequests.filter((x) => x.projectId === project.id); const openRequests = controlSnapshot!.workerRequests.filter((x) => x.projectId === project.id && x.status === 'open'); const reviewable = changes.filter((x) => x.status === 'open').length; const mergeReady = changes.filter((x) => x.status === 'approved' || x.status === 'queued').length;
+    meta.textContent = [project.status, project.isolationTier, agentCount + ' agent(s)', resourceCount + ' resource(s)', leaseCount + ' active lease(s)', reviewable + ' reviewable CR(s)', openRequests.length + ' worker request(s)', mergeReady + ' merge-ready'].join(' · ');
+    const path = el('code', 'control-project-path'); path.textContent = project.rootPath; card.append(title, meta, path);
+    const projectAgents = controlSnapshot!.agents.filter((agent) => agent.projectId === project.id);
+    for (const agent of projectAgents) {
+      const row = el('div', 'control-agent-row');
+      const tab = agent.browserTabId !== undefined ? 'tab ' + agent.browserTabId : 'no tab';
+      row.textContent = [agent.role, 'desired ' + agent.desiredState, 'browser ' + agent.browserState, tab].join(' · ');
+      if (agent.browserError) row.title = agent.browserError;
+      card.append(row);
+    }
+    for (const request of openRequests.slice(-5).reverse()) {
+      const row = el('div', 'control-request-row');
+      row.textContent = ['REQUEST', request.type, request.fromSubject, request.title].join(' · ');
+      row.title = request.body + (request.suggestedAction ? '\nSuggested: ' + request.suggestedAction : '');
+      card.append(row);
+    }
+    for (const change of changes.slice(-5).reverse()) { const row = el('div', 'control-change-row'); const reviews = controlSnapshot!.reviews.filter((x) => x.changeRequestId === change.id); const latestReview = reviews.at(-1); const queue = controlSnapshot!.mergeQueue.find((x) => x.changeRequestId === change.id); const reviewText = latestReview ? latestReview.verdict : 'pending-review'; const queueText = queue ? queue.status + (queue.candidateSha ? ':' + queue.candidateSha.slice(0, 10) : '') : 'not-queued'; row.textContent = [change.status, change.branch + ' → ' + change.targetBranch, 'r' + change.revision, change.headSha.slice(0, 10), reviewText, queueText].join(' · '); card.append(row); }
+    return card;
+  });
+  controlProjects.replaceChildren(...cards); const activeLeases = controlSnapshot.leases.filter((x) => x.status === 'active').length; const tabs = runtime?.openTabs ?? 0;
+  controlSummary.textContent = ['ChatGPT ' + auth, tabs + ' tab(s)', controlSnapshot.projects.length + ' project(s)', controlSnapshot.agents.length + ' agent slot(s)', activeLeases + ' active lease(s)', controlSnapshot.mergeQueue.filter((x) => x.status === 'validating').length + ' validating merge(s)'].join(' · ');
+}
+
+async function refreshControl(force = false): Promise<void> {
+  const now = Date.now();
+  if (!force && now - lastControlRefresh < 2000) return;
+  lastControlRefresh = now;
+  try {
+    const response = await request<{ snapshot: NativeControlSnapshot }>({ type: 'manager:control-snapshot' });
+    controlSnapshot = response.snapshot;
+    setStatus(controlStatus, 'connected');
+  } catch (error) {
+    controlSnapshot = undefined;
+    setStatus(controlStatus, 'unavailable', true);
+    controlSummary.textContent = error instanceof Error ? error.message : String(error);
+  }
+  renderControl();
+}
+
 function render(): void {
   agentsRoot.replaceChildren(...tabs.map(renderAgent));
   tasksRoot.replaceChildren(...tasks.map(renderTask));
@@ -515,7 +568,7 @@ async function importState(): Promise<void> {
   }
 }
 
-required<HTMLButtonElement>('refresh').addEventListener('click', () => void refresh());
+required<HTMLButtonElement>('refresh').addEventListener('click', () => { void refresh(); void refreshControl(true); });
 required<HTMLButtonElement>('send-selected').addEventListener('click', () => void sendSelected());
 required<HTMLButtonElement>('create-task').addEventListener('click', () => void createTask());
 required<HTMLButtonElement>('run-ready').addEventListener('click', () => void runReadyTasks());
@@ -540,11 +593,12 @@ chrome.runtime.onMessage.addListener((message: RuntimeNotice) => {
   return false;
 });
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') void refresh();
+  if (document.visibilityState === 'visible') { void refresh(); void refreshControl(true); }
 });
 
 updateTaskKindFields();
 void refresh();
+void refreshControl(true);
 
 function renderMessage(managed: ManagedMessage): HTMLElement {
   const card = el('article', 'message-card');

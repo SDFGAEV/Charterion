@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
@@ -19,11 +20,17 @@ for (const relative of assets) {
 }
 
 const manifest = JSON.parse(await readFile(resolve(root, 'manifest.json'), 'utf8'));
+const pkg = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8'));
+if (manifest.version !== pkg.version) throw new Error('manifest and package versions must match');
+if (typeof manifest.key !== 'string' || !manifest.key) throw new Error('manifest.key must pin a stable extension identity');
+const extensionBytes = createHash('sha256').update(Buffer.from(manifest.key, 'base64')).digest().subarray(0, 16);
+const extensionId = [...extensionBytes].flatMap((byte) => [byte >> 4, byte & 15]).map((nibble) => String.fromCharCode(97 + nibble)).join('');
+if (extensionId !== 'kheifdlffdfcgmapmbbahdgkpccckmbn') throw new Error('stable extension id changed unexpectedly');
 if (manifest.manifest_version !== 3) throw new Error('manifest.json must stay on Manifest V3');
 if (JSON.stringify(manifest.host_permissions) !== JSON.stringify(['https://chatgpt.com/*'])) {
   throw new Error('host_permissions must remain scoped to https://chatgpt.com/*');
 }
-const expectedPermissions = ['tabs', 'storage', 'sidePanel'];
+const expectedPermissions = ['tabs', 'storage', 'sidePanel', 'nativeMessaging'];
 if (JSON.stringify(manifest.permissions) !== JSON.stringify(expectedPermissions)) {
   throw new Error(`permissions must remain exactly ${expectedPermissions.join(', ')}`);
 }
@@ -42,7 +49,7 @@ const requiredIds = [
   'task-instruction', 'create-task', 'dag-view', 'tasks',
   'message-project', 'message-from', 'message-target-kind', 'message-target-role',
   'message-type', 'message-task', 'message-content', 'queue-message', 'messages',
-  'state-json', 'export-state', 'import-state', 'agents', 'summary', 'empty',
+  'state-json', 'export-state', 'import-state', 'control-status', 'control-summary', 'control-projects', 'agents', 'summary', 'empty',
 ];
 for (const id of requiredIds) {
   if (!html.includes(`id="${id}"`)) throw new Error(`sidepanel.html is missing required #${id}`);

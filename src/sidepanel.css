@@ -140,3 +140,15 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .message-history { margin-top: 8px; font-size: 11px; }
 .message-history > summary { cursor: pointer; opacity: .72; }
 .message-actions { margin-top: 7px; justify-content: flex-end; }
+
+.control-projects { display: grid; gap: 8px; }
+.control-project-card { display: grid; gap: 4px; padding: 9px; border: 1px solid var(--border, #d9d9d9); border-radius: 8px; }
+.control-project-card strong { font-size: 13px; }
+.control-project-card small { color: #666; line-height: 1.35; }
+.control-project-path { overflow-wrap: anywhere; font-size: 11px; }
+
+.control-change-row { padding-top: 4px; border-top: 1px dashed var(--border, #d9d9d9); color: #555; font-size: 11px; line-height: 1.35; overflow-wrap: anywhere; }
+
+.control-agent-row { font-size: 11px; color: #555; padding: 3px 0; overflow-wrap: anywhere; }
+
+.control-request-row { font-size: 11px; padding: 4px 0; font-weight: 600; overflow-wrap: anywhere; }

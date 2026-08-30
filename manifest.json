@@ -1,12 +1,13 @@
 {
   "manifest_version": 3,
   "name": "GPT Agent Manager",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Coordinate multiple ChatGPT conversations from one local-first side panel.",
   "permissions": [
     "tabs",
     "storage",
-    "sidePanel"
+    "sidePanel",
+    "nativeMessaging"
   ],
   "host_permissions": [
     "https://chatgpt.com/*"
@@ -30,5 +31,6 @@
       ],
       "run_at": "document_idle"
     }
-  ]
+  ],
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAlDd0+XQ145PlOxw+9+J9gxYZLQofPNh/cowySWerOgGfqxU2o1ycO8pIaKV/9t4uYVRvpdXr+oZ9wsX7oWhT6T3D6boaMa4mKA3G1uj0kzpU2MsWxy0yBTpI91YH/UUzMCQGBSy5dBBf1Cwnf0zC1P3N2tcT3IkwuCRSGsOftb5XqO6eI5G21udPetsW7xiIRMRnqd+mZZpKZ2t4hEzyWx6NuNepBMarmul1sGAPMuukvJsMACjugnmUQyXPihEew1n6//qroHHHKIpaIdxzoYrdYbaP8QVIgIs29fh1pMEdS9kkc+otrMujJm7qon+DESl49KgKuAm9ezYXIYfyrwIDAQAB"
 }

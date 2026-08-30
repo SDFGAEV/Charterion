@@ -1,0 +1,147 @@
+using System.Buffers.Binary;
+using System.IO.Pipes;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+
+const int MaxMessageBytes = 1024 * 1024;
+var allowedMethods = new HashSet<string>(StringComparer.Ordinal)
+{
+    "health", "control.snapshot", "browser.report", "browser.status", "agent.browser-report", "project.list", "agent.list", "resource.list", "lease.list", "events.list"
+};
+
+try
+{
+    var config = HostConfig.Load(AppContext.BaseDirectory);
+    var origin = args.FirstOrDefault(arg => arg.StartsWith("chrome-extension://", StringComparison.Ordinal));
+    if (!string.Equals(origin, config.AllowedOrigin, StringComparison.Ordinal))
+        throw new InvalidOperationException("Native host caller origin is not allowed.");
+
+    var browserToken = File.ReadAllText(config.BrowserTokenPath, Encoding.UTF8).Trim();
+    if (browserToken.Length < 32) throw new InvalidOperationException("Browser token is missing or invalid.");
+    using var input = Console.OpenStandardInput();
+    using var output = Console.OpenStandardOutput();
+    while (TryReadFrame(input, out var payload))
+    {
+        var response = Handle(payload, config, browserToken, allowedMethods);
+        WriteFrame(output, response);
+    }
+}
+catch (Exception error)
+{
+    Console.Error.WriteLine(error.Message);
+    Environment.ExitCode = 1;
+}
+
+static bool TryReadFrame(Stream input, out byte[] payload)
+{
+    payload = Array.Empty<byte>();
+    Span<byte> header = stackalloc byte[4];
+    var first = input.ReadByte();
+    if (first < 0) return false;
+    header[0] = (byte)first;
+    ReadExactly(input, header[1..]);
+    var length = BinaryPrimitives.ReadUInt32LittleEndian(header);
+    if (length == 0 || length > MaxMessageBytes) throw new InvalidDataException("Native message size is invalid.");
+    payload = new byte[length];
+    ReadExactly(input, payload);
+    return true;
+}
+
+static void ReadExactly(Stream stream, Span<byte> buffer)
+{
+    var offset = 0;
+    while (offset < buffer.Length)
+    {
+        var read = stream.Read(buffer[offset..]);
+        if (read == 0) throw new EndOfStreamException("Unexpected end of native message.");
+        offset += read;
+    }
+}
+
+static void WriteFrame(Stream output, byte[] payload)
+{
+    if (payload.Length > MaxMessageBytes) throw new InvalidDataException("Native response is too large.");
+    Span<byte> header = stackalloc byte[4];
+    BinaryPrimitives.WriteUInt32LittleEndian(header, (uint)payload.Length);
+    output.Write(header);
+    output.Write(payload);
+    output.Flush();
+}
+
+static byte[] Handle(byte[] payload, HostConfig config, string browserToken, HashSet<string> allowedMethods)
+{
+    string id = "unknown";
+    try
+    {
+        var request = JsonNode.Parse(payload) as JsonObject ?? throw new InvalidDataException("Native request must be a JSON object.");
+        id = request["id"]?.GetValue<string>() ?? throw new InvalidDataException("Request id is required.");
+        var method = request["method"]?.GetValue<string>() ?? throw new InvalidDataException("Request method is required.");
+        if (!allowedMethods.Contains(method)) return Error(id, "FORBIDDEN", $"Native host does not allow method {method}.");
+
+        var forwarded = new JsonObject
+        {
+            ["id"] = id,
+            ["method"] = method,
+            ["auth"] = new JsonObject { ["browserToken"] = browserToken },
+        };
+        if (request["params"] is JsonObject parameters) forwarded["params"] = parameters.DeepClone();
+        return Forward(config.PipeName, Encoding.UTF8.GetBytes(forwarded.ToJsonString()));
+    }
+    catch (Exception error)
+    {
+        return Error(id, "INVALID_REQUEST", error.Message);
+    }
+}
+
+static byte[] Error(string id, string code, string message)
+{
+    var value = new JsonObject
+    {
+        ["id"] = id,
+        ["ok"] = false,
+        ["error"] = new JsonObject { ["code"] = code, ["message"] = message },
+    };
+    return Encoding.UTF8.GetBytes(value.ToJsonString());
+}
+
+static byte[] Forward(string pipeName, byte[] request)
+{
+    var name = pipeName.StartsWith("\\\\.\\pipe\\", StringComparison.OrdinalIgnoreCase)
+        ? pipeName[9..]
+        : pipeName;
+    using var pipe = new NamedPipeClientStream(".", name, PipeDirection.InOut, PipeOptions.None);
+    pipe.Connect(3000);
+    using var writer = new StreamWriter(pipe, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
+    using var reader = new StreamReader(pipe, new UTF8Encoding(false), false, leaveOpen: true);
+    writer.WriteLine(Encoding.UTF8.GetString(request));
+    var response = reader.ReadLine() ?? throw new IOException("gamd closed the pipe without a response.");
+    var payload = Encoding.UTF8.GetBytes(response);
+    if (payload.Length > MaxMessageBytes) throw new InvalidDataException("gamd response is too large.");
+    return payload;
+}
+
+sealed record HostConfig(string PipeName, string BrowserTokenPath, string AllowedOrigin)
+{
+    public static HostConfig Load(string baseDirectory)
+    {
+        var path = Path.Combine(baseDirectory, "gam-native-host.json");
+        if (!File.Exists(path)) throw new FileNotFoundException("Native host config is missing.", path);
+        using var document = JsonDocument.Parse(File.ReadAllText(path, Encoding.UTF8));
+        var root = document.RootElement;
+        var pipeName = Required(root, "pipeName");
+        var tokenPath = Required(root, "browserTokenPath");
+        var origin = Required(root, "allowedOrigin");
+        if (!origin.StartsWith("chrome-extension://", StringComparison.Ordinal) || !origin.EndsWith('/'))
+            throw new InvalidDataException("allowedOrigin is invalid.");
+        return new HostConfig(pipeName, Path.GetFullPath(tokenPath), origin);
+    }
+
+    private static string Required(JsonElement root, string name)
+    {
+        if (!root.TryGetProperty(name, out var value) || value.ValueKind != JsonValueKind.String)
+            throw new InvalidDataException($"{name} is required.");
+        var text = value.GetString()?.Trim();
+        return string.IsNullOrEmpty(text) ? throw new InvalidDataException($"{name} is required.") : text;
+    }
+}

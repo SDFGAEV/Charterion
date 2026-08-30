@@ -235,6 +235,7 @@ export type ManagerRequest =
   | { type: 'manager:decide-human-task'; taskId: string; decision: HumanDecision; reason?: string }
   | { type: 'manager:skip-task'; taskId: string; reason?: string }
   | { type: 'manager:cancel-task'; taskId: string; reason?: string }
+  | { type: 'manager:control-snapshot' }
   | { type: 'manager:export-state' }
   | { type: 'manager:import-state'; document: string }
   | { type: 'manager:set-supervisor-enabled'; enabled: boolean }

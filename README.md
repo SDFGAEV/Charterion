@@ -1,253 +1,309 @@
 # GPT Agent Manager
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Chrome MV3](https://img.shields.io/badge/Chrome-Manifest%20V3-4285F4)](manifest.json)
-[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](manifest.json)
+[![Chrome MV3](https://img.shields.io/badge/Chromium-Manifest%20V3-4285F4)](manifest.json)
+[![Version](https://img.shields.io/badge/version-0.4.0-blue.svg)](manifest.json)
 
-GPT Agent Manager is a local-first Chrome extension for coordinating multiple **ChatGPT web conversations** as persistent, role-bound agents.
+GPT Agent Manager (GAM) coordinates multiple **ChatGPT web conversations** as persistent, role-bound agents and adds a local durable control plane for projects, Git work, reviews, resources, and recovery.
 
-It is intentionally focused on `chatgpt.com`: no OpenAI API, no other AI providers, no hosted control server, and no API key.
+It is intentionally focused on `chatgpt.com`: no OpenAI API key, no other model providers, and no hosted GAM backend.
 
-> **Version 0.3.0** adds human decision gates, bounded review/revision loops, a durable semantic team-message bus, state export/import, task attempt history, visual dependency selection, captured ChatGPT DOM fixture tests, and release packaging.
+## v0.4 in one sentence
 
-## Why
+**One GAM Runtime, two operator surfaces:** a visual browser workflow for a human operator and a deterministic JSON/CLI workflow for an authorized agent operating the same projects through Remote tooling.
 
-Running several ChatGPT conversations in parallel works until the human becomes the scheduler and message bus: switching tabs, remembering ownership, checking generation state, copying results, and deciding what may run next.
-
-GPT Agent Manager moves that coordination into a deterministic browser control plane while keeping the actual agents as ordinary logged-in ChatGPT web conversations.
-
-## Core principles
-
-1. **ChatGPT web is the cognition plane.** The extension does not replace it with an API.
-2. **Durable facts beat inferred status.** Tasks derive state from attempts, review results, human decisions, and dependencies.
-3. **Fail closed.** Unknown page state, ambiguous routing, and uncertain delivery never trigger speculative resend.
-4. **Control messages stay out of model context.** Only semantic information that an agent needs is routed through the ChatGPT composer.
-5. **Conversation identity is durable.** Roles bind to ChatGPT conversation identity, not merely a tab number.
-6. **History is preserved.** Retry, review, skip, cancel, import, and recovery do not erase prior attempts.
-
-## Features
-
-- Discover open `chatgpt.com` tabs and observe their current conversation state.
-- Bind **Role / Project / Notes** to each ChatGPT conversation.
-- Detect `idle`, `generating`, `blocked`, `unauthorized`, `error`, `unknown`, and `unavailable` states.
-- Send one-off instructions to selected idle ChatGPT tabs.
-- Persist a send-attempt ledger: `prepared → dispatched → acknowledged → reply-observed`.
-- Record `failed` and `uncertain` outcomes without pretending delivery is known.
-- Fence duplicate sends by attempt ID inside the page session.
-- Correlate replies by ChatGPT message/turn identity first, assistant-count baseline second.
-- Persist a task DAG with visual dependency selection.
-- Route bounded dependency evidence into downstream task prompts.
-- Support `work`, strict `review`, and `human` task nodes.
-- Support durable **Skip**, **Cancel**, **Approve**, **Reject**, and **Retry** facts.
-- Run bounded `review FAIL → producer revision → re-review` loops.
-- Preserve complete attempt/reply history per task.
-- Queue semantic team messages to one role or every bound role in a project.
-- Freeze recipient conversation identities on first delivery so later-opened agents never receive stale broadcasts.
-- Avoid duplicate broadcast delivery to recipients that already consumed a message.
-- Block message resend after an `uncertain` delivery.
-- Export/import durable manager state with schema validation and v1→v2 migration.
-- Run an opt-in Auto Supervisor that advances only unambiguous ready tasks.
-- Package a versioned Chrome ZIP plus SHA256 without extra build dependencies.
-
+```text
+Human operator                     Remote / mobile GPT operator
+      │                                      │
+      ▼                                      ▼
+Side Panel / GAM.cmd              GAM.cmd ... --json / gamctl
+      └──────────────────┬───────────────────┘
+                         ▼
+                     GAM Kernel
+                       gamd
+                         │
+       SQLite · Git · leases · capabilities
+       evidence · Change Requests · merge queue
+                         │
+                         ▼
+             ChatGPT web conversations
+```
 ## Architecture
 
-```text
-┌────────────────────────────────────────────┐
-│               Side Panel UI                │
-│ agents · tasks · DAG · messages · state   │
-└─────────────────────┬──────────────────────┘
-                      │ typed extension messages
-                      ▼
-┌────────────────────────────────────────────┐
-│             MV3 Service Worker             │
-│ role bindings                              │
-│ task graph + completion policies           │
-│ semantic message bus                       │
-│ send-attempt ledger                        │
-│ review / retry / recovery                  │
-│ fail-closed supervisor                     │
-└─────────────────────┬──────────────────────┘
-                      │ attempt-scoped commands
-                      ▼
-┌────────────────────────────────────────────┐
-│          ChatGPT Content Scripts           │
-│ DOM observation · composer integration     │
-│ delivery fence · reply correlation         │
-└─────────────────────┬──────────────────────┘
-                      ▼
-                 chatgpt.com tabs
-```
+GAM has four runtime components:
 
-ChatGPT-specific selectors and page behavior stay isolated in `src/chatgptAdapter.ts`. Orchestration code never reaches directly into ChatGPT DOM selectors.
+- **Chrome/Edge Extension** — discovers `chatgpt.com` tabs, binds Role/Project identity, routes prompts, observes replies, and renders the Side Panel.
+- **`gamd`** — the deterministic local GAM Kernel. It owns SQLite authority, project cells, resource leases, capability fencing, evidence facts, Change Requests, Supervisor reviews, and merge queue state.
+- **Native Messaging Host** — a small read-mostly Chromium ↔ `gamd` bridge over a Windows named pipe. It never receives the GAM admin token.
+- **`gamctl` / `GAM` launcher** — machine-friendly clients used by local automation and authorized Remote agents.
 
-## Task model
+`gamd` is the only component intended to remain running. Chromium starts the Native Host on demand; `gamctl` and the `GAM` launcher are short-lived clients.
 
-Every task has a kind and a fixed completion policy:
-
-| Kind | Completion policy | Completion condition |
-| --- | --- | --- |
-| `work` | `reply` | A correlated new ChatGPT assistant reply is durably observed. |
-| `review` | `review-pass` | A strict `<GAM_REVIEW>` JSON block validates and explicitly passes. |
-| `human` | `human-approval` | The user explicitly approves the node. |
-
-Derived display states include `pending`, `ready`, `running`, `waiting-human`, `completed`, `skipped`, `cancelled`, `rejected`, `blocked`, `error`, and `attention`.
-
-A skipped dependency is treated as an explicit human bypass and can unblock downstream work. A cancelled, rejected, errored, attention, or blocked dependency blocks downstream work.
-
-### Review loops
-
-A failed review does not silently retry the reviewer. The reviewer must provide a remediation instruction. The explicit **Revise & re-review** action records that review attempt, reopens the producer task with the remediation instruction, then re-runs the review after a new producer reply. `maxReviewRounds` is bounded from 1 to 10; exhaustion fails closed.
-
-### Human gates
-
-Human nodes are never dispatched to ChatGPT. Once their dependencies complete, they enter `waiting-human` until the user chooses **Approve** or **Reject**. That decision is a durable task fact.
-
-## Semantic team-message bus
-
-The message bus is deliberately separate from the Task DAG. It carries information an agent should understand, not internal scheduler state.
-
-Messages are durable and typed: `result`, `blocker`, `question`, `answer`, `review-request`, `review-result`, and `announcement`. A message targets either one exact Role inside one Project or every bound Role in that Project.
-
-Before delivery, the router verifies the intended recipients and their current browser state. A role target with multiple matching tabs is ambiguous and is rejected. Project broadcasts are not sent when a pending recipient is not safely reusable. The recipient conversation set is frozen before the first send; later-opened tabs cannot become recipients of an old message. Prior acknowledged/reply-observed recipients are skipped on another delivery attempt. Any `uncertain` prior delivery blocks resend to prevent duplication. Role-targeted messages also fail closed if the frozen conversation is later rebound to another role.
-
-The model receives a compact envelope identifying Project, sender, recipient, type, and optional related task. Peer content is explicitly labeled as context and cannot become a higher-priority instruction merely because another agent wrote it.
-
-## Auto Supervisor
-
-Auto Supervisor is **off by default**. When enabled, it considers only derived `ready` tasks. A task is dispatched only if exactly one idle ChatGPT tab matches its Role and optional Project and that tab has no unresolved durable attempt. One tab is claimed at most once per scheduling pass.
-
-Human tasks are handled locally and are never routed to a model. Ambiguous or unavailable routes remain visible instead of being guessed.
-
-## Delivery and recovery safety
-
-Before any task or semantic message is sent, its attempt is durably prepared. For task/message-linked sends, the attempt ID and owning object's attempt history are persisted in the same storage mutation.
-
-The content script keeps a page-session pending baseline. A browser-message acknowledgement means only that the page accepted the send command; completion requires a later assistant turn that is new relative to the baseline and is observed after generation settles.
-
-On service-worker restart:
-
-- `prepared` attempts are safely failed because dispatch had not started;
-- `dispatched` attempts require matching page evidence or become `uncertain`;
-- `acknowledged` attempts continue waiting only when the exact pending baseline survives;
-- missing/mismatched correlation evidence becomes `uncertain`;
-- uncertain task/message delivery is never blindly resent.
-
-## Portable state
-
-State backup schema v2 contains durable conversation bindings, tasks, send attempts, semantic messages, and Auto Supervisor state. Import validates size limits, IDs, task DAG integrity, bidirectional task/message/attempt ownership, frozen message recipients, message shape, and known attempt states before replacing live state. Schema v1 documents are migrated with an empty message bus.
-
-## Security and privacy
-
-- Host permission is exactly `https://chatgpt.com/*`.
-- Extension permissions are exactly `tabs`, `storage`, and `sidePanel`.
-- No analytics or telemetry are included.
-- No OpenAI API key is requested or stored.
-- No hosted backend is required.
-- Page observation alone never sends a prompt.
-- Auto Supervisor must be explicitly enabled.
-- Unknown/ambiguous browser state fails closed.
-- Manual one-off prompt bodies are not persisted in send history.
-- Durable task definitions and semantic message bodies are stored locally because they are the user's orchestration state.
-
-This browser extension is a coordination layer, not an operating-system sandbox. If agents are later given filesystem/terminal tools through a Remote connector, those tools require their own capability and isolation boundary.
-
-## Repository layout
+### Authority model
 
 ```text
-gpt-agent-manager/
-├─ src/
-│  ├─ attempts.ts
-│  ├─ attemptLedger.ts
-│  ├─ background.ts
-│  ├─ chatgptAdapter.ts
-│  ├─ content.ts
-│  ├─ contracts.ts
-│  ├─ messageBus.ts
-│  ├─ recovery.ts
-│  ├─ replyCorrelation.ts
-│  ├─ review.ts
-│  ├─ reviewLoop.ts
-│  ├─ stateTransfer.ts
-│  ├─ supervisor.ts
-│  ├─ taskGraph.ts
-│  ├─ taskLifecycle.ts
-│  ├─ taskPolicy.ts
-│  ├─ taskPrompt.ts
-│  ├─ tabAttempt.ts
-│  └─ sidepanel.{ts,html,css}
-├─ tests/
-│  └─ fixtures/chatgpt/
-├─ scripts/
-│  ├─ build.mjs
-│  ├─ check-assets.mjs
-│  └─ package-release.mjs
-├─ manifest.json
-└─ package.json
+Worker GPT        Supervisor GPT          GAM Kernel
+   │                    │                     │
+   │ autonomous work    │ engineering review │ deterministic policy
+   │ commit / PR         │ approve / revise   │ leases / evidence / merge gate
+   └───────────────┬────┴──────────────┬──────┘
+                   ▼                   ▼
+                  Git              protected state
 ```
 
-## Getting started
+Worker autonomy is intentionally high inside the task and resource scope it owns. Authority remains narrow: a worker cannot approve itself, a Supervisor cannot forge machine evidence, and neither can silently mutate protected integration state.
+## Human and agent operation
 
-Requirements: Chrome 114+, Node.js 20+, and npm.
+### Human mode
 
-```bash
+Run or double-click:
+
+```text
+GAM.cmd
+```
+
+GAM idempotently ensures the local Kernel is running, opens a dedicated Chromium profile, loads the extension, opens `chatgpt.com`, and restores durable project state. The dedicated profile is kept separate from the user's ordinary browser profile.
+
+### Agent mode
+
+A Remote-capable GPT can use the same runtime without scraping GUI text:
+
+```powershell
+GAM.cmd status --json
+GAM.cmd start --json
+GAM.cmd open "My Project" --json
+GAM.cmd doctor --json
+```
+
+Agent mode is non-interactive and produces stable structured output. Missing projects, unavailable runtime components, and authentication requirements are reported as explicit states instead of triggering prompts or guessed recovery actions.
+
+## ChatGPT account login
+
+GAM does **not** store ChatGPT credentials, passwords, MFA secrets, cookies, or account tokens.
+
+On first launch, GAM opens `chatgpt.com` in its dedicated Chromium profile. The user signs in normally on the official ChatGPT page. Chromium persists that session in the GAM profile for later launches.
+
+The extension reports only a coarse runtime observation to `gamd`:
+
+```text
+authenticated | authentication-required | unknown
+```
+
+plus open tab count, extension version, and observation time. If authentication expires, an agent-facing `GAM ... --json` call can report that human login is required, but GAM never attempts to enter credentials or bypass MFA/CAPTCHA.
+## Git / Change Request workflow
+
+For software projects, GAM follows a company-style Git workflow instead of treating a model reply as completion:
+
+```text
+Task
+  ↓
+Worker branch / worktree
+  ↓
+commit
+  ↓
+machine evidence
+  ↓
+Change Request
+  ↓
+Supervisor review
+  ├─ request changes → Worker pushes a new revision → review again
+  └─ approve
+        ↓
+     Merge Queue
+        ↓
+latest target branch + reviewed head
+        ↓
+integration candidate / conflict check
+        ↓
+external protected merge
+        ↓
+GAM observes Git history
+        ↓
+INTEGRATED
+```
+
+Important invariants:
+
+- the Change Request binds exact `baseSha`, `headSha`, source branch, and target branch;
+- the author cannot approve its own Change Request;
+- a review is valid only for the exact reviewed head SHA;
+- pushing a new head invalidates the previous approval;
+- entering the merge queue requires both valid machine evidence and current Supervisor approval;
+- the merge candidate is recomputed against the latest target branch;
+- conflicts move the Change Request back to `changes-requested`;
+- GAM marks a change integrated only after independently observing the approved head/candidate in target-branch Git history.
+## Browser orchestration
+
+The browser plane still provides the v0.3 coordination features:
+
+- persistent Role / Project bindings for ChatGPT conversations;
+- task DAG and dependency routing;
+- `work`, `review`, and `human` task kinds;
+- human Approve / Reject and durable Skip / Cancel / Retry facts;
+- bounded review → revision → re-review loops for browser-only tasks;
+- durable semantic message bus with exact-role and project-broadcast routing;
+- frozen recipient identities so later-opened conversations never receive stale broadcasts;
+- send-attempt ledger and crash recovery;
+- fail-closed handling of ambiguous tabs and `uncertain` delivery;
+- portable browser-state export/import;
+- opt-in Auto Supervisor.
+
+The local control plane augments these browser workflows; failure of `gamd` does not cause the extension to invent state or silently resend prompts.
+
+### Supervisor-managed Worker fleet
+
+Worker pages are controlled by durable `AgentSlot` desired state, not by ad-hoc tab operations. A Supervisor capability with `agent:fleet` may spawn, resume, suspend, or retire Workers. Browser code may only report observed page state; it cannot change fleet intent.
+
+Suspension and retirement are graceful by default: once the Supervisor requests a stop, that Worker is excluded from new task routing and cannot acquire new leases or capabilities. Existing authority remains long enough to finish the current ChatGPT generation. When the Browser Plane observes the page idle, it closes the managed tab and reports `absent`; `gamd` then atomically revokes the old capabilities, releases remaining leases, advances the slot epoch, and finalizes `suspended` or `retired`.
+
+Workers can also submit typed requests such as `suggestion`, `blocker`, `question`, `resource-request`, `scope-change`, `dependency-request`, `cross-system-request`, `review-request`, and `risk-alert`. A Worker request never mutates fleet or project authority by itself; the Supervisor must accept/reject it and perform any resulting action through its own capability.
+
+## Local control plane
+
+Current durable entities include:
+
+```text
+ProjectCell
+AgentSlot
+Resource
+ResourceLease
+CapabilityGrant
+ControlEvent
+WorkerRequest
+WorkClaim
+EvidenceArtifact
+VerificationRecord
+ChangeRequest
+ChangeRequestRevision
+SupervisorReview
+MergeQueueEntry
+BrowserRuntimeStatus
+```
+
+SQLite runs with foreign keys, WAL mode, strict tables, and full synchronous durability. State-changing operations use transactions and append durable events. Lease epochs fence stale agents from mutating current authority.
+
+Machine verification is deliberately limited to objective facts such as lease identity, file existence/digest, Git commit existence, branch ancestry, and mergeability. Engineering quality and architecture decisions remain the Supervisor Agent's review responsibility.
+## Installation and startup
+
+### Requirements
+
+- Windows 10/11 for the current Native Messaging deployment path;
+- Node.js 22+ for `gamd`, `gamctl`, and the unified launcher;
+- Chrome or Microsoft Edge (Chromium);
+- .NET 9 SDK/runtime only when building the Native Host from source.
+
+### From the source checkout
+
+```powershell
 npm install
+npm run verify:full
+npm run setup:windows
+```
+
+`setup:windows` builds and verifies the project, publishes the Native Host, computes the stable extension ID, registers the host for Chrome and Edge, prepares `GAM_HOME`, and starts GAM unless `-NoStart` is supplied.
+
+### From the Windows Runtime ZIP
+
+Extract the archive and double-click:
+
+```text
+SETUP.cmd
+```
+
+The prebuilt installer verifies Node 22+, registers the bundled Native Host, creates a persistent launcher in `GAM_HOME`, optionally creates a desktop shortcut, and starts GAM. It does not rebuild the project.
+
+The stable v0.4 extension identity is derived from the public `manifest.key` and is regression-checked during builds. No private signing key is stored in this repository.
+
+### Browser selection
+
+GAM searches standard Chrome and Edge installation paths. Override discovery when needed:
+
+```powershell
+set GAM_BROWSER_PATH=C:\path\to\chrome.exe
+GAM.cmd start
+```
+
+A dedicated profile is stored under `<GAM_HOME>\chrome-profile`.
+## Security boundaries
+
+- Extension host permission remains exactly `https://chatgpt.com/*`.
+- Browser permissions remain `tabs`, `storage`, `sidePanel`, and `nativeMessaging`.
+- Chromium Native Messaging calls are restricted to the pinned extension origin.
+- The Native Host holds only a browser token and exposes a small allowlist; it never holds the GAM admin token.
+- Worker capabilities are project/task/resource/lease scoped and stored in SQLite only by token hash.
+- Browser runtime reporting cannot create projects, acquire leases, issue capabilities, approve reviews, or merge changes.
+- `gamd` listens on a local named pipe rather than an unauthenticated TCP port.
+- Unknown, stale, ambiguous, or conflicting authority fails closed.
+
+The extension and GAM Kernel are coordination and policy layers, **not an OS sandbox**. If ChatGPT agents receive filesystem/terminal access through a Remote connector, those execution tools still require an appropriate container/VM/capability boundary.
+
+## Verification and release
+
+Fast development gate:
+
+```powershell
 npm run verify
 ```
 
-`npm run verify` performs strict TypeScript checking, static permission/UI asset gates, all tests, and the production extension build.
+Full release gate:
 
-Load the repository root as an unpacked extension in `chrome://extensions`, open the side panel, open one or more ChatGPT conversations, and assign unique Role names. Project names are optional for ordinary task routing but required for semantic team messages.
+```powershell
+npm run verify:full
+```
 
-## Release packaging
+The full gate includes TypeScript, static permission/UI checks, all tests, extension/control builds, Native Host publish, and real process-level smoke tests for the control plane, evidence flow, Git Change Request flow, Native Messaging protocol, and unified launcher.
 
-```bash
+Release:
+
+```powershell
 npm run release
 ```
 
-The release command re-runs the full verification pipeline and writes:
+Produces both:
 
 ```text
-release/gpt-agent-manager-v<version>.zip
-release/gpt-agent-manager-v<version>.zip.sha256
+release/gpt-agent-manager-v0.4.0.zip
+release/gpt-agent-manager-v0.4.0-windows-runtime.zip
 ```
 
-The ZIP contains `manifest.json`, `LICENSE`, and the built `dist/` tree with the same directory layout used by the extension manifest.
-
+with SHA256 sidecar files. The first archive is the browser-extension payload; the second contains the prebuilt extension, GAM launcher, `gamd`/`gamctl`, Native Host, and Windows runtime installer.
 ## Development principles
 
-1. Support ChatGPT web first; do not add unused provider/API abstractions.
-2. Persist facts and derive display state.
-3. Prefer message/attempt identity over text hashes.
-4. Keep observation separate from mutation.
-5. Fail closed on ambiguity and uncertainty.
-6. Keep automatic behavior opt-in and auditable.
-7. Keep ChatGPT DOM details behind one adapter.
-8. Preserve retry/recovery history.
-9. Regression-check browser permissions and UI contracts.
-10. Treat control-plane messages and semantic model context as separate planes.
-
-## Next architecture layer
-
-The extension-side orchestration core is now intentionally self-contained. The next major layer is not more browser-provider abstraction; it is an optional local execution plane for agents that also have Remote filesystem/terminal capabilities:
-
-- project/campaign/workstream namespaces;
-- `gamd` durable authority and resource broker;
-- `gamctl` capability-scoped agent control CLI;
-- per-attempt workspaces/worktrees;
-- claim → verification → review → integration authority;
-- lightweight execution capsules and stronger isolation tiers for risky work;
-- global scheduling across multiple projects and scarce machine/server/GPU resources.
-
-Those features must remain outside the ChatGPT DOM adapter and must not expand browser host permissions merely to gain local execution authority.
+1. ChatGPT web conversations are the cognition plane; do not replace them with provider APIs.
+2. Git and durable machine observations are engineering facts; model prose is a claim or explanation.
+3. Worker agents should have broad decision freedom inside narrow, explicit authority.
+4. Supervisor agents perform engineering judgment; deterministic code enforces invariant policy.
+5. Persist facts and derive status instead of duplicating mutable state.
+6. Fence stale attempts with identities and epochs.
+7. Keep semantic model context separate from scheduler/control-plane metadata.
+8. Do not expand browser or host permissions merely for convenience.
+9. Prefer protected branch / Change Request workflows over direct writes to authoritative code.
+10. Fail closed when delivery, identity, ownership, or integration state is uncertain.
 
 ## Scope
 
-This repository is intentionally **not** a general multi-provider AI framework. Claude, Gemini, generic LLM APIs, coding-agent CLIs, and hosted model backends are outside the current product scope.
-
-## Contributing
-
-Keep changes focused and tested. Any change that expands browser permissions, automatic mutation, persistent data, or retry behavior should explain its authority boundary and failure behavior.
+GAM currently targets ChatGPT Web on `chatgpt.com`. Generic LLM APIs, Claude, Gemini, coding-agent CLIs, and hosted multi-provider orchestration are outside the product scope.
 
 ## License
 
 Licensed under the [MIT License](LICENSE).
+
+## Supervisor-managed worker fleet
+
+The Project Supervisor owns worker lifecycle decisions. Workers do not clone, suspend, or retire other workers directly. A Supervisor capability with `agent:fleet` may `agent.spawn`, `agent.suspend`, `agent.resume`, or `agent.retire`; the Kernel enforces project `minSlots` / `maxSlots` and rejects unauthorized fleet changes.
+
+Each `AgentSlot` separates desired state from browser observation:
+
+```text
+Supervisor desired state     Browser observed state
+active                       absent / opening / open / error
+suspended                    open while draining -> closing -> absent
+retired                      closing -> absent
+```
+
+The Extension reconciles these states. Active slots get a ChatGPT page (or their durable conversation is reopened); suspended/retired slots stop receiving new tasks and their page closes only after an in-flight generation finishes.
+Worker capabilities can be bound to an exact `agentSlotId`. Suspending or retiring that slot atomically revokes its bound capabilities, releases leases held by the slot, increments the slot epoch, and leaves old tokens revoked even after a later resume.
+
+Workers may instead raise durable requests to the Supervisor with types including `suggestion`, `blocker`, `question`, `resource-request`, `scope-change`, `dependency-request`, `cross-system-request`, `review-request`, and `risk-alert`. A request is advisory: submitting it never changes fleet or project state. The Supervisor explicitly accepts or rejects it, performs any authorized action, and then resolves it. Open requests are visible in the Local Control Plane panel.
+
+This preserves the core rule: **maximize worker autonomy while minimizing worker authority**. Workers can identify problems and propose organizational changes; the Supervisor decides; the Kernel enforces the resulting transition.
