@@ -1,13 +1,13 @@
-import type { AgentTask, TaskDisplayStatus } from './contracts';
+import type { AgentTask, HumanDecision, TaskDisplayStatus } from './contracts';
 
 export type TaskDispositionAction = 'skip' | 'cancel';
 
 export function canSkipTask(status: TaskDisplayStatus): boolean {
-  return !['running', 'completed', 'skipped', 'cancelled'].includes(status);
+  return !['running', 'completed', 'skipped', 'cancelled', 'rejected'].includes(status);
 }
 
 export function canCancelTask(status: TaskDisplayStatus): boolean {
-  return !['completed', 'skipped', 'cancelled'].includes(status);
+  return !['completed', 'skipped', 'cancelled', 'rejected'].includes(status);
 }
 
 export function applyTaskDisposition(
@@ -28,4 +28,20 @@ export function applyTaskDisposition(
   const next: AgentTask = { ...task, cancelledAt: now, updatedAt: now };
   if (normalizedReason) next.cancelReason = normalizedReason;
   return next;
+}
+
+export function applyHumanDecision(
+  task: AgentTask,
+  status: TaskDisplayStatus,
+  decision: HumanDecision,
+  now = Date.now(),
+  reason = '',
+): AgentTask {
+  if (task.kind !== 'human') throw new Error('Only human tasks accept human decisions');
+  if (status !== 'waiting-human') throw new Error(`Human task in ${status} state cannot be decided`);
+  return {
+    ...task,
+    humanDecision: { decision, reason: reason.trim(), decidedAt: now },
+    updatedAt: now,
+  };
 }

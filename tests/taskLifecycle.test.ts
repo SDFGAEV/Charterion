@@ -3,7 +3,7 @@ import { applyTaskDisposition, canCancelTask, canSkipTask } from '../src/taskLif
 import type { AgentTask } from '../src/contracts';
 
 function task(): AgentTask {
-  return { id: 'a', kind: 'work', title: 'A', project: '', instruction: 'do A', targetRole: 'worker', dependsOn: [], attemptIds: [], createdAt: 1, updatedAt: 1 };
+  return { id: 'a', kind: 'work', completionPolicy: 'reply', title: 'A', project: '', instruction: 'do A', targetRole: 'worker', dependsOn: [], attemptIds: [], createdAt: 1, updatedAt: 1 };
 }
 
 describe('task lifecycle facts', () => {
@@ -30,5 +30,19 @@ describe('task lifecycle facts', () => {
 
   it('does not cancel completed, skipped, or cancelled tasks', () => {
     for (const state of ['completed', 'skipped', 'cancelled'] as const) expect(canCancelTask(state)).toBe(false);
+  });
+});
+
+
+describe('human decision nodes', () => {
+  it('records an explicit approve/reject fact only while waiting for human input', async () => {
+    const { applyHumanDecision } = await import('../src/taskLifecycle');
+    const human: AgentTask = {
+      id: 'human', kind: 'human', completionPolicy: 'human-approval', title: 'Approve', project: '',
+      instruction: 'Approve the release?', targetRole: '', dependsOn: [], attemptIds: [], createdAt: 1, updatedAt: 1,
+    };
+    const approved = applyHumanDecision(human, 'waiting-human', 'approve', 30, 'looks good');
+    expect(approved.humanDecision).toEqual({ decision: 'approve', reason: 'looks good', decidedAt: 30 });
+    expect(() => applyHumanDecision(human, 'pending', 'approve')).toThrow(/cannot be decided/);
   });
 });

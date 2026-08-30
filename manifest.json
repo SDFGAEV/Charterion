@@ -1,34 +1,34 @@
 {
-    "manifest_version":  3,
-    "name":  "GPT Agent Manager",
-    "version":  "0.2.0",
-    "description":  "Coordinate multiple ChatGPT conversations from one local-first side panel.",
-    "permissions":  [
-                        "tabs",
-                        "storage",
-                        "sidePanel"
-                    ],
-    "host_permissions":  [
-                             "https://chatgpt.com/*"
-                         ],
-    "background":  {
-                       "service_worker":  "dist/background.js"
-                   },
-    "action":  {
-                   "default_title":  "Open GPT Agent Manager"
-               },
-    "side_panel":  {
-                       "default_path":  "dist/sidepanel.html"
-                   },
-    "content_scripts":  [
-                            {
-                                "matches":  [
-                                                "https://chatgpt.com/*"
-                                            ],
-                                "js":  [
-                                           "dist/content.js"
-                                       ],
-                                "run_at":  "document_idle"
-                            }
-                        ]
+  "manifest_version": 3,
+  "name": "GPT Agent Manager",
+  "version": "0.3.0",
+  "description": "Coordinate multiple ChatGPT conversations from one local-first side panel.",
+  "permissions": [
+    "tabs",
+    "storage",
+    "sidePanel"
+  ],
+  "host_permissions": [
+    "https://chatgpt.com/*"
+  ],
+  "background": {
+    "service_worker": "dist/background.js"
+  },
+  "action": {
+    "default_title": "Open GPT Agent Manager"
+  },
+  "side_panel": {
+    "default_path": "dist/sidepanel.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chatgpt.com/*"
+      ],
+      "js": [
+        "dist/content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
 }

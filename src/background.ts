@@ -1,12 +1,20 @@
 import { advanceAttempt } from './attempts';
+import { retainAttemptLedger } from './attemptLedger';
 import { deriveManagedTasks, isRetryableTaskAttempt, validateTaskGraph } from './taskGraph';
 import { planReadyDispatches } from './supervisor';
 import { buildTaskDispatchPrompt } from './taskPrompt';
-import { applyTaskDisposition } from './taskLifecycle';
+import { attemptBelongsToTab } from './tabAttempt';
+import { applyHumanDecision, applyTaskDisposition } from './taskLifecycle';
+import { applyReviewRemediation } from './reviewLoop';
+import { defaultCompletionPolicy, DEFAULT_MAX_REVIEW_ROUNDS, normalizeTask } from './taskPolicy';
+import { parseReviewResult } from './review';
+import { assertMessageDeliveryAvailable, buildSemanticMessagePrompt, createAgentMessage, planMessageDispatch } from './messageBus';
+import { createPortableManagerState, parsePortableManagerState, stringifyPortableManagerState } from './stateTransfer';
 import { recoverAttempt, type AttemptRecoveryObservation } from './recovery';
 import {
   EMPTY_BINDING,
   unavailableSnapshot,
+  type AgentMessage,
   type AgentTask,
   type ChatSnapshot,
   type ContentRecoveryState,
@@ -25,8 +33,8 @@ const BINDINGS_KEY = 'bindings.v1';
 const TAB_BINDINGS_KEY = 'tabBindings.v1';
 const SEND_ATTEMPTS_KEY = 'sendAttempts.v1';
 const TASKS_KEY = 'tasks.v1';
+const MESSAGES_KEY = 'messages.v1';
 const SUPERVISOR_KEY = 'supervisor.v1';
-const MAX_SEND_ATTEMPTS = 500;
 let stateMutationTail: Promise<void> = Promise.resolve();
 
 async function localBindings(): Promise<Record<string, RoleBinding>> {
@@ -50,13 +58,15 @@ async function saveSession(bindings: Record<string, RoleBinding>): Promise<void>
 interface WorkState {
   attempts: SendAttemptRecord[];
   tasks: AgentTask[];
+  messages: AgentMessage[];
 }
 
 async function readWorkState(): Promise<WorkState> {
-  const stored = await chrome.storage.local.get([SEND_ATTEMPTS_KEY, TASKS_KEY]);
+  const stored = await chrome.storage.local.get([SEND_ATTEMPTS_KEY, TASKS_KEY, MESSAGES_KEY]);
   return {
     attempts: Array.isArray(stored[SEND_ATTEMPTS_KEY]) ? stored[SEND_ATTEMPTS_KEY] as SendAttemptRecord[] : [],
-    tasks: Array.isArray(stored[TASKS_KEY]) ? stored[TASKS_KEY] as AgentTask[] : [],
+    tasks: Array.isArray(stored[TASKS_KEY]) ? (stored[TASKS_KEY] as AgentTask[]).map(normalizeTask) : [],
+    messages: Array.isArray(stored[MESSAGES_KEY]) ? stored[MESSAGES_KEY] as AgentMessage[] : [],
   };
 }
 
@@ -74,7 +84,7 @@ async function workState(): Promise<WorkState> {
 async function persistAttempt(record: SendAttemptRecord): Promise<void> {
   await serializeStateMutation(async () => {
     const state = await readWorkState();
-    const attempts = [...state.attempts.filter((item) => item.attemptId !== record.attemptId), record].slice(-MAX_SEND_ATTEMPTS);
+    const attempts = retainAttemptLedger([...state.attempts.filter((item) => item.attemptId !== record.attemptId), record], state.tasks, state.messages);
     await chrome.storage.local.set({ [SEND_ATTEMPTS_KEY]: attempts });
   });
 }
@@ -84,7 +94,7 @@ async function transitionAttempt(record: SendAttemptRecord, state: SendAttemptSt
     const currentState = await readWorkState();
     const current = currentState.attempts.find((item) => item.attemptId === record.attemptId) ?? record;
     const next = advanceAttempt(current, state, Date.now(), error);
-    const attempts = [...currentState.attempts.filter((item) => item.attemptId !== next.attemptId), next].slice(-MAX_SEND_ATTEMPTS);
+    const attempts = retainAttemptLedger([...currentState.attempts.filter((item) => item.attemptId !== next.attemptId), next], currentState.tasks, currentState.messages);
     await chrome.storage.local.set({ [SEND_ATTEMPTS_KEY]: attempts });
     return next;
   });
@@ -104,7 +114,7 @@ async function markReplyObserved(attemptId: string, snapshot: ChatSnapshot, send
       replyTextTail: snapshot.latestAssistantText.slice(-8000),
     };
     if (snapshot.latestAssistantMessageId) next.replyMessageId = snapshot.latestAssistantMessageId;
-    const attempts = [...state.attempts.filter((item) => item.attemptId !== next.attemptId), next].slice(-MAX_SEND_ATTEMPTS);
+    const attempts = retainAttemptLedger([...state.attempts.filter((item) => item.attemptId !== next.attemptId), next], state.tasks, state.messages);
     await chrome.storage.local.set({ [SEND_ATTEMPTS_KEY]: attempts });
     return true;
   });
@@ -145,7 +155,7 @@ async function reconcileAfterRestart(): Promise<void> {
       if (!decision.nextState) continue;
       const next = advanceAttempt(latest, decision.nextState, Date.now(), decision.error);
       if (next.state === latest.state && next.error === latest.error) continue;
-      attempts = [...attempts.filter((attempt) => attempt.attemptId !== next.attemptId), next].slice(-MAX_SEND_ATTEMPTS);
+      attempts = retainAttemptLedger([...attempts.filter((attempt) => attempt.attemptId !== next.attemptId), next], current.tasks, current.messages);
       changed = true;
     }
     if (changed) await chrome.storage.local.set({ [SEND_ATTEMPTS_KEY]: attempts });
@@ -187,7 +197,7 @@ async function managedTabs(attempts?: readonly SendAttemptRecord[]): Promise<Man
   const managed = await Promise.all(tabs.filter((tab) => tab.id !== undefined).map(async (tab) => {
     const snapshot = await snapshotForTab(tab);
     const lastAttempt = [...ledger].reverse().find((attempt) =>
-      attempt.conversationKey === snapshot.conversationKey || attempt.tabId === tab.id,
+      attemptBelongsToTab(attempt, tab.id!, snapshot),
     );
     const result: ManagedTab = {
       tabId: tab.id!,
@@ -219,6 +229,7 @@ async function prepareAttempt(
   text: string,
   batchId: string,
   taskId?: string,
+  messageId?: string,
 ): Promise<SendAttemptRecord> {
   const now = Date.now();
   const record: SendAttemptRecord = {
@@ -233,32 +244,41 @@ async function prepareAttempt(
     updatedAt: now,
   };
   if (snapshot.latestAssistantMessageId) record.baselineAssistantMessageId = snapshot.latestAssistantMessageId;
+  if (taskId && messageId) throw new Error('An attempt cannot belong to both a task and a message');
   if (taskId) record.taskId = taskId;
+  if (messageId) record.messageId = messageId;
 
   await serializeStateMutation(async () => {
     const state = await readWorkState();
-    const attempts = [...state.attempts.filter((item) => item.attemptId !== record.attemptId), record].slice(-MAX_SEND_ATTEMPTS);
-    if (!taskId) {
-      await chrome.storage.local.set({ [SEND_ATTEMPTS_KEY]: attempts });
-      return;
+    const attempts = retainAttemptLedger([...state.attempts.filter((item) => item.attemptId !== record.attemptId), record], state.tasks, state.messages);
+    const update: Record<string, unknown> = { [SEND_ATTEMPTS_KEY]: attempts };
+    if (taskId) {
+      const task = state.tasks.find((item) => item.id === taskId);
+      if (!task) throw new Error(`Task ${taskId} disappeared before dispatch`);
+      update[TASKS_KEY] = state.tasks.map((item) => item.id === taskId
+        ? { ...item, attemptIds: [...item.attemptIds, record.attemptId], updatedAt: now }
+        : item);
     }
-    const task = state.tasks.find((item) => item.id === taskId);
-    if (!task) throw new Error(`Task ${taskId} disappeared before dispatch`);
-    const tasks = state.tasks.map((item) => item.id === taskId
-      ? { ...item, attemptIds: [...item.attemptIds, record.attemptId], updatedAt: now }
-      : item);
-    await chrome.storage.local.set({ [SEND_ATTEMPTS_KEY]: attempts, [TASKS_KEY]: tasks });
+    if (messageId) {
+      const message = state.messages.find((item) => item.id === messageId);
+      if (!message) throw new Error(`Message ${messageId} disappeared before dispatch`);
+      assertMessageDeliveryAvailable(message, state.attempts, snapshot.conversationKey);
+      update[MESSAGES_KEY] = state.messages.map((item) => item.id === messageId
+        ? { ...item, attemptIds: [...item.attemptIds, record.attemptId], updatedAt: now }
+        : item);
+    }
+    await chrome.storage.local.set(update);
   });
   return record;
 }
 
-async function dispatchToTab(tabId: number, text: string, batchId: string, taskId?: string): Promise<SendResult> {
+async function dispatchToTab(tabId: number, text: string, batchId: string, taskId?: string, messageId?: string): Promise<SendResult> {
   let record: SendAttemptRecord | undefined;
   const fallbackAttemptId = crypto.randomUUID();
   try {
     const tab = await chrome.tabs.get(tabId);
     const snapshot = await snapshotForTab(tab);
-    record = await prepareAttempt(tabId, snapshot, text, batchId, taskId);
+    record = await prepareAttempt(tabId, snapshot, text, batchId, taskId, messageId);
     if (snapshot.status !== 'idle') {
       const error = `Refusing send while ChatGPT status is ${snapshot.status}`;
       await transitionAttempt(record, 'failed', error);
@@ -301,20 +321,83 @@ async function createTask(input: CreateTaskInput): Promise<AgentTask> {
     const task: AgentTask = {
       id: crypto.randomUUID(),
       kind: input.kind,
+      completionPolicy: input.completionPolicy ?? defaultCompletionPolicy(input.kind),
       title: input.title.trim(),
       project: input.project.trim(),
       instruction: input.instruction.trim(),
-      targetRole: input.targetRole.trim(),
+      targetRole: input.kind === 'human' ? '' : input.targetRole.trim(),
       dependsOn: [...new Set(input.dependsOn.map((id) => id.trim()).filter(Boolean))],
       attemptIds: [],
       createdAt: now,
       updatedAt: now,
     };
+    if (input.kind === 'review') {
+      if (input.reviewTargetTaskId) task.reviewTargetTaskId = input.reviewTargetTaskId.trim();
+      task.maxReviewRounds = input.maxReviewRounds ?? DEFAULT_MAX_REVIEW_ROUNDS;
+    }
     const tasks = [...state.tasks, task];
     validateTaskGraph(tasks);
     await chrome.storage.local.set({ [TASKS_KEY]: tasks });
     return task;
   });
+}
+
+async function createMessage(input: import('./contracts').CreateAgentMessageInput): Promise<AgentMessage> {
+  return serializeStateMutation(async () => {
+    const state = await readWorkState();
+    const message = createAgentMessage(input, crypto.randomUUID());
+    const messages = [...state.messages, message];
+    await chrome.storage.local.set({ [MESSAGES_KEY]: messages });
+    return message;
+  });
+}
+
+async function freezeMessageRecipients(
+  messageId: string,
+  recipientConversationKeys: readonly string[],
+): Promise<AgentMessage> {
+  return serializeStateMutation(async () => {
+    const state = await readWorkState();
+    const current = state.messages.find((item) => item.id === messageId);
+    if (!current) throw new Error(`Message ${messageId} disappeared before recipient freeze`);
+    if (current.recipientConversationKeys) return current;
+    if (recipientConversationKeys.length === 0) throw new Error('Cannot freeze an empty recipient set');
+    const updated: AgentMessage = {
+      ...current,
+      recipientConversationKeys: [...recipientConversationKeys],
+      updatedAt: Date.now(),
+    };
+    const messages = state.messages.map((item) => item.id === messageId ? updated : item);
+    await chrome.storage.local.set({ [MESSAGES_KEY]: messages });
+    return updated;
+  });
+}
+
+async function dispatchMessage(messageId: string): Promise<SendResult[]> {
+  let state = await workState();
+  let message = state.messages.find((item) => item.id === messageId);
+  if (!message) throw new Error(`Message ${messageId} does not exist`);
+  let tabs = await managedTabs(state.attempts);
+  let plan = planMessageDispatch(message, state.attempts, tabs);
+  if (plan.error) throw new Error(plan.error);
+
+  if (!message.recipientConversationKeys) {
+    if (!plan.recipientConversationKeys?.length) throw new Error('Message recipient discovery produced no recipients');
+    message = await freezeMessageRecipients(message.id, plan.recipientConversationKeys);
+    state = await workState();
+    tabs = await managedTabs(state.attempts);
+    plan = planMessageDispatch(message, state.attempts, tabs);
+    if (plan.error) throw new Error(plan.error);
+  }
+
+  if (plan.tabIds.length === 0) return [];
+  const prompt = buildSemanticMessagePrompt(message);
+  const batchId = crypto.randomUUID();
+  const results: SendResult[] = [];
+  for (const tabId of plan.tabIds) {
+    results.push(await dispatchToTab(tabId, prompt, batchId, undefined, message.id));
+  }
+  return results;
 }
 
 async function requestTaskRetry(taskId: string): Promise<AgentTask> {
@@ -326,7 +409,13 @@ async function requestTaskRetry(taskId: string): Promise<AgentTask> {
     if (!lastAttemptId) throw new Error('Task has no failed or uncertain attempt to retry');
     const lastAttempt = state.attempts.find((attempt) => attempt.attemptId === lastAttemptId);
     if (!isRetryableTaskAttempt(task, lastAttempt)) {
-      throw new Error('This task does not have a retryable failed, uncertain, or non-passing review attempt');
+      throw new Error('This task does not have a retryable failed, uncertain, or protocol-invalid review attempt');
+    }
+    if (task.kind === 'review' && lastAttempt?.state === 'reply-observed') {
+      const parsed = parseReviewResult(lastAttempt.replyTextTail ?? '');
+      if (parsed.ok && parsed.result.decision === 'fail') {
+        throw new Error('A failed review must use the bounded revise-and-re-review action');
+      }
     }
     const updated: AgentTask = { ...task, retryAfterAttemptId: lastAttemptId, updatedAt: Date.now() };
     const tasks = state.tasks.map((item) => item.id === taskId ? updated : item);
@@ -346,6 +435,56 @@ async function setTaskDisposition(taskId: string, action: 'skip' | 'cancel', rea
   });
 }
 
+async function decideHumanTask(taskId: string, decision: 'approve' | 'reject', reason = ''): Promise<AgentTask> {
+  return serializeStateMutation(async () => {
+    const state = await readWorkState();
+    const managed = deriveManagedTasks(state.tasks, state.attempts).find((item) => item.task.id === taskId);
+    if (!managed) throw new Error(`Task ${taskId} does not exist`);
+    const updated = applyHumanDecision(managed.task, managed.status, decision, Date.now(), reason);
+    const tasks = state.tasks.map((task) => task.id === taskId ? updated : task);
+    await chrome.storage.local.set({ [TASKS_KEY]: tasks });
+    return updated;
+  });
+}
+
+async function retryReviewLoop(taskId: string): Promise<{ reviewTask: AgentTask; targetTask: AgentTask }> {
+  return serializeStateMutation(async () => {
+    const state = await readWorkState();
+    const reviewTask = state.tasks.find((task) => task.id === taskId);
+    if (!reviewTask || reviewTask.kind !== 'review' || !reviewTask.reviewTargetTaskId) throw new Error(`Review task ${taskId} does not have a review target`);
+    const targetTask = state.tasks.find((task) => task.id === reviewTask.reviewTargetTaskId);
+    if (!targetTask) throw new Error(`Review target ${reviewTask.reviewTargetTaskId} does not exist`);
+    const reviewAttemptId = reviewTask.attemptIds.at(-1);
+    const targetAttemptId = targetTask.attemptIds.at(-1);
+    const reviewAttempt = reviewAttemptId ? state.attempts.find((attempt) => attempt.attemptId === reviewAttemptId) : undefined;
+    const targetAttempt = targetAttemptId ? state.attempts.find((attempt) => attempt.attemptId === targetAttemptId) : undefined;
+    if (!reviewAttempt || !targetAttempt) throw new Error('Review loop is missing attempt evidence');
+    const updated = applyReviewRemediation(reviewTask, targetTask, reviewAttempt, targetAttempt);
+    const tasks = state.tasks.map((task) => task.id === updated.reviewTask.id ? updated.reviewTask : task.id === updated.targetTask.id ? updated.targetTask : task);
+    validateTaskGraph(tasks);
+    await chrome.storage.local.set({ [TASKS_KEY]: tasks });
+    return updated;
+  });
+}
+
+async function exportStateDocument(): Promise<string> {
+  const [bindings, state, enabled] = await Promise.all([localBindings(), workState(), supervisorEnabled()]);
+  return stringifyPortableManagerState(createPortableManagerState(bindings, state.tasks, state.attempts, state.messages, enabled));
+}
+
+async function importStateDocument(document: string): Promise<void> {
+  const imported = parsePortableManagerState(document);
+  await serializeStateMutation(async () => {
+    await chrome.storage.local.set({
+      [BINDINGS_KEY]: imported.bindings,
+      [TASKS_KEY]: imported.tasks,
+      [SEND_ATTEMPTS_KEY]: imported.attempts,
+      [MESSAGES_KEY]: imported.messages,
+      [SUPERVISOR_KEY]: imported.supervisorEnabled,
+    });
+    await chrome.storage.session.remove(TAB_BINDINGS_KEY);
+  });
+}
 async function supervisorEnabled(): Promise<boolean> {
   const stored = await chrome.storage.local.get(SUPERVISOR_KEY);
   return stored[SUPERVISOR_KEY] === true;
@@ -436,7 +575,12 @@ chrome.runtime.onMessage.addListener((message: ManagerRequest | RuntimeNotice, s
         managedTabs(state.attempts),
         Promise.resolve(deriveManagedTasks(state.tasks, state.attempts)),
       ]);
-      sendResponse({ ok: true, tabs, tasks, supervisorEnabled: await supervisorEnabled() });
+      const attemptsById = new Map(state.attempts.map((attempt) => [attempt.attemptId, attempt]));
+      const messages = state.messages.map((message) => ({
+        message,
+        attemptHistory: message.attemptIds.map((id) => attemptsById.get(id)).filter(Boolean),
+      }));
+      sendResponse({ ok: true, tabs, tasks, messages, supervisorEnabled: await supervisorEnabled() });
     })().catch((error) => sendResponse({ ok: false, error: String(error) }));
     return true;
   }
@@ -460,6 +604,18 @@ chrome.runtime.onMessage.addListener((message: ManagerRequest | RuntimeNotice, s
       .catch((error) => sendResponse({ ok: false, error: String(error) }));
     return true;
   }
+  if (message.type === 'manager:create-message') {
+    void createMessage(message.input)
+      .then(async (created) => { await notifyManagerChanged(); sendResponse({ ok: true, message: created }); })
+      .catch((error) => sendResponse({ ok: false, error: String(error) }));
+    return true;
+  }
+  if (message.type === 'manager:dispatch-message') {
+    void dispatchMessage(message.messageId)
+      .then(async (results) => { await notifyManagerChanged(); sendResponse({ ok: true, results }); })
+      .catch((error) => sendResponse({ ok: false, error: String(error) }));
+    return true;
+  }
   if (message.type === 'manager:run-ready-tasks') {
     void runReadyTasks()
       .then(async (results) => { await notifyManagerChanged(); sendResponse({ ok: true, results }); })
@@ -470,7 +626,19 @@ chrome.runtime.onMessage.addListener((message: ManagerRequest | RuntimeNotice, s
       .then(async (task) => { await notifyManagerChanged(); kickSupervisor(); sendResponse({ ok: true, task }); })
       .catch((error) => sendResponse({ ok: false, error: String(error) }));
     return true;
-  }  if (message.type === 'manager:skip-task') {
+  }  if (message.type === 'manager:retry-review-loop') {
+    void retryReviewLoop(message.taskId)
+      .then(async (updated) => { await notifyManagerChanged(); kickSupervisor(); sendResponse({ ok: true, ...updated }); })
+      .catch((error) => sendResponse({ ok: false, error: String(error) }));
+    return true;
+  }
+  if (message.type === 'manager:decide-human-task') {
+    void decideHumanTask(message.taskId, message.decision, message.reason ?? '')
+      .then(async (task) => { await notifyManagerChanged(); kickSupervisor(); sendResponse({ ok: true, task }); })
+      .catch((error) => sendResponse({ ok: false, error: String(error) }));
+    return true;
+  }
+  if (message.type === 'manager:skip-task') {
     void setTaskDisposition(message.taskId, 'skip', message.reason ?? '')
       .then(async (task) => { await notifyManagerChanged(); kickSupervisor(); sendResponse({ ok: true, task }); })
       .catch((error) => sendResponse({ ok: false, error: String(error) }));
@@ -479,6 +647,18 @@ chrome.runtime.onMessage.addListener((message: ManagerRequest | RuntimeNotice, s
   if (message.type === 'manager:cancel-task') {
     void setTaskDisposition(message.taskId, 'cancel', message.reason ?? '')
       .then(async (task) => { await notifyManagerChanged(); kickSupervisor(); sendResponse({ ok: true, task }); })
+      .catch((error) => sendResponse({ ok: false, error: String(error) }));
+    return true;
+  }
+  if (message.type === 'manager:export-state') {
+    void exportStateDocument()
+      .then((document) => sendResponse({ ok: true, document }))
+      .catch((error) => sendResponse({ ok: false, error: String(error) }));
+    return true;
+  }
+  if (message.type === 'manager:import-state') {
+    void importStateDocument(message.document)
+      .then(async () => { await notifyManagerChanged(); if (await supervisorEnabled()) kickSupervisor(); sendResponse({ ok: true }); })
       .catch((error) => sendResponse({ ok: false, error: String(error) }));
     return true;
   }

@@ -6,6 +6,7 @@ function task(id: string, dependsOn: string[] = [], attemptIds: string[] = []): 
   return {
     id,
     kind: 'work',
+    completionPolicy: 'reply',
     title: id,
     project: '',
     instruction: `do ${id}`,
@@ -68,7 +69,7 @@ describe('task status derivation', () => {
     expect(deriveManagedTasks([retried], [attempt('attempt-a', 'failed')])[0]?.status).toBe('ready');
   });
   it('requires an explicit passing review before dependents can continue', () => {
-    const review = { ...task('review', ['a'], ['review-attempt']), kind: 'review' as const };
+    const review = { ...task('review', ['a'], ['review-attempt']), kind: 'review' as const, completionPolicy: 'review-pass' as const, reviewTargetTaskId: 'a', maxReviewRounds: 3 };
     const downstream = task('downstream', ['review']);
     const workDone = attempt('work-attempt', 'reply-observed');
     const work = task('a', [], ['work-attempt']);
@@ -84,7 +85,7 @@ describe('task status derivation', () => {
   });
 
   it('treats invalid review output as attention and permits only explicit review retry', () => {
-    const review = { ...task('review', [], ['review-attempt']), kind: 'review' as const };
+    const review = { ...task('review', [], ['review-attempt']), kind: 'review' as const, completionPolicy: 'review-pass' as const, reviewTargetTaskId: 'a', maxReviewRounds: 3 };
     const bad = { ...attempt('review-attempt', 'reply-observed'), replyTextTail: 'PASS probably' };
     const first = deriveManagedTasks([review], [bad])[0]!;
     expect(first.status).toBe('attention');

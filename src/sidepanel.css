@@ -110,3 +110,33 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   .binding-grid, .task-form-grid { grid-template-columns: 1fr; }
   .binding-grid .wide, .task-form-grid .wide { grid-column: auto; }
 }
+
+.dag-view { display: grid; gap: 5px; margin: 10px 0 2px; }
+.dag-row { display: flex; align-items: center; gap: 4px; font-size: 11px; overflow-wrap: anywhere; }
+.dag-edge { opacity: .55; }
+.dag-node { border-radius: 999px; padding: 3px 7px; }
+.task-history { margin-top: 8px; font-size: 11px; }
+.task-history > summary { cursor: pointer; opacity: .72; }
+.history-item { margin-top: 6px; padding: 7px; border-radius: 7px; background: color-mix(in srgb, CanvasText 5%, Canvas); }
+.history-meta { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 10px; opacity: .68; overflow-wrap: anywhere; }
+.history-reply { margin: 6px 0 0; max-height: 160px; overflow: auto; white-space: pre-wrap; font: inherit; }
+.history-failed, .history-uncertain { border-left: 3px solid #c62828; }
+.history-reply-observed { border-left: 3px solid #28a745; }
+.task-human { margin-top: 7px; font-size: 11px; font-weight: 650; }
+.task-human-reject { color: #c62828; }
+.task-state-waiting-human { background: color-mix(in srgb, #1565c0 18%, Canvas); }
+.task-state-rejected { background: color-mix(in srgb, #c62828 18%, Canvas); }
+#task-deps { min-height: 96px; }
+#state-json { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; }
+
+.messages { display: grid; gap: 8px; margin-top: 12px; }
+.message-card { padding: 9px; border: 1px solid color-mix(in srgb, CanvasText 12%, transparent); border-radius: 9px; }
+.message-head, .message-actions { display: flex; align-items: flex-start; gap: 8px; }
+.message-title { flex: 1; min-width: 0; }
+.message-title strong, .message-title small { display: block; }
+.message-title small { margin-top: 2px; opacity: .66; }
+.message-attempt-count { font-size: 10px; opacity: .7; white-space: nowrap; }
+.message-content { margin-top: 7px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; }
+.message-history { margin-top: 8px; font-size: 11px; }
+.message-history > summary { cursor: pointer; opacity: .72; }
+.message-actions { margin-top: 7px; justify-content: flex-end; }

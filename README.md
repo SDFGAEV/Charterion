@@ -2,252 +2,251 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Chrome MV3](https://img.shields.io/badge/Chrome-Manifest%20V3-4285F4)](manifest.json)
-[![Version](https://img.shields.io/badge/version-0.2.0-blue.svg)](manifest.json)
+[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](manifest.json)
 
 GPT Agent Manager is a local-first Chrome extension for coordinating multiple **ChatGPT web conversations** as persistent, role-bound agents.
 
-It is intentionally focused on `chatgpt.com`. It does not require the OpenAI API, does not call other AI providers, and does not require a local backend service.
+It is intentionally focused on `chatgpt.com`: no OpenAI API, no other AI providers, no hosted control server, and no API key.
 
-> **Status:** active early development. Version 0.2.0 includes durable send attempts, reply correlation, a task DAG, and an opt-in automatic supervisor. It is not yet claimed to be production-ready.
+> **Version 0.3.0** adds human decision gates, bounded review/revision loops, a durable semantic team-message bus, state export/import, task attempt history, visual dependency selection, captured ChatGPT DOM fixture tests, and release packaging.
 
 ## Why
 
-Running several ChatGPT conversations in parallel works surprisingly well until the human becomes the message bus: switching tabs, remembering which chat owns which role, checking who is still generating, copying results, and deciding which worker can proceed next.
+Running several ChatGPT conversations in parallel works until the human becomes the scheduler and message bus: switching tabs, remembering ownership, checking generation state, copying results, and deciding what may run next.
 
-GPT Agent Manager moves that coordination into a small local control plane while keeping the actual agents as normal logged-in ChatGPT web conversations.
+GPT Agent Manager moves that coordination into a deterministic browser control plane while keeping the actual agents as ordinary logged-in ChatGPT web conversations.
+
+## Core principles
+
+1. **ChatGPT web is the cognition plane.** The extension does not replace it with an API.
+2. **Durable facts beat inferred status.** Tasks derive state from attempts, review results, human decisions, and dependencies.
+3. **Fail closed.** Unknown page state, ambiguous routing, and uncertain delivery never trigger speculative resend.
+4. **Control messages stay out of model context.** Only semantic information that an agent needs is routed through the ChatGPT composer.
+5. **Conversation identity is durable.** Roles bind to ChatGPT conversation identity, not merely a tab number.
+6. **History is preserved.** Retry, review, skip, cancel, import, and recovery do not erase prior attempts.
 
 ## Features
 
-- Discover all open `chatgpt.com` tabs.
-- Bind a stable **Role / Project / Notes** identity to each ChatGPT conversation.
-- Detect `idle`, `generating`, `blocked`, `unauthorized`, `error`, `unknown`, and `unavailable` page states.
-- Fail closed when the extension cannot prove that a page is safe to receive a prompt.
-- Send an explicit one-off instruction to one or many selected ChatGPT tabs.
-- Persist a send-attempt ledger with `prepared → dispatched → acknowledged → reply-observed` transitions.
-- Mark transport failures as `uncertain` when the page may already have received the prompt.
-- Fence duplicate delivery with per-attempt IDs inside the ChatGPT page session.
-- Correlate replies using ChatGPT message/turn identity first and assistant-count baselines as fallback.
-- Persist a project-independent task DAG with explicit role targets and dependencies.
-- Route direct dependency replies into downstream ChatGPT prompts with task/role/message provenance and bounded context.
-- Require `review` tasks to return a strict machine-readable PASS/FAIL block; natural-language guesses never unlock downstream tasks.
-- Derive task display state from task facts + send-attempt facts instead of persisting duplicate status fields.
-- Dispatch only when exactly one idle ChatGPT tab matches the requested role/project.
-- Enable an **opt-in Auto Supervisor** that automatically advances ready DAG tasks.
-- Retry failed or uncertain tasks without deleting their prior attempt history.
-- Run entirely locally with no API key and no hosted control server.
+- Discover open `chatgpt.com` tabs and observe their current conversation state.
+- Bind **Role / Project / Notes** to each ChatGPT conversation.
+- Detect `idle`, `generating`, `blocked`, `unauthorized`, `error`, `unknown`, and `unavailable` states.
+- Send one-off instructions to selected idle ChatGPT tabs.
+- Persist a send-attempt ledger: `prepared → dispatched → acknowledged → reply-observed`.
+- Record `failed` and `uncertain` outcomes without pretending delivery is known.
+- Fence duplicate sends by attempt ID inside the page session.
+- Correlate replies by ChatGPT message/turn identity first, assistant-count baseline second.
+- Persist a task DAG with visual dependency selection.
+- Route bounded dependency evidence into downstream task prompts.
+- Support `work`, strict `review`, and `human` task nodes.
+- Support durable **Skip**, **Cancel**, **Approve**, **Reject**, and **Retry** facts.
+- Run bounded `review FAIL → producer revision → re-review` loops.
+- Preserve complete attempt/reply history per task.
+- Queue semantic team messages to one role or every bound role in a project.
+- Freeze recipient conversation identities on first delivery so later-opened agents never receive stale broadcasts.
+- Avoid duplicate broadcast delivery to recipients that already consumed a message.
+- Block message resend after an `uncertain` delivery.
+- Export/import durable manager state with schema validation and v1→v2 migration.
+- Run an opt-in Auto Supervisor that advances only unambiguous ready tasks.
+- Package a versioned Chrome ZIP plus SHA256 without extra build dependencies.
 
 ## Architecture
 
 ```text
-┌──────────────────────────────┐
-│        Side Panel UI         │
-│ agents · tasks · supervisor  │
-└──────────────┬───────────────┘
-               │ typed messages
-               ▼
-┌──────────────────────────────┐
-│   MV3 Extension Worker       │
-│                              │
-│ role bindings                │
-│ task DAG                     │
-│ send-attempt ledger          │
-│ reply/task state derivation  │
-│ fail-closed dispatcher       │
-│ optional supervisor          │
-└──────────────┬───────────────┘
-               │ attempt-scoped commands
-               ▼
-┌──────────────────────────────┐
-│ ChatGPT Content Script       │
-│                              │
-│ DOM observation              │
-│ composer integration         │
-│ delivery fence               │
-│ reply baseline/correlation   │
-└──────────────┬───────────────┘
-               ▼
-        chatgpt.com tabs
+┌────────────────────────────────────────────┐
+│               Side Panel UI                │
+│ agents · tasks · DAG · messages · state   │
+└─────────────────────┬──────────────────────┘
+                      │ typed extension messages
+                      ▼
+┌────────────────────────────────────────────┐
+│             MV3 Service Worker             │
+│ role bindings                              │
+│ task graph + completion policies           │
+│ semantic message bus                       │
+│ send-attempt ledger                        │
+│ review / retry / recovery                  │
+│ fail-closed supervisor                     │
+└─────────────────────┬──────────────────────┘
+                      │ attempt-scoped commands
+                      ▼
+┌────────────────────────────────────────────┐
+│          ChatGPT Content Scripts           │
+│ DOM observation · composer integration     │
+│ delivery fence · reply correlation         │
+└─────────────────────┬──────────────────────┘
+                      ▼
+                 chatgpt.com tabs
 ```
 
-DOM selectors and ChatGPT-specific behavior remain isolated in `src/chatgptAdapter.ts`. Task orchestration never depends directly on page selectors.
+ChatGPT-specific selectors and page behavior stay isolated in `src/chatgptAdapter.ts`. Orchestration code never reaches directly into ChatGPT DOM selectors.
 
-## Task execution model
+## Task model
 
-A task is a durable definition containing a title, target role, optional project, instruction, dependency IDs, and immutable send-attempt history.
+Every task has a kind and a fixed completion policy:
 
-Display states are derived:
+| Kind | Completion policy | Completion condition |
+| --- | --- | --- |
+| `work` | `reply` | A correlated new ChatGPT assistant reply is durably observed. |
+| `review` | `review-pass` | A strict `<GAM_REVIEW>` JSON block validates and explicitly passes. |
+| `human` | `human-approval` | The user explicitly approves the node. |
 
-| State | Meaning |
-| --- | --- |
-| `pending` | At least one dependency is still running or pending. |
-| `ready` | Dependencies are complete and the task has no active attempt. |
-| `running` | The latest attempt is prepared, dispatched, or acknowledged. |
-| `completed` | A new assistant reply has been observed for the latest attempt. |
-| `error` | The latest attempt failed with a known pre/post-delivery failure. |
-| `attention` | Delivery outcome is uncertain and requires explicit handling. |
-| `blocked` | A dependency ended in error/attention/blocked state. |
+Derived display states include `pending`, `ready`, `running`, `waiting-human`, `completed`, `skipped`, `cancelled`, `rejected`, `blocked`, `error`, and `attention`.
 
-The dispatcher never chooses randomly between matching tabs. Zero matches and multiple matches are both non-dispatchable conditions.
+A skipped dependency is treated as an explicit human bypass and can unblock downstream work. A cancelled, rejected, errored, attention, or blocked dependency blocks downstream work.
+
+### Review loops
+
+A failed review does not silently retry the reviewer. The reviewer must provide a remediation instruction. The explicit **Revise & re-review** action records that review attempt, reopens the producer task with the remediation instruction, then re-runs the review after a new producer reply. `maxReviewRounds` is bounded from 1 to 10; exhaustion fails closed.
+
+### Human gates
+
+Human nodes are never dispatched to ChatGPT. Once their dependencies complete, they enter `waiting-human` until the user chooses **Approve** or **Reject**. That decision is a durable task fact.
+
+## Semantic team-message bus
+
+The message bus is deliberately separate from the Task DAG. It carries information an agent should understand, not internal scheduler state.
+
+Messages are durable and typed: `result`, `blocker`, `question`, `answer`, `review-request`, `review-result`, and `announcement`. A message targets either one exact Role inside one Project or every bound Role in that Project.
+
+Before delivery, the router verifies the intended recipients and their current browser state. A role target with multiple matching tabs is ambiguous and is rejected. Project broadcasts are not sent when a pending recipient is not safely reusable. The recipient conversation set is frozen before the first send; later-opened tabs cannot become recipients of an old message. Prior acknowledged/reply-observed recipients are skipped on another delivery attempt. Any `uncertain` prior delivery blocks resend to prevent duplication. Role-targeted messages also fail closed if the frozen conversation is later rebound to another role.
+
+The model receives a compact envelope identifying Project, sender, recipient, type, and optional related task. Peer content is explicitly labeled as context and cannot become a higher-priority instruction merely because another agent wrote it.
 
 ## Auto Supervisor
 
-Auto Supervisor is **off by default**.
+Auto Supervisor is **off by default**. When enabled, it considers only derived `ready` tasks. A task is dispatched only if exactly one idle ChatGPT tab matches its Role and optional Project and that tab has no unresolved durable attempt. One tab is claimed at most once per scheduling pass.
 
-When enabled, extension events can trigger another scheduling pass. A task is sent only when:
+Human tasks are handled locally and are never routed to a model. Ambiguous or unavailable routes remain visible instead of being guessed.
 
-1. its derived status is `ready`;
-2. every dependency is complete;
-3. exactly one open ChatGPT tab matches its Role and optional Project;
-4. that tab is directly observed as `idle`;
-5. the tab has no unresolved `prepared`, `dispatched`, or `acknowledged` attempt;
-6. the tab is not already claimed by another task in the same scheduling pass.
+## Delivery and recovery safety
 
-Reply observation completes the task and can make dependent tasks eligible on the next pass.
+Before any task or semantic message is sent, its attempt is durably prepared. For task/message-linked sends, the attempt ID and owning object's attempt history are persisted in the same storage mutation.
 
-### Dependency evidence routing
-
-When a ready task has direct dependencies, the dispatcher appends their captured reply tails to the new prompt with task ID, role, and ChatGPT reply-message identity. Dependency output is explicitly labeled as context/evidence; the current task instruction remains authoritative. Routed dependency context is bounded to avoid unbounded prompt growth.
-
-### Review tasks
-
-A `review` task does **not** complete merely because the reviewer replied. The reviewer is required to end with exactly one `<GAM_REVIEW>` JSON block containing `decision`, `reason`, and `nextInstruction`. Only a valid `pass` completes the review and unlocks downstream tasks. `fail` or malformed output becomes `attention` and requires explicit handling/retry.
-
-## Delivery and reply safety
-
-Before a task prompt is sent, the service worker persists an attempt record. Task-linked attempts and the task's attempt history are written together in one `chrome.storage.local.set` operation.
-
-Each attempt carries a unique ID. The content script keeps a page-session delivery fence so a repeated command with the same ID does not click **Send** twice.
-
-A successful browser-message round trip is only an acknowledgement of delivery. Task completion requires a later assistant reply that is new relative to the pre-send baseline and is observed after ChatGPT returns to idle.
-
-If the extension loses the browser-message channel after dispatch, it records `uncertain` instead of pretending the prompt definitely failed.
-
-## Restart and recovery safety
-
-The content script keeps a per-tab prompt baseline in `sessionStorage`, while the service worker keeps the durable attempt ledger in `chrome.storage.local`. A reply baseline is cleared only after the service worker confirms that `reply-observed` was durably persisted.
+The content script keeps a page-session pending baseline. A browser-message acknowledgement means only that the page accepted the send command; completion requires a later assistant turn that is new relative to the baseline and is observed after generation settles.
 
 On service-worker restart:
 
-- `prepared` attempts are failed safely because browser dispatch had not started;
-- `dispatched` attempts require matching page evidence, otherwise they become `uncertain` and are never automatically resent;
-- `acknowledged` attempts keep waiting only while the exact pending baseline survives on the same tab and conversation;
-- lost or mismatched reply-correlation evidence becomes `uncertain`;
-- an `uncertain` tab can be retried automatically only after the user records an explicit retry for that same task, and the content script still rejects the retry if an older pending prompt survives.
+- `prepared` attempts are safely failed because dispatch had not started;
+- `dispatched` attempts require matching page evidence or become `uncertain`;
+- `acknowledged` attempts continue waiting only when the exact pending baseline survives;
+- missing/mismatched correlation evidence becomes `uncertain`;
+- uncertain task/message delivery is never blindly resent.
+
+## Portable state
+
+State backup schema v2 contains durable conversation bindings, tasks, send attempts, semantic messages, and Auto Supervisor state. Import validates size limits, IDs, task DAG integrity, bidirectional task/message/attempt ownership, frozen message recipients, message shape, and known attempt states before replacing live state. Schema v1 documents are migrated with an empty message bus.
 
 ## Security and privacy
 
-- Host permission is limited to `https://chatgpt.com/*`.
-- Permissions are limited to `tabs`, `storage`, and `sidePanel`.
+- Host permission is exactly `https://chatgpt.com/*`.
+- Extension permissions are exactly `tabs`, `storage`, and `sidePanel`.
 - No analytics or telemetry are included.
 - No OpenAI API key is requested or stored.
 - No hosted backend is required.
 - Page observation alone never sends a prompt.
-- Auto Supervisor must be explicitly enabled by the user.
-- Unknown or ambiguous page/routing state fails closed.
-- Manual send history stores metadata such as length and identity, not the manual prompt body.
-- DAG task instructions are stored locally because they are durable task definitions.
+- Auto Supervisor must be explicitly enabled.
+- Unknown/ambiguous browser state fails closed.
+- Manual one-off prompt bodies are not persisted in send history.
+- Durable task definitions and semantic message bodies are stored locally because they are the user's orchestration state.
+
+This browser extension is a coordination layer, not an operating-system sandbox. If agents are later given filesystem/terminal tools through a Remote connector, those tools require their own capability and isolation boundary.
 
 ## Repository layout
 
 ```text
 gpt-agent-manager/
 ├─ src/
-│  ├─ attempts.ts           # monotonic send-attempt state machine
-│  ├─ background.ts         # persistence, dispatch and supervisor control plane
-│  ├─ chatgptAdapter.ts     # ChatGPT DOM adapter
-│  ├─ content.ts            # page observation, delivery fence and reply reporting
-│  ├─ contracts.ts          # typed shared contracts
-│  ├─ replyCorrelation.ts   # reply-baseline logic
-│  ├─ recovery.ts           # restart reconciliation decisions
-│  ├─ review.ts             # strict review output protocol
-│  ├─ supervisor.ts         # pure dispatch planning
-│  ├─ taskGraph.ts          # DAG validation and derived task state
-│  ├─ taskPrompt.ts         # bounded dependency evidence routing
-│  ├─ sidepanel.ts          # UI behavior
-│  ├─ sidepanel.html
-│  └─ sidepanel.css
+│  ├─ attempts.ts
+│  ├─ attemptLedger.ts
+│  ├─ background.ts
+│  ├─ chatgptAdapter.ts
+│  ├─ content.ts
+│  ├─ contracts.ts
+│  ├─ messageBus.ts
+│  ├─ recovery.ts
+│  ├─ replyCorrelation.ts
+│  ├─ review.ts
+│  ├─ reviewLoop.ts
+│  ├─ stateTransfer.ts
+│  ├─ supervisor.ts
+│  ├─ taskGraph.ts
+│  ├─ taskLifecycle.ts
+│  ├─ taskPolicy.ts
+│  ├─ taskPrompt.ts
+│  ├─ tabAttempt.ts
+│  └─ sidepanel.{ts,html,css}
 ├─ tests/
+│  └─ fixtures/chatgpt/
 ├─ scripts/
 │  ├─ build.mjs
-│  └─ check-assets.mjs
+│  ├─ check-assets.mjs
+│  └─ package-release.mjs
 ├─ manifest.json
-├─ package.json
-├─ README.md
-└─ LICENSE
+└─ package.json
 ```
-
-Third-party research/reference repositories are kept outside this repository and are not vendored into the extension.
 
 ## Getting started
 
-### Requirements
-
-- Chrome 114 or newer with Side Panel support.
-- Node.js 20 or newer.
-- npm.
-
-### Install
+Requirements: Chrome 114+, Node.js 20+, and npm.
 
 ```bash
 npm install
-```
-
-### Verify and build
-
-```bash
 npm run verify
 ```
 
-`npm run verify` runs:
+`npm run verify` performs strict TypeScript checking, static permission/UI asset gates, all tests, and the production extension build.
 
-- strict TypeScript type checking;
-- static extension-asset and permission checks;
-- unit tests;
-- the production extension build.
+Load the repository root as an unpacked extension in `chrome://extensions`, open the side panel, open one or more ChatGPT conversations, and assign unique Role names. Project names are optional for ordinary task routing but required for semantic team messages.
 
-Generated assets are written to `dist/`.
+## Release packaging
 
-### Load in Chrome
+```bash
+npm run release
+```
 
-1. Open `chrome://extensions`.
-2. Enable **Developer mode**.
-3. Choose **Load unpacked**.
-4. Select this repository root (the directory containing `manifest.json`).
-5. Open one or more `chatgpt.com` conversations.
-6. Click the extension action to open the side panel.
-7. Assign unique Role names to the conversations you want to orchestrate.
+The release command re-runs the full verification pipeline and writes:
+
+```text
+release/gpt-agent-manager-v<version>.zip
+release/gpt-agent-manager-v<version>.zip.sha256
+```
+
+The ZIP contains `manifest.json`, `LICENSE`, and the built `dist/` tree with the same directory layout used by the extension manifest.
 
 ## Development principles
 
-1. Support ChatGPT web first; do not grow provider/API abstractions that the product does not need.
+1. Support ChatGPT web first; do not add unused provider/API abstractions.
 2. Persist facts and derive display state.
-3. Prefer stable message/attempt identity over text hashes.
-4. Separate observation from mutation.
-5. Fail closed on unknown state and ambiguous routing.
-6. Make automatic behavior opt-in and auditable.
-7. Keep ChatGPT DOM details behind a narrow adapter.
-8. Preserve failed/uncertain history instead of erasing it during retry.
-9. Keep browser permissions minimal and regression-check them.
-10. Reuse mature ideas/components where they fit instead of rebuilding entire external systems.
+3. Prefer message/attempt identity over text hashes.
+4. Keep observation separate from mutation.
+5. Fail closed on ambiguity and uncertainty.
+6. Keep automatic behavior opt-in and auditable.
+7. Keep ChatGPT DOM details behind one adapter.
+8. Preserve retry/recovery history.
+9. Regression-check browser permissions and UI contracts.
+10. Treat control-plane messages and semantic model context as separate planes.
 
-## Roadmap
+## Next architecture layer
 
-- Visual DAG editing instead of entering dependency IDs manually.
-- Task output snapshots/history in the control panel.
-- Explicit cancel/skip and human-decision nodes.
-- Review-node pass/fail contracts and bounded review loops.
-- Export/import of roles, tasks, and supervisor state.
-- Browser-level end-to-end tests against captured ChatGPT DOM fixtures.
-- Recovery reconciliation for extension reloads and long-suspended tabs.
-- Optional release packaging and Chrome Web Store publishing workflow.
+The extension-side orchestration core is now intentionally self-contained. The next major layer is not more browser-provider abstraction; it is an optional local execution plane for agents that also have Remote filesystem/terminal capabilities:
+
+- project/campaign/workstream namespaces;
+- `gamd` durable authority and resource broker;
+- `gamctl` capability-scoped agent control CLI;
+- per-attempt workspaces/worktrees;
+- claim → verification → review → integration authority;
+- lightweight execution capsules and stronger isolation tiers for risky work;
+- global scheduling across multiple projects and scarce machine/server/GPU resources.
+
+Those features must remain outside the ChatGPT DOM adapter and must not expand browser host permissions merely to gain local execution authority.
 
 ## Scope
 
-This repository is intentionally **not** a general multi-provider AI framework. Supporting Claude, Gemini, API agents, coding-agent CLIs, or hosted LLM backends is outside the current product scope.
+This repository is intentionally **not** a general multi-provider AI framework. Claude, Gemini, generic LLM APIs, coding-agent CLIs, and hosted model backends are outside the current product scope.
 
 ## Contributing
 
-Issues and pull requests are welcome. Keep changes focused and tested. Any change that expands browser permissions, automatic mutation, or persistent data should explain why it is necessary and how it fails safely.
+Keep changes focused and tested. Any change that expands browser permissions, automatic mutation, persistent data, or retry behavior should explain its authority boundary and failure behavior.
 
 ## License
 

@@ -47,6 +47,7 @@ export interface SendAttemptRecord {
   tabId: number;
   conversationKey: string;
   taskId?: string;
+  messageId?: string;
   state: SendAttemptState;
   textLength: number;
   baselineAssistantMessageCount: number;
@@ -80,8 +81,20 @@ export interface ContentRecoveryState {
   pendingAttempt?: PendingPromptEvidence;
 }
 
-export type TaskKind = 'work' | 'review';
-export type TaskDisplayStatus = 'pending' | 'ready' | 'running' | 'completed' | 'skipped' | 'cancelled' | 'blocked' | 'error' | 'attention';
+export type TaskKind = 'work' | 'review' | 'human';
+export type TaskCompletionPolicy = 'reply' | 'review-pass' | 'human-approval';
+export type TaskDisplayStatus =
+  | 'pending'
+  | 'ready'
+  | 'running'
+  | 'waiting-human'
+  | 'completed'
+  | 'skipped'
+  | 'cancelled'
+  | 'rejected'
+  | 'blocked'
+  | 'error'
+  | 'attention';
 
 export type ReviewDecision = 'pass' | 'fail';
 
@@ -91,9 +104,50 @@ export interface ReviewResult {
   nextInstruction: string;
 }
 
+export type HumanDecision = 'approve' | 'reject';
+
+export interface HumanDecisionRecord {
+  decision: HumanDecision;
+  reason: string;
+  decidedAt: number;
+}
+
+export type AgentMessageType =
+  | 'result'
+  | 'blocker'
+  | 'question'
+  | 'answer'
+  | 'review-request'
+  | 'review-result'
+  | 'announcement';
+
+export type AgentMessageTarget =
+  | { kind: 'role'; role: string }
+  | { kind: 'project' };
+
+export interface AgentMessage {
+  id: string;
+  project: string;
+  fromRole: string;
+  target: AgentMessageTarget;
+  type: AgentMessageType;
+  content: string;
+  taskId?: string;
+  attemptIds: string[];
+  recipientConversationKeys?: string[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ManagedMessage {
+  message: AgentMessage;
+  attemptHistory: SendAttemptRecord[];
+}
+
 export interface AgentTask {
   id: string;
   kind: TaskKind;
+  completionPolicy: TaskCompletionPolicy;
   title: string;
   project: string;
   instruction: string;
@@ -101,6 +155,11 @@ export interface AgentTask {
   dependsOn: string[];
   attemptIds: string[];
   retryAfterAttemptId?: string;
+  revisionInstruction?: string;
+  revisionFromReviewAttemptId?: string;
+  reviewTargetTaskId?: string;
+  maxReviewRounds?: number;
+  humanDecision?: HumanDecisionRecord;
   skippedAt?: number;
   skipReason?: string;
   cancelledAt?: number;
@@ -113,17 +172,32 @@ export interface ManagedTask {
   task: AgentTask;
   status: TaskDisplayStatus;
   lastAttempt?: SendAttemptRecord;
+  attemptHistory: SendAttemptRecord[];
   reviewResult?: ReviewResult;
   reviewError?: string;
+  reviewRound?: number;
+  reviewLoopExhausted?: boolean;
 }
 
 export interface CreateTaskInput {
   kind: TaskKind;
+  completionPolicy?: TaskCompletionPolicy;
   title: string;
   project: string;
   instruction: string;
   targetRole: string;
   dependsOn: string[];
+  reviewTargetTaskId?: string;
+  maxReviewRounds?: number;
+}
+
+export interface CreateAgentMessageInput {
+  project: string;
+  fromRole: string;
+  target: AgentMessageTarget;
+  type: AgentMessageType;
+  content: string;
+  taskId?: string;
 }
 
 export interface TaskDispatchResult {
@@ -131,6 +205,16 @@ export interface TaskDispatchResult {
   ok: boolean;
   attemptId?: string;
   error?: string;
+}
+
+export interface PortableManagerState {
+  schemaVersion: 2;
+  exportedAt: number;
+  bindings: Record<string, RoleBinding>;
+  tasks: AgentTask[];
+  attempts: SendAttemptRecord[];
+  messages: AgentMessage[];
+  supervisorEnabled: boolean;
 }
 
 export type ContentRequest =
@@ -143,10 +227,16 @@ export type ManagerRequest =
   | { type: 'manager:update-binding'; tabId: number; conversationKey: string; binding: RoleBinding }
   | { type: 'manager:send'; tabIds: number[]; text: string }
   | { type: 'manager:create-task'; input: CreateTaskInput }
+  | { type: 'manager:create-message'; input: CreateAgentMessageInput }
+  | { type: 'manager:dispatch-message'; messageId: string }
   | { type: 'manager:run-ready-tasks' }
   | { type: 'manager:retry-task'; taskId: string }
+  | { type: 'manager:retry-review-loop'; taskId: string }
+  | { type: 'manager:decide-human-task'; taskId: string; decision: HumanDecision; reason?: string }
   | { type: 'manager:skip-task'; taskId: string; reason?: string }
   | { type: 'manager:cancel-task'; taskId: string; reason?: string }
+  | { type: 'manager:export-state' }
+  | { type: 'manager:import-state'; document: string }
   | { type: 'manager:set-supervisor-enabled'; enabled: boolean }
   | { type: 'manager:focus'; tabId: number };
 

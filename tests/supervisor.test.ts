@@ -3,11 +3,11 @@ import { planReadyDispatches } from '../src/supervisor';
 import type { AgentTask, ManagedTab, ManagedTask, SendAttemptRecord } from '../src/contracts';
 
 function task(id: string, role: string, project = ''): AgentTask {
-  return { id, kind: 'work', title: id, project, instruction: id, targetRole: role, dependsOn: [], attemptIds: [], createdAt: 1, updatedAt: 1 };
+  return { id, kind: 'work', completionPolicy: 'reply', title: id, project, instruction: id, targetRole: role, dependsOn: [], attemptIds: [], createdAt: 1, updatedAt: 1 };
 }
 
 function managed(id: string, role: string, status: ManagedTask['status'] = 'ready', project = ''): ManagedTask {
-  return { task: task(id, role, project), status };
+  return { task: task(id, role, project), status, attemptHistory: [] };
 }
 
 function tab(

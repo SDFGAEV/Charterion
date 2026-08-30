@@ -3,7 +3,7 @@ import { buildTaskDispatchPrompt, MAX_DEPENDENCY_CONTEXT_CHARS } from '../src/ta
 import type { AgentTask, ManagedTask, SendAttemptRecord } from '../src/contracts';
 
 function task(id: string, kind: AgentTask['kind'] = 'work'): AgentTask {
-  return { id, kind, title: `Task ${id}`, project: '', instruction: `Do ${id}`, targetRole: `role-${id}`, dependsOn: [], attemptIds: [], createdAt: 1, updatedAt: 1 };
+  return { id, kind, completionPolicy: kind === 'review' ? 'review-pass' : kind === 'human' ? 'human-approval' : 'reply', title: `Task ${id}`, project: '', instruction: `Do ${id}`, targetRole: `role-${id}`, dependsOn: [], attemptIds: [], createdAt: 1, updatedAt: 1 };
 }
 
 function dependency(id: string, output: string): ManagedTask {
@@ -14,7 +14,7 @@ function dependency(id: string, output: string): ManagedTask {
     replyMessageId: `message:${id}`, replyTextTail: output, createdAt: 1, updatedAt: 2,
   };
   t.attemptIds = [attempt.attemptId];
-  return { task: t, status: 'completed', lastAttempt: attempt };
+  return { task: t, status: 'completed', lastAttempt: attempt, attemptHistory: [attempt] };
 }
 
 describe('task dispatch prompt', () => {

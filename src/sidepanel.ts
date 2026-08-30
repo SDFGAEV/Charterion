@@ -1,5 +1,9 @@
 import type {
+  AgentMessageType,
+  CreateAgentMessageInput,
   CreateTaskInput,
+  HumanDecision,
+  ManagedMessage,
   ManagedTab,
   ManagedTask,
   RoleBinding,
@@ -11,14 +15,19 @@ import type {
 
 const agentsRoot = required<HTMLDivElement>('agents');
 const tasksRoot = required<HTMLDivElement>('tasks');
+const messagesRoot = required<HTMLDivElement>('messages');
+const dagRoot = required<HTMLDivElement>('dag-view');
 const emptyState = required<HTMLDivElement>('empty');
 const summary = required<HTMLSpanElement>('summary');
 const instruction = required<HTMLTextAreaElement>('instruction');
 const sendStatus = required<HTMLParagraphElement>('send-status');
 const taskStatus = required<HTMLParagraphElement>('task-status');
+const messageStatus = required<HTMLParagraphElement>('message-status');
+const stateStatus = required<HTMLParagraphElement>('state-status');
 const selected = new Set<number>();
 let tabs: ManagedTab[] = [];
 let tasks: ManagedTask[] = [];
+let messages: ManagedMessage[] = [];
 let supervisorEnabled = false;
 let refreshTimer: number | undefined;
 
@@ -34,7 +43,7 @@ async function request<T>(message: object): Promise<T> {
   return response as T;
 }
 
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string) {
+function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
   if (className) node.className = className;
   return node;
@@ -43,6 +52,10 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string) {
 function setStatus(node: HTMLElement, text: string, isError = false): void {
   node.textContent = text;
   node.classList.toggle('error', isError);
+}
+
+function taskName(taskId: string): string {
+  return tasks.find((item) => item.task.id === taskId)?.task.title ?? taskId;
 }
 
 function bindingInput(labelText: string, value: string, wide = false): { wrap: HTMLLabelElement; input: HTMLInputElement } {
@@ -55,13 +68,21 @@ function bindingInput(labelText: string, value: string, wide = false): { wrap: H
   return { wrap, input };
 }
 
-async function persistBinding(tab: ManagedTab, inputs: readonly [HTMLInputElement, HTMLInputElement, HTMLInputElement]): Promise<void> {
+async function persistBinding(
+  tab: ManagedTab,
+  inputs: readonly [HTMLInputElement, HTMLInputElement, HTMLInputElement],
+): Promise<void> {
   const binding: RoleBinding = {
     role: inputs[0].value.trim(),
     project: inputs[1].value.trim(),
     notes: inputs[2].value.trim(),
   };
-  await request({ type: 'manager:update-binding', tabId: tab.tabId, conversationKey: tab.snapshot.conversationKey, binding });
+  await request({
+    type: 'manager:update-binding',
+    tabId: tab.tabId,
+    conversationKey: tab.snapshot.conversationKey,
+    binding,
+  });
 }
 
 function renderAgent(tab: ManagedTab): HTMLElement {
@@ -71,14 +92,12 @@ function renderAgent(tab: ManagedTab): HTMLElement {
   checkbox.type = 'checkbox';
   checkbox.checked = selected.has(tab.tabId);
   checkbox.addEventListener('change', () => checkbox.checked ? selected.add(tab.tabId) : selected.delete(tab.tabId));
-
   const title = el('div', 'agent-title');
   const strong = el('strong');
   strong.textContent = tab.binding.role || tab.snapshot.title;
   const small = el('small');
   small.textContent = tab.binding.project || tab.snapshot.title;
   title.append(strong, small);
-
   const badge = el('span', `status status-${tab.snapshot.status}`);
   badge.textContent = tab.snapshot.status;
   head.append(checkbox, title, badge);
@@ -106,17 +125,43 @@ function renderAgent(tab: ManagedTab): HTMLElement {
     attempt.textContent = `Last send: ${tab.lastAttempt.state}${replySuffix}`;
     card.append(attempt);
   }
-
   const actions = el('div', 'agent-actions');
   const focus = el('button');
   focus.type = 'button';
   focus.textContent = 'Focus tab';
   focus.addEventListener('click', () => {
-    void request({ type: 'manager:focus', tabId: tab.tabId }).catch((error) => setStatus(sendStatus, String(error), true));
+    void request({ type: 'manager:focus', tabId: tab.tabId })
+      .catch((error) => setStatus(sendStatus, String(error), true));
   });
   actions.append(focus);
   card.append(actions);
   return card;
+}
+
+function renderAttemptHistory(managed: ManagedTask): HTMLElement | undefined {
+  if (managed.attemptHistory.length === 0) return undefined;
+  const details = el('details', 'task-history');
+  const summaryNode = el('summary');
+  summaryNode.textContent = `Attempt history (${managed.attemptHistory.length})`;
+  details.append(summaryNode);
+  for (const attempt of [...managed.attemptHistory].reverse()) {
+    const item = el('div', `history-item history-${attempt.state}`);
+    const meta = el('div', 'history-meta');
+    meta.textContent = `${attempt.state} · ${attempt.attemptId}`;
+    item.append(meta);
+    if (attempt.error) {
+      const error = el('div', 'task-error');
+      error.textContent = attempt.error;
+      item.append(error);
+    }
+    if (attempt.replyTextTail) {
+      const reply = el('pre', 'history-reply');
+      reply.textContent = attempt.replyTextTail;
+      item.append(reply);
+    }
+    details.append(item);
+  }
+  return details;
 }
 
 function renderTask(managed: ManagedTask): HTMLElement {
@@ -126,7 +171,8 @@ function renderTask(managed: ManagedTask): HTMLElement {
   const strong = el('strong');
   strong.textContent = managed.task.title;
   const small = el('small');
-  small.textContent = `${managed.task.kind} · ${managed.task.targetRole}${managed.task.project ? ` · ${managed.task.project}` : ''}`;
+  const role = managed.task.kind === 'human' ? 'human' : managed.task.targetRole;
+  small.textContent = `${managed.task.kind} · ${managed.task.completionPolicy} · ${role}${managed.task.project ? ` · ${managed.task.project}` : ''}`;
   title.append(strong, small);
   const badge = el('span', `task-state task-state-${managed.status}`);
   badge.textContent = managed.status;
@@ -138,12 +184,23 @@ function renderTask(managed: ManagedTask): HTMLElement {
   card.append(id);
   if (managed.task.dependsOn.length > 0) {
     const deps = el('div', 'task-deps');
-    deps.textContent = `Depends on: ${managed.task.dependsOn.join(', ')}`;
+    deps.textContent = `Depends on: ${managed.task.dependsOn.map(taskName).join(' · ')}`;
     card.append(deps);
+  }
+  if (managed.task.kind === 'review') {
+    const reviewMeta = el('div', 'task-deps');
+    const target = managed.task.reviewTargetTaskId ? taskName(managed.task.reviewTargetTaskId) : 'missing target';
+    reviewMeta.textContent = `Review target: ${target} · round ${managed.reviewRound ?? 0}/${managed.task.maxReviewRounds ?? 3}`;
+    card.append(reviewMeta);
   }
   const body = el('div', 'task-instruction');
   body.textContent = managed.task.instruction;
   card.append(body);
+  if (managed.task.revisionInstruction) {
+    const revision = el('div', 'task-review-remediation');
+    revision.textContent = `Revision requested: ${managed.task.revisionInstruction}`;
+    card.append(revision);
+  }
   if (managed.lastAttempt?.error) {
     const error = el('div', 'task-error');
     error.textContent = managed.lastAttempt.error;
@@ -158,14 +215,57 @@ function renderTask(managed: ManagedTask): HTMLElement {
       remediation.textContent = `Next: ${managed.reviewResult.nextInstruction}`;
       card.append(remediation);
     }
-  } else if (managed.reviewError) {
+  }
+  if (managed.reviewError) {
     const reviewError = el('div', 'task-error');
     reviewError.textContent = `Review protocol error: ${managed.reviewError}`;
     card.append(reviewError);
   }
+  if (managed.reviewLoopExhausted) {
+    const exhausted = el('div', 'task-error');
+    exhausted.textContent = 'Review loop exhausted its configured maximum rounds.';
+    card.append(exhausted);
+  }
+  if (managed.task.humanDecision) {
+    const human = el('div', `task-human task-human-${managed.task.humanDecision.decision}`);
+    human.textContent = `Human ${managed.task.humanDecision.decision.toUpperCase()}${managed.task.humanDecision.reason ? `: ${managed.task.humanDecision.reason}` : ''}`;
+    card.append(human);
+  }
+  const history = renderAttemptHistory(managed);
+  if (history) card.append(history);
+
   const actions = el('div', 'task-actions');
   let hasAction = false;
-  if (managed.status === 'error' || managed.status === 'attention') {
+  if (managed.status === 'waiting-human') {
+    for (const decision of ['approve', 'reject'] as HumanDecision[]) {
+      const button = el('button');
+      button.type = 'button';
+      button.textContent = decision === 'approve' ? 'Approve' : 'Reject';
+      button.addEventListener('click', () => {
+        const reason = window.prompt(`Optional reason for ${decision}:`, '') ?? '';
+        void request({ type: 'manager:decide-human-task', taskId: managed.task.id, decision, reason })
+          .then(async () => { setStatus(taskStatus, `Human task ${decision}d.`); await refresh(); })
+          .catch((error) => setStatus(taskStatus, String(error), true));
+      });
+      actions.append(button);
+      hasAction = true;
+    }
+  }
+  if (managed.task.kind === 'review' && managed.reviewResult?.decision === 'fail' && !managed.reviewLoopExhausted) {
+    const revise = el('button');
+    revise.type = 'button';
+    revise.textContent = 'Revise & re-review';
+    revise.addEventListener('click', () => {
+      void request({ type: 'manager:retry-review-loop', taskId: managed.task.id })
+        .then(async () => { setStatus(taskStatus, 'Revision requested from producer; review will re-run after it completes.'); await refresh(); })
+        .catch((error) => setStatus(taskStatus, String(error), true));
+    });
+    actions.append(revise);
+    hasAction = true;
+  }
+  const plainRetry = (managed.status === 'error' || managed.status === 'attention') &&
+    !(managed.task.kind === 'review' && managed.reviewResult?.decision === 'fail');
+  if (plainRetry) {
     const retry = el('button');
     retry.type = 'button';
     retry.textContent = 'Retry';
@@ -177,30 +277,27 @@ function renderTask(managed: ManagedTask): HTMLElement {
     actions.append(retry);
     hasAction = true;
   }
-  if (['pending', 'ready', 'error', 'attention', 'blocked'].includes(managed.status)) {
+  if (['pending', 'ready', 'waiting-human', 'error', 'attention', 'blocked'].includes(managed.status)) {
     const skip = el('button');
     skip.type = 'button';
     skip.textContent = 'Skip';
     skip.addEventListener('click', () => {
-      void request({ type: 'manager:skip-task', taskId: managed.task.id })
+      const reason = window.prompt('Optional skip reason:', '') ?? '';
+      void request({ type: 'manager:skip-task', taskId: managed.task.id, reason })
         .then(async () => { setStatus(taskStatus, 'Task skipped.'); await refresh(); })
         .catch((error) => setStatus(taskStatus, String(error), true));
     });
     actions.append(skip);
     hasAction = true;
   }
-  if (!['completed', 'skipped', 'cancelled'].includes(managed.status)) {
+  if (!['completed', 'skipped', 'cancelled', 'rejected'].includes(managed.status)) {
     const cancel = el('button');
     cancel.type = 'button';
     cancel.textContent = 'Cancel';
     cancel.addEventListener('click', () => {
-      void request({ type: 'manager:cancel-task', taskId: managed.task.id })
-        .then(async () => {
-          setStatus(taskStatus, managed.status === 'running'
-            ? 'Task orchestration cancelled; any already-sent ChatGPT generation may still finish.'
-            : 'Task cancelled.');
-          await refresh();
-        })
+      const reason = window.prompt('Optional cancellation reason:', '') ?? '';
+      void request({ type: 'manager:cancel-task', taskId: managed.task.id, reason })
+        .then(async () => { setStatus(taskStatus, 'Task orchestration cancelled.'); await refresh(); })
         .catch((error) => setStatus(taskStatus, String(error), true));
     });
     actions.append(cancel);
@@ -210,9 +307,75 @@ function renderTask(managed: ManagedTask): HTMLElement {
   return card;
 }
 
+function renderDag(): void {
+  if (tasks.length === 0) {
+    dagRoot.replaceChildren();
+    return;
+  }
+  const rows = tasks.map((managed) => {
+    const row = el('div', 'dag-row');
+    const parents = managed.task.dependsOn.length > 0
+      ? managed.task.dependsOn.map(taskName).join(' + ')
+      : 'ROOT';
+    const edge = el('span', 'dag-edge');
+    edge.textContent = `${parents} → `;
+    const node = el('span', `dag-node task-state-${managed.status}`);
+    node.textContent = `${managed.task.title} [${managed.status}]`;
+    row.append(edge, node);
+    return row;
+  });
+  dagRoot.replaceChildren(...rows);
+}
+
+function updateTaskEditorOptions(): void {
+  const deps = required<HTMLSelectElement>('task-deps');
+  const selectedDeps = new Set([...deps.selectedOptions].map((option) => option.value));
+  const depOptions = tasks.map((managed) => {
+    const option = el('option');
+    option.value = managed.task.id;
+    option.textContent = `${managed.task.title} · ${managed.status}`;
+    option.selected = selectedDeps.has(managed.task.id);
+    return option;
+  });
+  deps.replaceChildren(...depOptions);
+
+  const reviewTarget = required<HTMLSelectElement>('task-review-target');
+  const currentTarget = reviewTarget.value;
+  const targetOptions = [el('option'), ...tasks.map((managed) => {
+    const option = el('option');
+    option.value = managed.task.id;
+    option.textContent = managed.task.title;
+    return option;
+  })];
+  targetOptions[0]!.value = '';
+  targetOptions[0]!.textContent = 'Select reviewed task';
+  reviewTarget.replaceChildren(...targetOptions);
+  if (tasks.some((managed) => managed.task.id === currentTarget)) reviewTarget.value = currentTarget;
+}
+
+function updateTaskKindFields(): void {
+  const kind = required<HTMLSelectElement>('task-kind').value as TaskKind;
+  required<HTMLElement>('task-role-wrap').hidden = kind === 'human';
+  required<HTMLElement>('task-review-target-wrap').hidden = kind !== 'review';
+  required<HTMLElement>('task-review-rounds-wrap').hidden = kind !== 'review';
+  if (kind === 'human') required<HTMLInputElement>('task-role').value = '';
+}
+
+function ensureReviewTargetDependency(): void {
+  const target = required<HTMLSelectElement>('task-review-target').value;
+  if (!target) return;
+  const deps = required<HTMLSelectElement>('task-deps');
+  for (const option of [...deps.options]) {
+    if (option.value === target) option.selected = true;
+  }
+}
+
 function render(): void {
   agentsRoot.replaceChildren(...tabs.map(renderAgent));
   tasksRoot.replaceChildren(...tasks.map(renderTask));
+  messagesRoot.replaceChildren(...messages.map(renderMessage));
+  renderDag();
+  updateTaskEditorOptions();
   emptyState.hidden = tabs.length !== 0;
   const idle = tabs.filter((tab) => tab.snapshot.status === 'idle').length;
   const generating = tabs.filter((tab) => tab.snapshot.status === 'generating').length;
@@ -222,9 +385,10 @@ function render(): void {
 
 async function refresh(): Promise<void> {
   try {
-    const response = await request<{ tabs: ManagedTab[]; tasks: ManagedTask[]; supervisorEnabled: boolean }>({ type: 'manager:list' });
+    const response = await request<{ tabs: ManagedTab[]; tasks: ManagedTask[]; messages: ManagedMessage[]; supervisorEnabled: boolean }>({ type: 'manager:list' });
     tabs = response.tabs;
     tasks = response.tasks;
+    messages = response.messages;
     supervisorEnabled = response.supervisorEnabled;
     required<HTMLInputElement>('supervisor-enabled').checked = supervisorEnabled;
     const present = new Set(tabs.map((tab) => tab.tabId));
@@ -249,8 +413,11 @@ async function sendSelected(): Promise<void> {
   try {
     const response = await request<{ results: SendResult[] }>({ type: 'manager:send', tabIds, text });
     const failed = response.results.filter((result) => !result.ok);
-    setStatus(sendStatus,
-      failed.length === 0 ? `Sent to ${response.results.length} agent(s).` : `${failed.length}/${response.results.length} send(s) failed.`,
+    setStatus(
+      sendStatus,
+      failed.length === 0
+        ? `Sent to ${response.results.length} agent(s).`
+        : `${failed.length}/${response.results.length} send(s) failed.`,
       failed.length > 0,
     );
     await refresh();
@@ -260,25 +427,32 @@ async function sendSelected(): Promise<void> {
 }
 
 function dependencyIds(): string[] {
-  return required<HTMLInputElement>('task-deps').value.split(',').map((value) => value.trim()).filter(Boolean);
+  return [...required<HTMLSelectElement>('task-deps').selectedOptions].map((option) => option.value);
 }
 
 async function createTask(): Promise<void> {
+  const kind = required<HTMLSelectElement>('task-kind').value as TaskKind;
+  const reviewTarget = required<HTMLSelectElement>('task-review-target').value;
+  if (kind === 'review') ensureReviewTargetDependency();
   const input: CreateTaskInput = {
-    kind: required<HTMLSelectElement>('task-kind').value as TaskKind,
+    kind,
     title: required<HTMLInputElement>('task-title').value.trim(),
     project: required<HTMLInputElement>('task-project').value.trim(),
     instruction: required<HTMLTextAreaElement>('task-instruction').value.trim(),
-    targetRole: required<HTMLInputElement>('task-role').value.trim(),
+    targetRole: kind === 'human' ? '' : required<HTMLInputElement>('task-role').value.trim(),
     dependsOn: dependencyIds(),
   };
+  if (kind === 'review') {
+    if (reviewTarget) input.reviewTargetTaskId = reviewTarget;
+    input.maxReviewRounds = Number(required<HTMLInputElement>('task-review-rounds').value);
+  }
   setStatus(taskStatus, 'Creating task…');
   try {
     await request({ type: 'manager:create-task', input });
     setStatus(taskStatus, 'Task created.');
     required<HTMLInputElement>('task-title').value = '';
     required<HTMLTextAreaElement>('task-instruction').value = '';
-    required<HTMLInputElement>('task-deps').value = '';
+    required<HTMLSelectElement>('task-deps').selectedIndex = -1;
     await refresh();
   } catch (error) {
     setStatus(taskStatus, error instanceof Error ? error.message : String(error), true);
@@ -291,8 +465,11 @@ async function runReadyTasks(): Promise<void> {
     const response = await request<{ results: TaskDispatchResult[] }>({ type: 'manager:run-ready-tasks' });
     const failed = response.results.filter((result) => !result.ok);
     const sent = response.results.length - failed.length;
-    setStatus(taskStatus,
-      response.results.length === 0 ? 'No tasks are ready.' : `${sent} task(s) dispatched · ${failed.length} not dispatched.`,
+    setStatus(
+      taskStatus,
+      response.results.length === 0
+        ? 'No tasks are ready.'
+        : `${sent} task(s) dispatched · ${failed.length} not dispatched.`,
       failed.length > 0,
     );
     await refresh();
@@ -313,18 +490,50 @@ async function setSupervisorMode(enabled: boolean): Promise<void> {
     setStatus(taskStatus, error instanceof Error ? error.message : String(error), true);
   }
 }
+
+async function exportState(): Promise<void> {
+  setStatus(stateStatus, 'Exporting state…');
+  try {
+    const response = await request<{ document: string }>({ type: 'manager:export-state' });
+    required<HTMLTextAreaElement>('state-json').value = response.document;
+    setStatus(stateStatus, 'State exported.');
+  } catch (error) {
+    setStatus(stateStatus, error instanceof Error ? error.message : String(error), true);
+  }
+}
+
+async function importState(): Promise<void> {
+  const document = required<HTMLTextAreaElement>('state-json').value.trim();
+  if (!document) return setStatus(stateStatus, 'Paste a state document first.', true);
+  setStatus(stateStatus, 'Validating and importing state…');
+  try {
+    await request({ type: 'manager:import-state', document });
+    setStatus(stateStatus, 'State imported.');
+    await refresh();
+  } catch (error) {
+    setStatus(stateStatus, error instanceof Error ? error.message : String(error), true);
+  }
+}
+
 required<HTMLButtonElement>('refresh').addEventListener('click', () => void refresh());
 required<HTMLButtonElement>('send-selected').addEventListener('click', () => void sendSelected());
 required<HTMLButtonElement>('create-task').addEventListener('click', () => void createTask());
 required<HTMLButtonElement>('run-ready').addEventListener('click', () => void runReadyTasks());
+required<HTMLButtonElement>('export-state').addEventListener('click', () => void exportState());
+required<HTMLButtonElement>('import-state').addEventListener('click', () => void importState());
 required<HTMLInputElement>('supervisor-enabled').addEventListener('change', (event) => {
   void setSupervisorMode((event.currentTarget as HTMLInputElement).checked);
 });
+required<HTMLSelectElement>('task-kind').addEventListener('change', updateTaskKindFields);
+required<HTMLSelectElement>('task-review-target').addEventListener('change', ensureReviewTargetDependency);
 required<HTMLButtonElement>('select-idle').addEventListener('click', () => {
   for (const tab of tabs) if (tab.snapshot.status === 'idle') selected.add(tab.tabId);
   render();
 });
-required<HTMLButtonElement>('clear-selection').addEventListener('click', () => { selected.clear(); render(); });
+required<HTMLButtonElement>('clear-selection').addEventListener('click', () => {
+  selected.clear();
+  render();
+});
 
 chrome.runtime.onMessage.addListener((message: RuntimeNotice) => {
   if (message.type === 'manager:changed') scheduleRefresh();
@@ -333,4 +542,103 @@ chrome.runtime.onMessage.addListener((message: RuntimeNotice) => {
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') void refresh();
 });
+
+updateTaskKindFields();
 void refresh();
+
+function renderMessage(managed: ManagedMessage): HTMLElement {
+  const card = el('article', 'message-card');
+  const head = el('div', 'message-head');
+  const title = el('div', 'message-title');
+  const strong = el('strong');
+  const target = managed.message.target.kind === 'role' ? managed.message.target.role : '@project';
+  strong.textContent = `${managed.message.fromRole} → ${target}`;
+  const small = el('small');
+  small.textContent = `${managed.message.type} · ${managed.message.project}`;
+  title.append(strong, small);
+  const badge = el('span', 'message-attempt-count');
+  badge.textContent = `${managed.attemptHistory.length} send(s)`;
+  head.append(title, badge);
+  card.append(head);
+
+  const body = el('div', 'message-content');
+  body.textContent = managed.message.content;
+  card.append(body);
+  if (managed.message.taskId) {
+    const related = el('div', 'task-deps');
+    related.textContent = `Related task: ${taskName(managed.message.taskId)}`;
+    card.append(related);
+  }
+  if (managed.attemptHistory.length > 0) {
+    const details = el('details', 'message-history');
+    const summaryNode = el('summary');
+    summaryNode.textContent = 'Delivery history';
+    details.append(summaryNode);
+    for (const attempt of [...managed.attemptHistory].reverse()) {
+      const item = el('div', `history-item history-${attempt.state}`);
+      const meta = el('div', 'history-meta');
+      meta.textContent = `${attempt.state} · ${attempt.conversationKey}`;
+      item.append(meta);
+      if (attempt.error) {
+        const error = el('div', 'task-error');
+        error.textContent = attempt.error;
+        item.append(error);
+      }
+      if (attempt.replyTextTail) {
+        const reply = el('pre', 'history-reply');
+        reply.textContent = attempt.replyTextTail;
+        item.append(reply);
+      }
+      details.append(item);
+    }
+    card.append(details);
+  }
+  const actions = el('div', 'message-actions');
+  const deliver = el('button');
+  deliver.type = 'button';
+  deliver.textContent = 'Deliver';
+  deliver.addEventListener('click', () => {
+    void request<{ results: SendResult[] }>({ type: 'manager:dispatch-message', messageId: managed.message.id })
+      .then(async (response) => {
+        setStatus(messageStatus, response.results.length === 0 ? 'Message already delivered to all current recipients.' : `Delivered to ${response.results.length} recipient(s).`);
+        await refresh();
+      })
+      .catch((error) => setStatus(messageStatus, String(error), true));
+  });
+  actions.append(deliver);
+  card.append(actions);
+  return card;
+}
+
+function updateMessageTargetFields(): void {
+  const kind = required<HTMLSelectElement>('message-target-kind').value;
+  required<HTMLElement>('message-target-role-wrap').hidden = kind === 'project';
+}
+
+async function queueMessage(): Promise<void> {
+  const targetKind = required<HTMLSelectElement>('message-target-kind').value;
+  const input: CreateAgentMessageInput = {
+    project: required<HTMLInputElement>('message-project').value.trim(),
+    fromRole: required<HTMLInputElement>('message-from').value.trim(),
+    target: targetKind === 'project'
+      ? { kind: 'project' }
+      : { kind: 'role', role: required<HTMLInputElement>('message-target-role').value.trim() },
+    type: required<HTMLSelectElement>('message-type').value as AgentMessageType,
+    content: required<HTMLTextAreaElement>('message-content').value.trim(),
+  };
+  const taskId = required<HTMLInputElement>('message-task').value.trim();
+  if (taskId) input.taskId = taskId;
+  setStatus(messageStatus, 'Queueing message…');
+  try {
+    await request({ type: 'manager:create-message', input });
+    required<HTMLTextAreaElement>('message-content').value = '';
+    setStatus(messageStatus, 'Message queued. Use Deliver when recipients are ready.');
+    await refresh();
+  } catch (error) {
+    setStatus(messageStatus, error instanceof Error ? error.message : String(error), true);
+  }
+}
+
+required<HTMLButtonElement>('queue-message').addEventListener('click', () => void queueMessage());
+required<HTMLSelectElement>('message-target-kind').addEventListener('change', updateMessageTargetFields);
+updateMessageTargetFields();

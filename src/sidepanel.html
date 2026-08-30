@@ -8,10 +8,7 @@
 </head>
 <body>
   <header class="topbar">
-    <div>
-      <h1>GPT Agent Manager</h1>
-      <p>Coordinate open ChatGPT conversations locally.</p>
-    </div>
+    <div><h1>GPT Agent Manager</h1><p>Coordinate open ChatGPT conversations locally.</p></div>
     <button id="refresh" type="button">Refresh</button>
   </header>
   <main>
@@ -30,15 +27,43 @@
       <div class="section-heading"><h2>Task DAG</h2><div class="actions compact"><label class="toggle"><input id="supervisor-enabled" type="checkbox"> Auto supervisor</label><button id="run-ready" class="primary" type="button">Run ready</button></div></div>
       <div class="task-form-grid">
         <label>Title<input id="task-title" autocomplete="off" placeholder="Implement feature"></label>
-        <label>Role<input id="task-role" autocomplete="off" placeholder="worker-1"></label>
+        <label id="task-role-wrap">Role<input id="task-role" autocomplete="off" placeholder="worker-1"></label>
         <label>Project<input id="task-project" autocomplete="off" placeholder="optional exact project"></label>
-        <label>Kind<select id="task-kind"><option value="work">Work</option><option value="review">Review</option></select></label>
-        <label class="wide">Depends on task IDs<input id="task-deps" autocomplete="off" placeholder="id-a, id-b"></label>
-        <label class="wide">Instruction<textarea id="task-instruction" rows="3" placeholder="Exact instruction for this ChatGPT role"></textarea></label>
+        <label>Kind<select id="task-kind"><option value="work">Work</option><option value="review">Review</option><option value="human">Human decision</option></select></label>
+        <label class="wide">Dependencies<select id="task-deps" multiple size="5"></select></label>
+        <label id="task-review-target-wrap" hidden>Review target<select id="task-review-target"></select></label>
+        <label id="task-review-rounds-wrap" hidden>Max review rounds<input id="task-review-rounds" type="number" min="1" max="10" value="3"></label>
+        <label class="wide">Instruction<textarea id="task-instruction" rows="3" placeholder="Exact instruction or human decision question"></textarea></label>
       </div>
       <div class="actions"><button id="create-task" type="button">Create task</button></div>
       <p id="task-status" class="muted" aria-live="polite"></p>
+      <div id="dag-view" class="dag-view"></div>
       <div id="tasks" class="tasks"></div>
+    </section>
+    <section class="composer-card message-editor">
+      <div class="section-heading"><h2>Team messages</h2><span class="muted">Semantic plane</span></div>
+      <div class="task-form-grid">
+        <label>Project<input id="message-project" autocomplete="off" placeholder="required project"></label>
+        <label>From role<input id="message-from" autocomplete="off" placeholder="ROLE01"></label>
+        <label>Target<select id="message-target-kind"><option value="role">Role</option><option value="project">Everyone in project</option></select></label>
+        <label id="message-target-role-wrap">Target role<input id="message-target-role" autocomplete="off" placeholder="ROLE02"></label>
+        <label>Type<select id="message-type"><option value="result">Result</option><option value="blocker">Blocker</option><option value="question">Question</option><option value="answer">Answer</option><option value="review-request">Review request</option><option value="review-result">Review result</option><option value="announcement">Announcement</option></select></label>
+        <label>Related task<input id="message-task" autocomplete="off" placeholder="optional task id"></label>
+        <label class="wide">Message<textarea id="message-content" rows="3" placeholder="Semantic context to deliver to the target agent(s)"></textarea></label>
+      </div>
+      <div class="actions"><button id="queue-message" type="button">Queue message</button></div>
+      <p id="message-status" class="muted" aria-live="polite"></p>
+      <div id="messages" class="messages"></div>
+    </section>
+
+    <section class="composer-card">
+      <div class="section-heading"><h2>State backup</h2><span class="muted">Schema v2</span></div>
+      <textarea id="state-json" rows="6" spellcheck="false" placeholder="Exported manager state appears here. Paste a state document here to import."></textarea>
+      <div class="actions">
+        <button id="export-state" type="button">Export state</button>
+        <button id="import-state" type="button">Import state</button>
+      </div>
+      <p id="state-status" class="muted" aria-live="polite"></p>
     </section>
 
     <section>
