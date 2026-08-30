@@ -32,3 +32,13 @@ export function deriveBrowserRuntimeObservation(statuses: readonly AgentStatus[]
 export function pageHealthAllowsFleetExpansion(pageHealth: BrowserPageHealth): boolean {
   return pageHealth !== 'blocked' && pageHealth !== 'error' && pageHealth !== 'unavailable';
 }
+
+export interface BrowserRuntimeEvidence extends BrowserRuntimeObservation { observedAt: number; }
+
+export function fleetExpansionAllowed(
+  current: BrowserRuntimeObservation, latest?: BrowserRuntimeEvidence, now = Date.now(), maxAgeMs = 120_000,
+): boolean {
+  if (current.authStatus === 'authentication-required' || !pageHealthAllowsFleetExpansion(current.pageHealth)) return false;
+  if (!latest || now - latest.observedAt > maxAgeMs) return true;
+  return latest.authStatus !== 'authentication-required' && pageHealthAllowsFleetExpansion(latest.pageHealth);
+}

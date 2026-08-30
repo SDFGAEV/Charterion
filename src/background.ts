@@ -13,7 +13,7 @@ import { createPortableManagerState, parsePortableManagerState, stringifyPortabl
 import { recoverAttempt, type AttemptRecoveryObservation } from './recovery';
 import { readNativeControlSnapshot, reportNativeBrowserRuntime, reportNativeAgentBrowser } from './nativeControl';
 import { filterFleetTaskTabs, planFleetReconciliation, workerRequestMessage } from './fleet';
-import { deriveBrowserRuntimeObservation, pageHealthAllowsFleetExpansion } from './browserRuntime';
+import { deriveBrowserRuntimeObservation, fleetExpansionAllowed } from './browserRuntime';
 import {
   EMPTY_BINDING,
   unavailableSnapshot,
@@ -646,17 +646,14 @@ async function reconcileAgentFleet(): Promise<void> {
     const actions = planFleetReconciliation(snapshot.agents, currentTabs, mapping);
     const latestRuntime = [...snapshot.browserRuntime].sort((a, b) => b.observedAt - a.observedAt)[0];
     const currentRuntime = deriveBrowserRuntimeObservation(currentTabs.map((tab) => tab.snapshot.status));
-    const authenticationRequired = currentRuntime.authStatus === 'authentication-required' || latestRuntime?.authStatus === 'authentication-required';
-    const latestIsFresh = latestRuntime ? Date.now() - latestRuntime.observedAt <= 120_000 : false;
-    const currentPageAllowsExpansion = pageHealthAllowsFleetExpansion(currentRuntime.pageHealth);
-    const latestPageAllowsExpansion = !latestIsFresh || pageHealthAllowsFleetExpansion(latestRuntime?.pageHealth ?? 'unknown');
+    const expansionAllowed = fleetExpansionAllowed(currentRuntime, latestRuntime, Date.now());
     const projects = new Map(snapshot.projects.map((project) => [project.id, project]));
     const agents = new Map(snapshot.agents.map((agent) => [agent.id, agent]));
     for (const action of actions) {
       const agent = agents.get(action.slotId); if (!agent) continue;
       const project = projects.get(agent.projectId); if (!project) continue;
       if (action.kind === 'open') {
-        if (authenticationRequired || !currentPageAllowsExpansion || !latestPageAllowsExpansion) continue;
+        if (!expansionAllowed) continue;
         const tab = await chrome.tabs.create({ url: action.url, active: false });
         if (tab.id === undefined) throw new Error(`Chrome did not return a tab id for agent slot ${agent.id}`);
         mapping[agent.id] = tab.id; await saveFleetTabMap(mapping);

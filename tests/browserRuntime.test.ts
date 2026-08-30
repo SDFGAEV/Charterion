@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deriveBrowserRuntimeObservation, pageHealthAllowsFleetExpansion } from '../src/browserRuntime';
+import { deriveBrowserRuntimeObservation, fleetExpansionAllowed, pageHealthAllowsFleetExpansion } from '../src/browserRuntime';
 
 describe('browser runtime semantics', () => {
   it('treats only ready/generating pages as authentication evidence', () => {
@@ -8,6 +8,13 @@ describe('browser runtime semantics', () => {
     expect(deriveBrowserRuntimeObservation(['blocked'])).toEqual({ authStatus: 'unknown', pageHealth: 'blocked' });
     expect(deriveBrowserRuntimeObservation(['error'])).toEqual({ authStatus: 'unknown', pageHealth: 'error' });
     expect(deriveBrowserRuntimeObservation(['unauthorized'])).toEqual({ authStatus: 'authentication-required', pageHealth: 'unknown' });
+  });
+
+  it('expires stale auth/page evidence before fleet expansion decisions', () => {
+    const current = { authStatus: 'unknown' as const, pageHealth: 'unknown' as const };
+    expect(fleetExpansionAllowed(current, { authStatus: 'authentication-required', pageHealth: 'unknown', observedAt: 900 }, 1000, 200)).toBe(false);
+    expect(fleetExpansionAllowed(current, { authStatus: 'authentication-required', pageHealth: 'blocked', observedAt: 700 }, 1000, 200)).toBe(true);
+    expect(fleetExpansionAllowed({ authStatus: 'authentication-required', pageHealth: 'unknown' })).toBe(false);
   });
 
   it('fails closed for unhealthy page states when expanding the fleet', () => {
