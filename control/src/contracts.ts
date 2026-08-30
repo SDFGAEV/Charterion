@@ -256,10 +256,12 @@ export interface DaemonConfig {
 }
 
 export type BrowserAuthStatus = 'unknown' | 'authenticated' | 'authentication-required';
+export type BrowserPageHealth = 'unknown' | 'ready' | 'generating' | 'blocked' | 'error' | 'unavailable';
 
 export interface BrowserRuntimeStatus {
   profileId: string;
   authStatus: BrowserAuthStatus;
+  pageHealth: BrowserPageHealth;
   openTabs: number;
   extensionVersion: string;
   observedAt: number;
@@ -268,6 +270,7 @@ export interface BrowserRuntimeStatus {
 export interface ReportBrowserRuntimeInput {
   profileId: string;
   authStatus: BrowserAuthStatus;
+  pageHealth: BrowserPageHealth;
   openTabs: number;
   extensionVersion: string;
   observedAt?: number;

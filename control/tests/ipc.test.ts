@@ -86,9 +86,9 @@ describe('browser runtime reporting', () => {
   it('allows the browser credential to report auth state without granting control mutations', () => {
     const { plane, router } = setup();
     const reported = router.handle({ id: 'report', method: 'browser.report', auth: { browserToken: 'browser-secret' }, params: {
-      profileId: 'gam-default', authStatus: 'authentication-required', openTabs: 1, extensionVersion: '0.4.0', observedAt: 100,
+      profileId: 'gam-default', authStatus: 'authentication-required', pageHealth: 'unknown', openTabs: 1, extensionVersion: '0.4.0', observedAt: 100,
     }});
-    expect(reported).toMatchObject({ ok: true, result: { authStatus: 'authentication-required', openTabs: 1 } });
+    expect(reported).toMatchObject({ ok: true, result: { authStatus: 'authentication-required', pageHealth: 'unknown', openTabs: 1 } });
     expect(plane.listBrowserRuntime()).toHaveLength(1);
     const denied = router.handle({ id: 'mutate', method: 'project.create', auth: { browserToken: 'browser-secret' }, params: { name: 'No', rootPath: 'E:/no' } });
     expect(denied).toMatchObject({ ok: false, error: { code: 'UNAUTHORIZED' } });
@@ -109,7 +109,7 @@ describe('browser runtime reporting', () => {
   it('rejects invalid browser reports and exposes status only to browser/admin credentials', () => {
     const { router } = setup();
     const bad = router.handle({ id: 'bad', method: 'browser.report', auth: { browserToken: 'browser-secret' }, params: {
-      profileId: 'gam-default', authStatus: 'logged-in', openTabs: 1, extensionVersion: '0.4.0', observedAt: 100,
+      profileId: 'gam-default', authStatus: 'logged-in', pageHealth: 'ready', openTabs: 1, extensionVersion: '0.4.0', observedAt: 100,
     }});
     expect(bad.ok).toBe(false);
     const listed = router.handle({ id: 'status', method: 'browser.status', auth: { browserToken: 'browser-secret' } });

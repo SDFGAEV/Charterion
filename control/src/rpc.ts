@@ -30,6 +30,7 @@ const LEASE_MODES = ['shared', 'exclusive'] as const;
 const ARTIFACT_KINDS = ['file','test-log','report','git-bundle','other'] as const;
 const REVIEW_VERDICTS = ['approve','request-changes'] as const;
 const BROWSER_AUTH_STATUSES = ['unknown','authenticated','authentication-required'] as const;
+const BROWSER_PAGE_HEALTHS = ['unknown','ready','generating','blocked','error','unavailable'] as const;
 const WORKER_REQUEST_TYPES = ['suggestion','blocker','question','resource-request','scope-change','dependency-request','cross-system-request','review-request','risk-alert','worker-request'] as const;
 
 function record(value: unknown, label = 'params'): Record<string, unknown> {
@@ -132,7 +133,7 @@ export class RpcRouter {
     switch (request.method) {
       case 'control.snapshot':
         this.requireBrowserOrAdmin(request);
-        const changeRequests = this.plane.changes.listChangeRequests().slice(-200); return { protocolVersion: 1, projects: this.plane.listProjects(), agents: this.plane.listAgentSlots(), resources: this.plane.listResources(), leases: this.plane.listLeases(), claims: this.plane.evidence.listClaims().slice(-200), artifacts: this.plane.evidence.listArtifacts().slice(-200), verifications: this.plane.evidence.listVerifications().slice(-200), changeRequests, reviews: changeRequests.flatMap((item) => this.plane.changes.listReviews(item.id)).slice(-200), mergeQueue: this.plane.changes.listQueue().slice(-200), workerRequests: this.plane.requests.list().slice(-200), browserRuntime: this.plane.listBrowserRuntime(), events: this.plane.listEvents(undefined, 0, 200) };
+        const changeRequests = this.plane.changes.listChangeRequests().slice(-200); return { protocolVersion: 2, projects: this.plane.listProjects(), agents: this.plane.listAgentSlots(), resources: this.plane.listResources(), leases: this.plane.listLeases(), claims: this.plane.evidence.listClaims().slice(-200), artifacts: this.plane.evidence.listArtifacts().slice(-200), verifications: this.plane.evidence.listVerifications().slice(-200), changeRequests, reviews: changeRequests.flatMap((item) => this.plane.changes.listReviews(item.id)).slice(-200), mergeQueue: this.plane.changes.listQueue().slice(-200), workerRequests: this.plane.requests.list().slice(-200), browserRuntime: this.plane.listBrowserRuntime(), events: this.plane.listEvents(undefined, 0, 200) };
       case 'browser.report': return this.browserReport(request, params);
       case 'browser.status': this.requireBrowserOrAdmin(request); return this.plane.listBrowserRuntime();
       case 'project.create': return this.projectCreate(request, params);
@@ -155,6 +156,7 @@ export class RpcRouter {
     return this.plane.reportBrowserRuntime({
       profileId: stringParam(params, 'profileId')!,
       authStatus: enumParam(params, 'authStatus', BROWSER_AUTH_STATUSES)!,
+      pageHealth: enumParam(params, 'pageHealth', BROWSER_PAGE_HEALTHS)!,
       openTabs: numberParam(params, 'openTabs')!,
       extensionVersion: stringParam(params, 'extensionVersion')!,
       ...(observedAt !== undefined ? { observedAt } : {}),

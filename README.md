@@ -8,7 +8,7 @@ GPT Agent Manager (GAM) coordinates multiple **ChatGPT web conversations** as pe
 
 It is intentionally focused on `chatgpt.com`: no OpenAI API key, no other model providers, and no hosted GAM backend.
 
-## v0.4 in one sentence
+## v0.5 in one sentence
 
 **One GAM Runtime, two operator surfaces:** a visual browser workflow for a human operator and a deterministic JSON/CLI workflow for an authorized agent operating the same projects through Remote tooling.
 
@@ -86,10 +86,11 @@ On first launch, GAM opens `chatgpt.com` in its dedicated Chromium profile. The 
 The extension reports only a coarse runtime observation to `gamd`:
 
 ```text
-authenticated | authentication-required | unknown
+AuthStatus:  authenticated | authentication-required | unknown
+PageHealth: ready | generating | blocked | error | unavailable | unknown
 ```
 
-plus open tab count, extension version, and observation time. If authentication expires, an agent-facing `GAM ... --json` call can report that human login is required, but GAM never attempts to enter credentials or bypass MFA/CAPTCHA.
+Authentication identity and page health are deliberately separate. `blocked` or `error` pages are never treated as authentication evidence, and unhealthy page state blocks fleet expansion until a healthy/fresh observation replaces it. Runtime reports also carry open tab count, extension version, and observation time. If authentication expires, an agent-facing `GAM ... --json` call can report that human login is required, but GAM never attempts to enter credentials or bypass MFA/CAPTCHA.
 ## Git / Change Request workflow
 
 For software projects, GAM follows a company-style Git workflow instead of treating a model reply as completion:
@@ -148,7 +149,7 @@ The browser plane still provides the v0.3 coordination features:
 - portable browser-state export/import;
 - opt-in Auto Supervisor.
 
-The local control plane augments these browser workflows; failure of `gamd` does not cause the extension to invent state or silently resend prompts.
+The local control plane augments these browser workflows; failure of `gamd` does not cause the extension to invent state or silently resend prompts. Manifest V3 reconciliation is event-driven with a `chrome.alarms` one-minute wakeup as a durability fallback; the service worker does not rely on `setInterval` remaining alive.
 
 ### Supervisor-managed Worker fleet
 
@@ -218,7 +219,7 @@ Every canonical `GAM_HOME` deterministically derives a 16-character `instanceId`
 
 `health` exposes the daemon instance identity, and every non-health production RPC carries the expected `instanceId`. A client that reaches a pipe owned by another GAM home fails closed with `INSTANCE_MISMATCH` before authentication or control dispatch. `GAM.cmd doctor --json` reports both `instanceId` and `pipeName` for diagnostics.
 
-The stable v0.4 extension identity is derived from the public `manifest.key` and is regression-checked during builds. No private signing key is stored in this repository.
+The stable extension identity is derived from the public `manifest.key` and is regression-checked during builds. No private signing key is stored in this repository.
 
 ### Browser selection
 
@@ -233,7 +234,7 @@ A dedicated profile is stored under `<GAM_HOME>\chrome-profile`.
 ## Security boundaries
 
 - Extension host permission remains exactly `https://chatgpt.com/*`.
-- Browser permissions remain `tabs`, `storage`, `sidePanel`, and `nativeMessaging`.
+- Browser permissions remain `tabs`, `storage`, `sidePanel`, `nativeMessaging`, and `alarms`. `alarms` is used only as the Manifest V3 reconciliation wakeup fallback.
 - Chromium Native Messaging calls are restricted to the pinned extension origin.
 - The Native Host holds only a browser token and exposes a small allowlist; it never holds the GAM admin token.
 - Worker capabilities are project/task/resource/lease scoped and stored in SQLite only by token hash.
@@ -269,8 +270,8 @@ npm run release
 Produces both:
 
 ```text
-release/gpt-agent-manager-v0.4.1.zip
-release/gpt-agent-manager-v0.4.1-windows-runtime.zip
+release/gpt-agent-manager-v0.5.0.zip
+release/gpt-agent-manager-v0.5.0-windows-runtime.zip
 ```
 
 with SHA256 sidecar files. The first archive is the browser-extension payload; the second contains the prebuilt extension, GAM launcher, `gamd`/`gamctl`, Native Host, and Windows runtime installer.

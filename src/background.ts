@@ -13,6 +13,7 @@ import { createPortableManagerState, parsePortableManagerState, stringifyPortabl
 import { recoverAttempt, type AttemptRecoveryObservation } from './recovery';
 import { readNativeControlSnapshot, reportNativeBrowserRuntime, reportNativeAgentBrowser } from './nativeControl';
 import { filterFleetTaskTabs, planFleetReconciliation, workerRequestMessage } from './fleet';
+import { deriveBrowserRuntimeObservation, pageHealthAllowsFleetExpansion } from './browserRuntime';
 import {
   EMPTY_BINDING,
   unavailableSnapshot,
@@ -559,16 +560,14 @@ async function focusTab(tabId: number): Promise<void> {
   await chrome.windows.update(tab.windowId, { focused: true });
 }
 
-const AUTHENTICATED_BROWSER_STATES = new Set(['idle', 'generating', 'blocked', 'error']);
 let browserReportTimer: number | undefined;
 
 async function reportBrowserRuntimeFromTabs(tabs: ManagedTab[]): Promise<void> {
-  const hasAuthenticated = tabs.some((tab) => AUTHENTICATED_BROWSER_STATES.has(tab.snapshot.status));
-  const hasUnauthorized = tabs.some((tab) => tab.snapshot.status === 'unauthorized');
-  const authStatus = hasAuthenticated ? 'authenticated' : hasUnauthorized ? 'authentication-required' : 'unknown';
+  const runtime = deriveBrowserRuntimeObservation(tabs.map((tab) => tab.snapshot.status));
   await reportNativeBrowserRuntime({
     profileId: 'gam-default',
-    authStatus,
+    authStatus: runtime.authStatus,
+    pageHealth: runtime.pageHealth,
     openTabs: tabs.length,
     extensionVersion: chrome.runtime.getManifest().version,
     observedAt: Date.now(),
@@ -646,14 +645,18 @@ async function reconcileAgentFleet(): Promise<void> {
     const mapping = await fleetTabMap();
     const actions = planFleetReconciliation(snapshot.agents, currentTabs, mapping);
     const latestRuntime = [...snapshot.browserRuntime].sort((a, b) => b.observedAt - a.observedAt)[0];
-    const authenticationRequired = currentTabs.some((tab) => tab.snapshot.status === 'unauthorized') || latestRuntime?.authStatus === 'authentication-required';
+    const currentRuntime = deriveBrowserRuntimeObservation(currentTabs.map((tab) => tab.snapshot.status));
+    const authenticationRequired = currentRuntime.authStatus === 'authentication-required' || latestRuntime?.authStatus === 'authentication-required';
+    const latestIsFresh = latestRuntime ? Date.now() - latestRuntime.observedAt <= 120_000 : false;
+    const currentPageAllowsExpansion = pageHealthAllowsFleetExpansion(currentRuntime.pageHealth);
+    const latestPageAllowsExpansion = !latestIsFresh || pageHealthAllowsFleetExpansion(latestRuntime?.pageHealth ?? 'unknown');
     const projects = new Map(snapshot.projects.map((project) => [project.id, project]));
     const agents = new Map(snapshot.agents.map((agent) => [agent.id, agent]));
     for (const action of actions) {
       const agent = agents.get(action.slotId); if (!agent) continue;
       const project = projects.get(agent.projectId); if (!project) continue;
       if (action.kind === 'open') {
-        if (authenticationRequired) continue;
+        if (authenticationRequired || !currentPageAllowsExpansion || !latestPageAllowsExpansion) continue;
         const tab = await chrome.tabs.create({ url: action.url, active: false });
         if (tab.id === undefined) throw new Error(`Chrome did not return a tab id for agent slot ${agent.id}`);
         mapping[agent.id] = tab.id; await saveFleetTabMap(mapping);
@@ -859,4 +862,16 @@ void reconcileAfterRestart().then(() => {
 }).catch(() => {
   // Recovery is fail-closed: unresolved attempts remain non-ready until inspected.
 });
-setInterval(() => scheduleFleetReconcile(0), 5000);
+const FLEET_RECONCILE_ALARM = 'gam:fleet-reconcile';
+async function ensureFleetReconcileAlarm(): Promise<void> {
+  const existing = await chrome.alarms.get(FLEET_RECONCILE_ALARM);
+  if (!existing) chrome.alarms.create(FLEET_RECONCILE_ALARM, { periodInMinutes: 1 });
+}
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name !== FLEET_RECONCILE_ALARM) return;
+  scheduleBrowserRuntimeReport();
+  scheduleFleetReconcile(0);
+});
+chrome.runtime.onInstalled.addListener(() => { void ensureFleetReconcileAlarm(); scheduleFleetReconcile(0); });
+chrome.runtime.onStartup.addListener(() => { void ensureFleetReconcileAlarm(); scheduleFleetReconcile(0); });
+void ensureFleetReconcileAlarm();

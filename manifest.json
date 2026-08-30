@@ -1,13 +1,14 @@
 {
   "manifest_version": 3,
   "name": "GPT Agent Manager",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "Coordinate multiple ChatGPT conversations from one local-first side panel.",
   "permissions": [
     "tabs",
     "storage",
     "sidePanel",
-    "nativeMessaging"
+    "nativeMessaging",
+    "alarms"
   ],
   "host_permissions": [
     "https://chatgpt.com/*"

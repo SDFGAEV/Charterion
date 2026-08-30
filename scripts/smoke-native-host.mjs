@@ -73,7 +73,7 @@ try {
     throw new Error('Native host did not return the expected project');
   }
   const reported = invokeNative({ id: 'browser-report', method: 'browser.report', params: {
-    profileId: 'gam-default', authStatus: 'authenticated', openTabs: 2, extensionVersion: packageVersion, observedAt: Date.now(),
+    profileId: 'gam-default', authStatus: 'authenticated', pageHealth: 'ready', openTabs: 2, extensionVersion: packageVersion, observedAt: Date.now(),
   }});
   if (!reported.ok || reported.result?.authStatus !== 'authenticated') throw new Error('Native host did not accept browser runtime report');
   const browserStatus = invokeNative({ id: 'browser-status', method: 'browser.status', params: {} });

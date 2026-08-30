@@ -548,22 +548,24 @@ export class ControlPlane {
   reportBrowserRuntime(input: ReportBrowserRuntimeInput, now = input.observedAt ?? Date.now()): BrowserRuntimeStatus {
     const profileId = nonEmpty(input.profileId, 'Browser profile id');
     if (!['unknown', 'authenticated', 'authentication-required'].includes(input.authStatus)) throw new Error('Browser auth status is invalid');
+    if (!['unknown','ready','generating','blocked','error','unavailable'].includes(input.pageHealth)) throw new Error('Browser page health is invalid');
     if (!Number.isInteger(input.openTabs) || input.openTabs < 0) throw new Error('Browser openTabs is invalid');
     const extensionVersion = nonEmpty(input.extensionVersion, 'Extension version');
     if (!Number.isInteger(now) || now <= 0) throw new Error('Browser observedAt is invalid');
     this.database.db.prepare(`
-      INSERT INTO browser_runtime(profile_id,auth_status,open_tabs,extension_version,observed_at)
-      VALUES(?,?,?,?,?)
-      ON CONFLICT(profile_id) DO UPDATE SET auth_status=excluded.auth_status,open_tabs=excluded.open_tabs,
+      INSERT INTO browser_runtime(profile_id,auth_status,page_health,open_tabs,extension_version,observed_at)
+      VALUES(?,?,?,?,?,?)
+      ON CONFLICT(profile_id) DO UPDATE SET auth_status=excluded.auth_status,page_health=excluded.page_health,open_tabs=excluded.open_tabs,
         extension_version=excluded.extension_version,observed_at=excluded.observed_at
-    `).run(profileId, input.authStatus, input.openTabs, extensionVersion, now);
-    return { profileId, authStatus: input.authStatus, openTabs: input.openTabs, extensionVersion, observedAt: now };
+    `).run(profileId, input.authStatus, input.pageHealth, input.openTabs, extensionVersion, now);
+    return { profileId, authStatus: input.authStatus, pageHealth: input.pageHealth, openTabs: input.openTabs, extensionVersion, observedAt: now };
   }
 
   listBrowserRuntime(): BrowserRuntimeStatus[] {
     const rows = this.database.db.prepare('SELECT * FROM browser_runtime ORDER BY profile_id').all() as Row[];
     return rows.map((row) => ({
       profileId: String(row.profile_id), authStatus: String(row.auth_status) as BrowserRuntimeStatus['authStatus'],
+      pageHealth: String(row.page_health) as BrowserRuntimeStatus['pageHealth'],
       openTabs: Number(row.open_tabs), extensionVersion: String(row.extension_version), observedAt: Number(row.observed_at),
     }));
   }

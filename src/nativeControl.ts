@@ -9,6 +9,7 @@ const CHANGE_STATUSES = new Set(['open','changes-requested','approved','queued',
 const REVIEW_VERDICTS = new Set(['approve','request-changes']);
 const QUEUE_STATUSES = new Set(['queued','validating','integrated','failed','cancelled']);
 const BROWSER_AUTH_STATUSES = new Set(['unknown','authenticated','authentication-required']);
+const BROWSER_PAGE_HEALTHS = new Set(['unknown','ready','generating','blocked','error','unavailable']);
 const WORKER_REQUEST_TYPES = new Set(['suggestion','blocker','question','resource-request','scope-change','dependency-request','cross-system-request','review-request','risk-alert','worker-request']);
 const WORKER_REQUEST_STATUSES = new Set(['open','accepted','rejected','resolved']);
 
@@ -83,6 +84,7 @@ export interface ControlMergeQueueView {
 export interface ControlBrowserRuntimeView {
   profileId: string;
   authStatus: 'unknown' | 'authenticated' | 'authentication-required';
+  pageHealth: 'unknown' | 'ready' | 'generating' | 'blocked' | 'error' | 'unavailable';
   openTabs: number;
   extensionVersion: string;
   observedAt: number;
@@ -91,6 +93,7 @@ export interface ControlBrowserRuntimeView {
 export interface BrowserRuntimeReportInput {
   profileId: string;
   authStatus: ControlBrowserRuntimeView['authStatus'];
+  pageHealth: ControlBrowserRuntimeView['pageHealth'];
   openTabs: number;
   extensionVersion: string;
   observedAt: number;
@@ -103,7 +106,7 @@ export interface ControlWorkerRequestView {
 }
 
 export interface NativeControlSnapshot {
-  protocolVersion: 1;
+  protocolVersion: 2;
   projects: ControlProjectView[];
   agents: ControlAgentView[];
   resources: ControlResourceView[];
@@ -151,7 +154,7 @@ function arrayField(value: unknown, label: string): unknown[] {
 
 export function parseNativeControlSnapshot(value: unknown): NativeControlSnapshot {
   const root = record(value, 'control snapshot');
-  if (root.protocolVersion !== 1) throw new Error('Unsupported control protocol version');
+  if (root.protocolVersion !== 2) throw new Error('Unsupported control protocol version');
   const projects = arrayField(root.projects, 'projects').map((entry, index) => {
     const item = record(entry, `projects[${index}]`);
     return {
@@ -241,6 +244,7 @@ export function parseNativeControlSnapshot(value: unknown): NativeControlSnapsho
     return {
       profileId: stringField(item.profileId, 'browser.profileId'),
       authStatus: enumField(item.authStatus, 'browser.authStatus', BROWSER_AUTH_STATUSES) as ControlBrowserRuntimeView['authStatus'],
+      pageHealth: enumField(item.pageHealth, 'browser.pageHealth', BROWSER_PAGE_HEALTHS) as ControlBrowserRuntimeView['pageHealth'],
       openTabs: numberField(item.openTabs, 'browser.openTabs'),
       extensionVersion: stringField(item.extensionVersion, 'browser.extensionVersion'),
       observedAt: numberField(item.observedAt, 'browser.observedAt'),
@@ -255,7 +259,7 @@ export function parseNativeControlSnapshot(value: unknown): NativeControlSnapsho
     if (item.projectId !== undefined) event.projectId = stringField(item.projectId, 'event.projectId');
     return event;
   });
-  return { protocolVersion: 1, projects, agents, resources, leases, changeRequests, reviews, mergeQueue, workerRequests, browserRuntime, events };
+  return { protocolVersion: 2, projects, agents, resources, leases, changeRequests, reviews, mergeQueue, workerRequests, browserRuntime, events };
 }
 
 export async function readNativeControlSnapshot(): Promise<NativeControlSnapshot> {

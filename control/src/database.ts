@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-export const CONTROL_SCHEMA_VERSION = 9;
+export const CONTROL_SCHEMA_VERSION = 10;
 
 export class ControlDatabase {
   readonly db: DatabaseSync;
@@ -52,6 +52,7 @@ export class ControlDatabase {
     if (version < 7) this.migrateV7();
     if (version < 8) this.migrateV8();
     if (version < 9) this.migrateV9();
+    if (version < 10) this.migrateV10();
     this.db.prepare(`
       INSERT INTO schema_meta(key, value) VALUES('schema_version', ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value
@@ -177,6 +178,7 @@ export class ControlDatabase {
         CREATE TABLE IF NOT EXISTS browser_runtime (
           profile_id TEXT PRIMARY KEY,
           auth_status TEXT NOT NULL CHECK(auth_status IN ('unknown','authenticated','authentication-required')),
+          page_health TEXT NOT NULL DEFAULT 'unknown' CHECK(page_health IN ('unknown','ready','generating','blocked','error','unavailable')),
           open_tabs INTEGER NOT NULL CHECK(open_tabs >= 0),
           extension_version TEXT NOT NULL,
           observed_at INTEGER NOT NULL
@@ -214,6 +216,14 @@ export class ControlDatabase {
       const columns = this.db.prepare('PRAGMA table_info(capabilities)').all();
       if (!columns.some((row) => row.name === 'agent_slot_id')) this.db.exec('ALTER TABLE capabilities ADD COLUMN agent_slot_id TEXT REFERENCES agent_slots(id) ON DELETE CASCADE;');
       this.db.exec('CREATE INDEX IF NOT EXISTS idx_capabilities_agent_slot ON capabilities(agent_slot_id, expires_at);');
+    });
+  }
+  private migrateV10(): void {
+    this.transaction(() => {
+      const columns = this.db.prepare('PRAGMA table_info(browser_runtime)').all();
+      if (!columns.some((row) => row.name === 'page_health')) {
+        this.db.exec("ALTER TABLE browser_runtime ADD COLUMN page_health TEXT NOT NULL DEFAULT 'unknown' CHECK(page_health IN ('unknown','ready','generating','blocked','error','unavailable'));");
+      }
     });
   }
   private createCoreTables(): void {

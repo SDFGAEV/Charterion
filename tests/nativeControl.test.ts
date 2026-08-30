@@ -3,7 +3,7 @@ import { parseNativeControlSnapshot } from '../src/nativeControl';
 
 function snapshot() {
   return {
-    protocolVersion: 1,
+    protocolVersion: 2,
     projects: [{ id: 'p', name: 'P', rootPath: 'E:/p', status: 'active', isolationTier: 'c1-container', minSlots: 1, maxSlots: 4, weight: 1 }],
     agents: [{ id: 'a', projectId: 'p', role: 'worker', status: 'assigned', desiredState: 'active', browserState: 'open', conversationKey: 'conversation:x', browserProfileId: 'gam-default', browserTabId: 7, browserObservedAt: 4, leaseEpoch: 2 }],
     resources: [{ id: 'r', projectId: 'p', kind: 'workspace', label: 'W', metadata: {} }],
@@ -12,7 +12,7 @@ function snapshot() {
     reviews: [{ id: 'rv', projectId: 'p', changeRequestId: 'cr', reviewerSubject: 'supervisor', headSha: 'b'.repeat(40), verdict: 'approve', body: 'ok', createdAt: 2 }],
     mergeQueue: [{ id: 'mq', projectId: 'p', changeRequestId: 'cr', headSha: 'b'.repeat(40), targetBranch: 'main', status: 'queued', queuedAt: 3, updatedAt: 3 }],
     workerRequests: [{ id: 'wr', projectId: 'p', taskId: 'T1', fromSubject: 'worker', type: 'suggestion', title: 'Split task', body: 'This should be parallelized', suggestedAction: 'spawn ROLE02', status: 'open', createdAt: 4, updatedAt: 4 }],
-    browserRuntime: [{ profileId: 'gam-default', authStatus: 'authenticated', openTabs: 3, extensionVersion: '0.4.0', observedAt: 4 }],
+    browserRuntime: [{ profileId: 'gam-default', authStatus: 'authenticated', pageHealth: 'ready', openTabs: 3, extensionVersion: '0.4.0', observedAt: 4 }],
     events: [{ seq: 1, projectId: 'p', type: 'PROJECT_CREATED', subject: 'p', payload: {}, createdAt: 1 }],
   };
 }
@@ -28,7 +28,7 @@ describe('native control snapshot parser', () => {
   });
 
   it('rejects unknown protocol versions and enum drift', () => {
-    expect(() => parseNativeControlSnapshot({ ...snapshot(), protocolVersion: 2 })).toThrow(/protocol/i);
+    expect(() => parseNativeControlSnapshot({ ...snapshot(), protocolVersion: 1 })).toThrow(/protocol/i);
     const bad = snapshot();
     bad.projects[0]!.status = 'mystery';
     expect(() => parseNativeControlSnapshot(bad)).toThrow(/project.status is invalid/);
