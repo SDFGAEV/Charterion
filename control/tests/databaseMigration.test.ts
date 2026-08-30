@@ -12,6 +12,8 @@ describe('control database migrations', () => {
     const legacy = new DatabaseSync(path);
     legacy.exec(`CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
       INSERT INTO schema_meta(key,value) VALUES('schema_version','9');
+      CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, root_path TEXT NOT NULL, status TEXT NOT NULL, isolation_tier TEXT NOT NULL, min_slots INTEGER NOT NULL, max_slots INTEGER NOT NULL, weight INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL) STRICT;
+      CREATE TABLE agent_slots (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, role TEXT NOT NULL, status TEXT NOT NULL, desired_state TEXT NOT NULL DEFAULT 'active', browser_state TEXT NOT NULL DEFAULT 'absent', conversation_key TEXT, browser_profile_id TEXT, browser_tab_id INTEGER, browser_error TEXT, browser_observed_at INTEGER, lease_epoch INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL) STRICT;
       CREATE TABLE browser_runtime (profile_id TEXT PRIMARY KEY,
         auth_status TEXT NOT NULL CHECK(auth_status IN ('unknown','authenticated','authentication-required')),
         open_tabs INTEGER NOT NULL CHECK(open_tabs >= 0), extension_version TEXT NOT NULL, observed_at INTEGER NOT NULL) STRICT;

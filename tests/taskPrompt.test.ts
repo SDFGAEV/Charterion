@@ -10,6 +10,7 @@ function dependency(id: string, output: string): ManagedTask {
   const t = task(id);
   const attempt: SendAttemptRecord = {
     attemptId: `attempt-${id}`, batchId: 'batch', tabId: 1, conversationKey: `conversation:${id}`,
+    contentEpoch: 'content-epoch',
     state: 'reply-observed', textLength: 1, baselineAssistantMessageCount: 0,
     replyMessageId: `message:${id}`, replyTextTail: output, createdAt: 1, updatedAt: 2,
   };

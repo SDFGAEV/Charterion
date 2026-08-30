@@ -1,14 +1,18 @@
 import type { AgentStatus, ChatSnapshot, ObservationConfidence } from './contracts';
 
+export const CHATGPT_ADAPTER_VERSION = '2026-08-30.2';
+
 const COMPOSER_SELECTORS = [
   'form[data-type="unified-composer"] #prompt-textarea[contenteditable="true"]',
   '#prompt-textarea[contenteditable="true"]',
   '#prompt-textarea',
+  'textarea#mobile-composer-prompt',
   '[data-testid="prompt-textarea"]',
   'textarea[placeholder*="Message"]',
 ];
 const SEND_BUTTON_SELECTORS = [
   'button[data-testid="send-button"]',
+  'button[data-composer-submit]',
   'button[aria-label="Send prompt"]',
   'button[aria-label="Send message"]',
   'button[aria-label*="Send"]',
@@ -31,6 +35,11 @@ const ACTIVITY_SELECTORS = [
 ];
 const ERROR_SELECTORS = ['.error-message', '[data-testid="error-message"]', '[role="alert"] .text-red-500'];
 const BLOCKED_SELECTORS = ['.cloudflare-challenge', '[data-testid="access-denied"]'];
+const AUTH_REQUIRED_SELECTORS = [
+  'button[data-mobile-auth-entry-action="login"]',
+  '#mobile-auth-email',
+  'input[name="login_hint"]',
+];
 
 export function extractConversationId(url: string): string | undefined {
   try {
@@ -121,6 +130,10 @@ export function observePageStatus(doc: Document, url: string): StatusObservation
   }
   if (path.includes('/auth/login') || path === '/login' || path.startsWith('/login/')) {
     return { status: 'unauthorized', confidence: 'direct', signals: ['login-route'], detail: 'ChatGPT login page detected' };
+  }
+  const authRequired = AUTH_REQUIRED_SELECTORS.map((selector) => doc.querySelector(selector)).find((element) => Boolean(element && isUsableElement(element)));
+  if (authRequired) {
+    return { status: 'unauthorized', confidence: 'direct', signals: ['login-ui'], detail: 'ChatGPT authentication UI detected' };
   }
   const error = ERROR_SELECTORS.map((selector) => doc.querySelector<HTMLElement>(selector)).find((element) => Boolean(element && isUsableElement(element)));
   if (error) {
@@ -214,12 +227,36 @@ export async function waitForSendButton(doc: Document, timeoutMs = 9000): Promis
   throw new Error('ChatGPT send button did not become available');
 }
 
-export async function sendPrompt(doc: Document, text: string): Promise<void> {
-  if (!text.trim()) throw new Error('Refusing to send an empty instruction');
+export type PromptSubmissionOutcome = 'proved-not-started' | 'uncertain';
+
+export class PromptSubmissionError extends Error {
+  constructor(message: string, readonly outcome: PromptSubmissionOutcome) {
+    super(message);
+    this.name = 'PromptSubmissionError';
+  }
+}
+
+export async function sendPrompt(doc: Document, text: string, acceptanceTimeoutMs = 7000): Promise<void> {
+  if (!text.trim()) throw new PromptSubmissionError('Refusing to send an empty instruction', 'proved-not-started');
   const composer = findComposer(doc);
-  if (!composer) throw new Error('ChatGPT composer is unavailable');
+  if (!composer) throw new PromptSubmissionError('ChatGPT composer is unavailable', 'proved-not-started');
+  const beforeUrl = doc.defaultView?.location.href ?? '';
+  const beforeAssistantCount = assistantMessages(doc).length;
   setComposerText(composer, text);
-  if (readComposerText(composer) !== text.trim()) throw new Error('ChatGPT editor did not accept the prompt text');
-  const button = await waitForSendButton(doc);
-  button.click();
+  if (readComposerText(composer) !== text.trim()) throw new PromptSubmissionError('ChatGPT editor did not accept the prompt text', 'proved-not-started');
+  let button: HTMLButtonElement;
+  try { button = await waitForSendButton(doc); }
+  catch (error) { throw new PromptSubmissionError(error instanceof Error ? error.message : String(error), 'proved-not-started'); }
+  try { button.click(); }
+  catch (error) { throw new PromptSubmissionError(error instanceof Error ? error.message : String(error), 'uncertain'); }
+  const deadline = Date.now() + acceptanceTimeoutMs;
+  while (Date.now() < deadline) {
+    const urlChanged = Boolean(beforeUrl && doc.defaultView?.location.href && doc.defaultView.location.href !== beforeUrl);
+    const composerCleared = readComposerText(composer) === '';
+    const generationStarted = isGenerating(doc);
+    const assistantAdvanced = assistantMessages(doc).length > beforeAssistantCount;
+    if (urlChanged || composerCleared || generationStarted || assistantAdvanced) return;
+    await new Promise((resolve) => setTimeout(resolve, 40));
+  }
+  throw new PromptSubmissionError('ChatGPT did not confirm prompt submission', 'uncertain');
 }

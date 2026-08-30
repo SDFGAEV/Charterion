@@ -161,3 +161,28 @@ describe('supervisor-managed agent fleet lifecycle', () => {
     expect(second.desiredState).toBe('active');
   });
 });
+
+describe('browser observation monotonicity', () => {
+  it('rejects stale AgentSlot and browser-runtime observations', () => {
+    const { plane } = harness();
+    const project = plane.createProject({ name: 'Observed', rootPath: 'E:/observed' }, 1);
+    const slot = plane.createAgentSlot(project.id, 'ROLE01', 2);
+    plane.reportAgentBrowser({
+      slotId: slot.id, profileId: 'gam-default', browserState: 'opening', tabId: 10,
+    }, 100);
+    expect(() => plane.reportAgentBrowser({
+      slotId: slot.id, profileId: 'gam-default', browserState: 'absent',
+    }, 99)).toThrow(/stale agent browser observation/i);
+    expect(plane.getAgentSlot(slot.id).browserState).toBe('opening');
+
+    plane.reportBrowserRuntime({
+      profileId: 'gam-default', authStatus: 'authenticated', pageHealth: 'ready',
+      openTabs: 1, extensionVersion: '0.5.0', observedAt: 200,
+    });
+    expect(() => plane.reportBrowserRuntime({
+      profileId: 'gam-default', authStatus: 'authentication-required', pageHealth: 'unknown',
+      openTabs: 0, extensionVersion: '0.5.0', observedAt: 199,
+    })).toThrow(/stale browser runtime observation/i);
+    expect(plane.listBrowserRuntime()[0]).toMatchObject({ authStatus: 'authenticated', observedAt: 200 });
+  });
+});

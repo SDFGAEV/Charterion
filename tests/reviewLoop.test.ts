@@ -22,6 +22,7 @@ function review(attemptIds = ['review-a1'], maxReviewRounds = 3): AgentTask {
 function attempt(id: string, taskId: string, reply: string): SendAttemptRecord {
   return {
     attemptId: id, batchId: 'batch', tabId: 1, conversationKey: `conversation:${taskId}`,
+    contentEpoch: 'content-epoch',
     taskId, state: 'reply-observed', textLength: 1, baselineAssistantMessageCount: 0,
     replyTextTail: reply, createdAt: 1, updatedAt: 2,
   };

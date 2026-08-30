@@ -13,10 +13,10 @@ const AUTHENTICATED_PAGE_STATES = new Set<AgentStatus>(['idle', 'generating']);
 export function deriveBrowserRuntimeObservation(statuses: readonly AgentStatus[]): BrowserRuntimeObservation {
   const authenticated = statuses.some((status) => AUTHENTICATED_PAGE_STATES.has(status));
   const authenticationRequired = statuses.some((status) => status === 'unauthorized');
-  const authStatus: BrowserAuthObservation = authenticated
-    ? 'authenticated'
-    : authenticationRequired
-      ? 'authentication-required'
+  const authStatus: BrowserAuthObservation = authenticationRequired
+    ? 'authentication-required'
+    : authenticated
+      ? 'authenticated'
       : 'unknown';
 
   let pageHealth: BrowserPageHealth = 'unknown';

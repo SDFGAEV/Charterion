@@ -7,6 +7,7 @@ import {
   observePageStatus,
   findSendButton,
   readComposerText,
+  sendPrompt,
   setComposerText,
   snapshotFromDocument,
   snapshotSemanticKey,
@@ -92,5 +93,16 @@ describe('ChatGPT page observation', () => {
       <button aria-label="发送消息"></button>`);
     expect(observePageStatus(dom.window.document, 'https://chatgpt.com/c/x').status).toBe('idle');
     expect(findSendButton(dom.window.document)).not.toBeNull();
+  });
+
+  it('requires observable submission evidence before acknowledging a prompt', async () => {
+    const accepted = new JSDOM(`<!doctype html><form><textarea id="prompt-textarea"></textarea><button type="submit" data-composer-submit></button></form>`, { url: 'https://chatgpt.com/' });
+    const acceptedComposer = accepted.window.document.querySelector<HTMLTextAreaElement>('#prompt-textarea')!;
+    accepted.window.document.querySelector('button')!.addEventListener('click', (event) => { event.preventDefault(); acceptedComposer.value = ''; });
+    await expect(sendPrompt(accepted.window.document, 'hello', 100)).resolves.toBeUndefined();
+
+    const rejected = new JSDOM(`<!doctype html><form><textarea id="prompt-textarea"></textarea><button type="submit" data-composer-submit></button></form>`, { url: 'https://chatgpt.com/' });
+    rejected.window.document.querySelector('button')!.addEventListener('click', (event) => event.preventDefault());
+    await expect(sendPrompt(rejected.window.document, 'hello', 80)).rejects.toThrow(/did not confirm prompt submission/i);
   });
 });

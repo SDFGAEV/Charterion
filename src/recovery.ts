@@ -19,6 +19,7 @@ const SEND_STALE_MS = 2 * 60 * 1000;
 
 function sameConversation(record: SendAttemptRecord, observation: AttemptRecoveryObservation): boolean {
   return record.tabId === observation.tabId &&
+    record.contentEpoch === observation.state.observation.contentEpoch &&
     record.conversationKey === observation.state.snapshot.conversationKey;
 }
 

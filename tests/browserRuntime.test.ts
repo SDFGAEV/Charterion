@@ -8,6 +8,7 @@ describe('browser runtime semantics', () => {
     expect(deriveBrowserRuntimeObservation(['blocked'])).toEqual({ authStatus: 'unknown', pageHealth: 'blocked' });
     expect(deriveBrowserRuntimeObservation(['error'])).toEqual({ authStatus: 'unknown', pageHealth: 'error' });
     expect(deriveBrowserRuntimeObservation(['unauthorized'])).toEqual({ authStatus: 'authentication-required', pageHealth: 'unknown' });
+    expect(deriveBrowserRuntimeObservation(['idle', 'unauthorized'])).toEqual({ authStatus: 'authentication-required', pageHealth: 'ready' });
   });
 
   it('expires stale auth/page evidence before fleet expansion decisions', () => {

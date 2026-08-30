@@ -14,12 +14,13 @@ export function agentConversationUrl(conversationKey?: string): string {
 }
 
 function tabForAgent(agent: ControlAgentView, tabs: readonly ManagedTab[], mappedTabId?: number): ManagedTab | undefined {
+  const owned = tabs.filter((tab) => tab.binding.agentSlotId === agent.id);
   if (mappedTabId !== undefined) {
-    const mapped = tabs.find((tab) => tab.tabId === mappedTabId);
+    const mapped = owned.find((tab) => tab.tabId === mappedTabId);
     if (mapped) return mapped;
   }
-  if (!agent.conversationKey) return undefined;
-  return tabs.find((tab) => tab.snapshot.conversationKey === agent.conversationKey);
+  if (owned.length === 1) return owned[0];
+  return undefined;
 }
 export function planFleetReconciliation(
   agents: readonly ControlAgentView[],
@@ -51,13 +52,13 @@ export function filterFleetTaskTabs(
   agents: readonly ControlAgentView[],
   mappedTabs: Readonly<Record<string, number>>,
 ): ManagedTab[] {
-  const blocked = new Set<number>();
+  const allowed = new Set<number>();
   for (const agent of agents) {
-    if (agent.desiredState === 'active') continue;
-    const mapped = mappedTabs[agent.id]; if (mapped !== undefined) blocked.add(mapped);
-    if (agent.conversationKey) for (const tab of tabs) if (tab.snapshot.conversationKey === agent.conversationKey) blocked.add(tab.tabId);
+    if (agent.desiredState !== 'active' || agent.browserQuarantined) continue;
+    const tab = tabForAgent(agent, tabs, mappedTabs[agent.id]);
+    if (tab) allowed.add(tab.tabId);
   }
-  return tabs.filter((tab) => !blocked.has(tab.tabId));
+  return tabs.filter((tab) => allowed.has(tab.tabId));
 }
 
 export function workerRequestMessage(

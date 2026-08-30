@@ -3,6 +3,7 @@ export type IsolationTier = 'c0-host' | 'c1-container' | 'c2-hypervisor' | 'c3-e
 export type AgentSlotStatus = 'idle' | 'assigned' | 'suspended' | 'retired';
 export type AgentDesiredState = 'active' | 'suspended' | 'retired';
 export type AgentBrowserState = 'absent' | 'opening' | 'open' | 'closing' | 'error';
+export type AgentPageStatus = 'idle' | 'generating' | 'blocked' | 'unauthorized' | 'error' | 'unknown' | 'unavailable';
 export type ResourceKind =
   | 'workspace'
   | 'repo'
@@ -42,6 +43,14 @@ export interface AgentSlot {
   browserTabId?: number;
   browserError?: string;
   browserObservedAt?: number;
+  browserLeaseId?: string;
+  browserLeaseEpoch?: number;
+  browserContentEpoch?: string;
+  browserObservationRevision?: number;
+  browserPageStatus?: AgentPageStatus;
+  browserRuntimeObservedAt?: number;
+  browserQuarantined: boolean;
+  browserQuarantineReason?: string;
   leaseEpoch: number;
   createdAt: number;
   updatedAt: number;
@@ -280,6 +289,24 @@ export interface ReportAgentBrowserInput {
   slotId: string; profileId: string; browserState: AgentBrowserState;
   tabId?: number; conversationKey?: string; error?: string; observedAt?: number;
 }
+
+export interface ReportAgentRuntimeInput {
+  slotId: string; profileId: string; tabId: number; contentEpoch: string; revision: number;
+  pageStatus: AgentPageStatus; semanticSignature: string; observedAt: number;
+}
+
+export type BrowserOperationState = 'planned' | 'dispatched' | 'settled';
+export type BrowserOperationOutcome = 'acknowledged' | 'reply-observed' | 'failed' | 'uncertain';
+export interface BrowserOperationRecord {
+  id: string; idempotencyKey: string; operation: string; projectId?: string; slotId?: string; conversationKey?: string;
+  tabId?: number; contentEpoch?: string; preconditionsHash: string; state: BrowserOperationState; outcome?: BrowserOperationOutcome;
+  evidence: Record<string, unknown>; plannedAt: number; dispatchedAt?: number; settledAt?: number; updatedAt: number;
+}
+export interface PlanBrowserOperationInput {
+  id: string; idempotencyKey: string; operation: string; projectId?: string; slotId?: string; conversationKey?: string;
+  tabId?: number; contentEpoch?: string; preconditionsHash: string; plannedAt?: number;
+}
+export interface RuntimeIncident { id: string; scope: string; severity: 'warning'|'error'|'critical'; code: string; subject: string; detail: Record<string, unknown>; createdAt: number; resolvedAt?: number; }
 
 export type WorkerRequestType =
   | 'suggestion' | 'blocker' | 'question' | 'resource-request' | 'scope-change'

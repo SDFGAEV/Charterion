@@ -31,6 +31,9 @@ const ARTIFACT_KINDS = ['file','test-log','report','git-bundle','other'] as cons
 const REVIEW_VERDICTS = ['approve','request-changes'] as const;
 const BROWSER_AUTH_STATUSES = ['unknown','authenticated','authentication-required'] as const;
 const BROWSER_PAGE_HEALTHS = ['unknown','ready','generating','blocked','error','unavailable'] as const;
+const AGENT_PAGE_STATUSES = ['idle','generating','blocked','unauthorized','error','unknown','unavailable'] as const;
+const BROWSER_OPERATION_OUTCOMES = ['acknowledged','reply-observed','failed','uncertain'] as const;
+const INCIDENT_SEVERITIES = ['warning','error','critical'] as const;
 const WORKER_REQUEST_TYPES = ['suggestion','blocker','question','resource-request','scope-change','dependency-request','cross-system-request','review-request','risk-alert','worker-request'] as const;
 
 function record(value: unknown, label = 'params'): Record<string, unknown> {
@@ -49,6 +52,12 @@ function numberParam(params: Record<string, unknown>, key: string, optional = fa
   if (value === undefined && optional) return undefined;
   if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error(`${key} must be a number`);
   return value;
+}
+
+function objectArrayParam(params: Record<string, unknown>, key: string): Record<string, unknown>[] {
+  const value = params[key];
+  if (!Array.isArray(value)) throw new Error(`${key} must be an array`);
+  return value.map((item, index) => record(item, `${key}[${index}]`));
 }
 
 function enumParam<T extends string>(params: Record<string, unknown>, key: string, allowed: readonly T[], optional = false): T | undefined {
@@ -147,6 +156,14 @@ export class RpcRouter {
       case 'agent.resume': return this.agentResume(request, params);
       case 'agent.retire': return this.agentRetire(request, params);
       case 'agent.browser-report': return this.agentBrowserReport(request, params);
+      case 'agent.runtime-report': return this.agentRuntimeReport(request, params);
+      case 'browser.operation-plan': return this.browserOperationPlan(request, params);
+      case 'browser.operation-dispatch': return this.browserOperationDispatch(request, params);
+      case 'browser.operation-settle': return this.browserOperationSettle(request, params);
+      case 'browser.operation-list': return this.browserOperationList(request, params);
+      case 'incident.report': return this.incidentReport(request, params);
+      case 'incident.list': return this.incidentList(request, params);
+      case 'incident.resolve': return this.incidentResolve(request, params);
       default: return this.dispatchResources(request, params);
     }
   }
@@ -263,9 +280,61 @@ export class RpcRouter {
       case 'request.decide': return this.requestDecide(request, params);
       case 'request.resolve': return this.requestResolve(request, params);
       case 'events.list': return this.eventsList(request, params);
+      case 'work.snapshot': return this.workSnapshot(request);
+      case 'work.replace': return this.workReplace(request, params);
       default: throw new Error(`Unknown RPC method ${request.method}`);
     }
   }
+  private agentRuntimeReport(request: RpcRequest, params: Record<string, unknown>): unknown {
+    this.requireBrowser(request);
+    return this.plane.reportAgentRuntime({
+      slotId: stringParam(params, 'slotId')!, profileId: stringParam(params, 'profileId')!, tabId: numberParam(params, 'tabId')!,
+      contentEpoch: stringParam(params, 'contentEpoch')!, revision: numberParam(params, 'revision')!,
+      pageStatus: enumParam(params, 'pageStatus', AGENT_PAGE_STATUSES)!, semanticSignature: stringParam(params, 'semanticSignature')!,
+      observedAt: numberParam(params, 'observedAt')!,
+    });
+  }
+
+  private browserOperationPlan(request: RpcRequest, params: Record<string, unknown>): unknown {
+    this.requireBrowser(request);
+    const projectId = stringParam(params, 'projectId', true); const slotId = stringParam(params, 'slotId', true);
+    const conversationKey = stringParam(params, 'conversationKey', true); const tabId = numberParam(params, 'tabId', true);
+    const contentEpoch = stringParam(params, 'contentEpoch', true); const plannedAt = numberParam(params, 'plannedAt', true);
+    return this.plane.browser.planOperation({
+      id: stringParam(params, 'id')!, idempotencyKey: stringParam(params, 'idempotencyKey')!, operation: stringParam(params, 'operation')!,
+      preconditionsHash: stringParam(params, 'preconditionsHash')!,
+      ...(projectId !== undefined ? { projectId } : {}), ...(slotId !== undefined ? { slotId } : {}),
+      ...(conversationKey !== undefined ? { conversationKey } : {}), ...(tabId !== undefined ? { tabId } : {}),
+      ...(contentEpoch !== undefined ? { contentEpoch } : {}), ...(plannedAt !== undefined ? { plannedAt } : {}),
+    });
+  }
+
+  private browserOperationDispatch(request: RpcRequest, params: Record<string, unknown>): unknown {
+    this.requireBrowser(request); return this.plane.browser.dispatchOperation(stringParam(params, 'id')!, numberParam(params, 'dispatchedAt', true) ?? Date.now());
+  }
+
+  private browserOperationSettle(request: RpcRequest, params: Record<string, unknown>): unknown {
+    this.requireBrowser(request);
+    return this.plane.browser.settleOperation(stringParam(params, 'id')!, enumParam(params, 'outcome', BROWSER_OPERATION_OUTCOMES)!, record(params.evidence ?? {}, 'evidence'), numberParam(params, 'settledAt', true) ?? Date.now());
+  }
+
+  private browserOperationList(request: RpcRequest, params: Record<string, unknown>): unknown {
+    this.requireBrowserOrAdmin(request); return this.plane.browser.listOperations(stringParam(params, 'slotId', true));
+  }
+
+  private incidentReport(request: RpcRequest, params: Record<string, unknown>): unknown {
+    this.requireBrowser(request);
+    return this.plane.browser.reportIncident({ scope: stringParam(params, 'scope')!, severity: enumParam(params, 'severity', INCIDENT_SEVERITIES)!, code: stringParam(params, 'code')!, subject: stringParam(params, 'subject')!, detail: record(params.detail ?? {}, 'detail') });
+  }
+
+  private incidentList(request: RpcRequest, params: Record<string, unknown>): unknown {
+    this.requireBrowserOrAdmin(request); return this.plane.browser.listIncidents(params.openOnly === true);
+  }
+
+  private incidentResolve(request: RpcRequest, params: Record<string, unknown>): unknown {
+    this.requireAdmin(request); return this.plane.browser.resolveIncident(stringParam(params, 'id')!);
+  }
+
   private resourceDeclare(request: RpcRequest, params: Record<string, unknown>): unknown {
     this.requireAdmin(request);
     const input: {
@@ -555,6 +624,22 @@ export class RpcRouter {
     const current = this.plane.requests.get(stringParam(params, 'requestId')!); const supervisorSubject = stringParam(params, 'supervisorSubject')!;
     if (request.auth?.adminToken) this.requireAdmin(request); else { const grant = this.requireCapability(request, 'request:review', { projectId: current.projectId }); if (grant.subject !== supervisorSubject) throw new Error('Capability subject does not match Supervisor'); }
     return this.plane.requests.resolve(current.id, supervisorSubject, stringParam(params, 'note', true) ?? '');
+  }
+
+  private workSnapshot(request: RpcRequest): unknown {
+    this.requireBrowserOrAdmin(request);
+    return this.plane.work.snapshot();
+  }
+
+  private workReplace(request: RpcRequest, params: Record<string, unknown>): unknown {
+    this.requireBrowser(request);
+    return this.plane.work.replace({
+      expectedRevision: numberParam(params, 'expectedRevision')!,
+      transportGeneration: stringParam(params, 'transportGeneration')!, transportSequence: numberParam(params, 'transportSequence')!, transportMessageId: stringParam(params, 'transportMessageId')!,
+      tasks: objectArrayParam(params, 'tasks'),
+      attempts: objectArrayParam(params, 'attempts'),
+      messages: objectArrayParam(params, 'messages'),
+    });
   }
 
   private eventsList(request: RpcRequest, params: Record<string, unknown>): unknown {

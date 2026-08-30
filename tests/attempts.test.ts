@@ -8,6 +8,7 @@ function record(state: SendAttemptRecord['state']): SendAttemptRecord {
     batchId: 'b1',
     tabId: 1,
     conversationKey: 'conversation:c1',
+    contentEpoch: 'content-epoch',
     state,
     textLength: 10,
     baselineAssistantMessageCount: 3,

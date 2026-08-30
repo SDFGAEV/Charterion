@@ -5,6 +5,7 @@ import type { AgentMessage, AgentTask, SendAttemptRecord } from '../src/contract
 function attempt(id: string, link?: 'task' | 'message'): SendAttemptRecord {
   const value: SendAttemptRecord = {
     attemptId: id, batchId: 'b', tabId: 1, conversationKey: `conversation:${id}`,
+    contentEpoch: 'content-epoch',
     state: 'reply-observed', textLength: 1, baselineAssistantMessageCount: 0, createdAt: 1, updatedAt: 1,
   };
   if (link === 'task') value.taskId = 'task';

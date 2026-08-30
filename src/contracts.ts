@@ -24,10 +24,19 @@ export interface ChatSnapshot {
   observedAt: number;
 }
 
+export interface ContentObservationIdentity {
+  contentEpoch: string;
+  revision: number;
+  semanticSignature: string;
+  observedAt: number;
+}
+
 export interface RoleBinding {
   role: string;
   project: string;
   notes: string;
+  /** Kernel AgentSlot identity. Runtime delivery addresses must not stand in for this identity. */
+  agentSlotId?: string;
 }
 
 export interface ManagedTab {
@@ -46,8 +55,10 @@ export interface SendAttemptRecord {
   batchId: string;
   tabId: number;
   conversationKey: string;
+  contentEpoch: string;
   taskId?: string;
   messageId?: string;
+  retryOfAttemptId?: string;
   state: SendAttemptState;
   textLength: number;
   baselineAssistantMessageCount: number;
@@ -70,12 +81,14 @@ export interface SendResult {
 
 export interface PendingPromptEvidence {
   attemptId: string;
+  contentEpoch: string;
   baselineAssistantMessageCount: number;
   baselineAssistantMessageId?: string;
   startedAt: number;
 }
 
 export interface ContentRecoveryState {
+  observation: ContentObservationIdentity;
   snapshot: ChatSnapshot;
   deliveredAttemptIds: string[];
   pendingAttempt?: PendingPromptEvidence;
@@ -207,12 +220,14 @@ export interface TaskDispatchResult {
   error?: string;
 }
 
+export type PortableSendAttemptRecord = Omit<SendAttemptRecord, 'contentEpoch'>;
+
 export interface PortableManagerState {
-  schemaVersion: 2;
+  schemaVersion: 3;
   exportedAt: number;
   bindings: Record<string, RoleBinding>;
   tasks: AgentTask[];
-  attempts: SendAttemptRecord[];
+  attempts: PortableSendAttemptRecord[];
   messages: AgentMessage[];
   supervisorEnabled: boolean;
 }
@@ -220,7 +235,7 @@ export interface PortableManagerState {
 export type ContentRequest =
   | { type: 'content:get-snapshot' }
   | { type: 'content:get-recovery-state' }
-  | { type: 'content:send'; text: string; attemptId: string };
+  | { type: 'content:send'; text: string; attemptId: string; expectedContentEpoch: string };
 
 export type ManagerRequest =
   | { type: 'manager:list' }
@@ -242,8 +257,8 @@ export type ManagerRequest =
   | { type: 'manager:focus'; tabId: number };
 
 export type RuntimeNotice =
-  | { type: 'content:changed'; snapshot: ChatSnapshot }
-  | { type: 'content:reply-observed'; attemptId: string; snapshot: ChatSnapshot }
+  | { type: 'content:changed'; observation: ContentObservationIdentity; snapshot: ChatSnapshot }
+  | { type: 'content:reply-observed'; attemptId: string; observation: ContentObservationIdentity; snapshot: ChatSnapshot }
   | { type: 'manager:changed' };
 
 export const EMPTY_BINDING: RoleBinding = Object.freeze({ role: '', project: '', notes: '' });

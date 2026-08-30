@@ -6,6 +6,7 @@ function attempt(state: SendAttemptRecord['state']): SendAttemptRecord {
   return {
     attemptId: 'attempt-1', batchId: 'batch-1', tabId: 7,
     conversationKey: 'conversation:c1', state, textLength: 5,
+    contentEpoch: 'content-epoch',
     baselineAssistantMessageCount: 2, baselineAssistantMessageId: 'message:m2',
     createdAt: 1000, updatedAt: 1000,
   };
@@ -21,13 +22,15 @@ function snapshot(): ChatSnapshot {
 }
 
 function observation(options: { delivered?: boolean; pending?: boolean; startedAt?: number } = {}): AttemptRecoveryObservation {
+  const snap = snapshot();
   const state: AttemptRecoveryObservation['state'] = {
-    snapshot: snapshot(),
+    observation: { contentEpoch: 'content-epoch', revision: 1, semanticSignature: 'sig-1', observedAt: snap.observedAt },
+    snapshot: snap,
     deliveredAttemptIds: options.delivered === false ? [] : ['attempt-1'],
   };
   if (options.pending !== false) {
     state.pendingAttempt = {
-      attemptId: 'attempt-1', baselineAssistantMessageCount: 2,
+      attemptId: 'attempt-1', contentEpoch: 'content-epoch', baselineAssistantMessageCount: 2,
       baselineAssistantMessageId: 'message:m2', startedAt: options.startedAt ?? 1500,
     };
   }
@@ -59,6 +62,12 @@ describe('restart attempt recovery', () => {
   it('keeps acknowledged only while the exact reply-correlation baseline survives', () => {
     expect(recoverAttempt(attempt('acknowledged'), observation())).toEqual({ attemptId: 'attempt-1' });
     expect(recoverAttempt(attempt('acknowledged'), observation({ pending: false })).nextState).toBe('uncertain');
+  });
+
+  it('rejects evidence from a different content runtime generation', () => {
+    const wrongEpoch = observation();
+    wrongEpoch.state.observation = { ...wrongEpoch.state.observation, contentEpoch: 'content-epoch-new' };
+    expect(recoverAttempt(attempt('acknowledged'), wrongEpoch).nextState).toBe('uncertain');
   });
 
   it('rejects evidence from another tab or conversation', () => {

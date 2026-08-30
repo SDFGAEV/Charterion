@@ -55,5 +55,18 @@ try {
       Set-Item -Path $RegistryPath -Value $RegistryBackup[$RegistryPath]
     }
   }
-  if (Test-Path $SmokeRoot) { Remove-Item -Recurse -Force $SmokeRoot }
+  if (Test-Path $SmokeRoot) {
+    $CleanupError = $null
+    for ($Attempt = 1; $Attempt -le 20; $Attempt++) {
+      try {
+        Remove-Item -Recurse -Force -ErrorAction Stop $SmokeRoot
+        $CleanupError = $null
+        break
+      } catch {
+        $CleanupError = $_
+        Start-Sleep -Milliseconds 250
+      }
+    }
+    if (Test-Path $SmokeRoot) { throw $CleanupError }
+  }
 }

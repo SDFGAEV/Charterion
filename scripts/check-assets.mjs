@@ -40,6 +40,12 @@ if (manifest.background?.service_worker !== 'dist/background.js') {
 const backgroundSource = await readFile(resolve(root, 'src/background.ts'), 'utf8');
 if (backgroundSource.includes('setInterval(')) throw new Error('MV3 background must not use setInterval as a persistent scheduler');
 if (!backgroundSource.includes('chrome.alarms.onAlarm')) throw new Error('MV3 background must retain chrome.alarms reconciliation wakeups');
+if (!backgroundSource.includes('await deliverWorkerRequestMessages(snapshot);\n    // Fleet bindings may become usable only after the content event that triggered this reconcile.\n    // Give Auto Supervisor a second scheduling opportunity against the reconciled binding state.\n    kickSupervisor();')) {
+  throw new Error('Fleet reconciliation must re-kick Auto Supervisor after bindings converge');
+}
+if (!backgroundSource.includes("if (!expansionAllowed) {\n          if (agent.browserState !== 'absent')")) {
+  throw new Error('Authentication/health gates must clear stale AgentSlot browser observations before suppressing fleet expansion');
+}
 if (manifest.side_panel?.default_path !== 'dist/sidepanel.html') {
   throw new Error('side panel path changed unexpectedly');
 }

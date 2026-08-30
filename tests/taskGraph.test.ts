@@ -24,6 +24,7 @@ function attempt(id: string, state: SendAttemptRecord['state']): SendAttemptReco
     batchId: 'batch',
     tabId: 1,
     conversationKey: 'conversation:c1',
+    contentEpoch: 'content-epoch',
     state,
     textLength: 5,
     baselineAssistantMessageCount: 1,

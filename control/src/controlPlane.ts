@@ -4,6 +4,8 @@ import { ControlDatabase } from './database';
 import { EvidenceAuthority } from './evidenceAuthority';
 import { ChangeRequestAuthority } from './changeRequestAuthority';
 import { RequestAuthority } from './requestAuthority';
+import { WorkAuthority } from './workAuthority';
+import { BrowserAuthority } from './browserAuthority';
 import type {
   AcquireLeaseInput,
   AgentSlot,
@@ -22,6 +24,7 @@ import type {
   AgentDesiredState,
   AgentBrowserState,
   ReportAgentBrowserInput,
+  ReportAgentRuntimeInput,
 } from './contracts';
 
 type Row = Record<string, string | number | null>;
@@ -63,6 +66,7 @@ function agentFrom(row: Row): AgentSlot {
     status: String(row.status) as AgentSlot['status'],
     desiredState: String(row.desired_state) as AgentSlot['desiredState'],
     browserState: String(row.browser_state) as AgentSlot['browserState'],
+    browserQuarantined: Number(row.browser_quarantined ?? 0) === 1,
     leaseEpoch: Number(row.lease_epoch),
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
@@ -72,6 +76,13 @@ function agentFrom(row: Row): AgentSlot {
   if (row.browser_tab_id !== null) value.browserTabId = Number(row.browser_tab_id);
   if (row.browser_error !== null) value.browserError = String(row.browser_error);
   if (row.browser_observed_at !== null) value.browserObservedAt = Number(row.browser_observed_at);
+  if (row.browser_lease_id !== null && row.browser_lease_id !== undefined) value.browserLeaseId = String(row.browser_lease_id);
+  if (row.browser_lease_epoch !== null && row.browser_lease_epoch !== undefined) value.browserLeaseEpoch = Number(row.browser_lease_epoch);
+  if (row.browser_content_epoch !== null && row.browser_content_epoch !== undefined) value.browserContentEpoch = String(row.browser_content_epoch);
+  if (row.browser_observation_revision !== null && row.browser_observation_revision !== undefined) value.browserObservationRevision = Number(row.browser_observation_revision);
+  if (row.browser_page_status !== null && row.browser_page_status !== undefined) value.browserPageStatus = String(row.browser_page_status) as NonNullable<AgentSlot['browserPageStatus']>;
+  if (row.browser_runtime_observed_at !== null && row.browser_runtime_observed_at !== undefined) value.browserRuntimeObservedAt = Number(row.browser_runtime_observed_at);
+  if (row.browser_quarantine_reason !== null && row.browser_quarantine_reason !== undefined) value.browserQuarantineReason = String(row.browser_quarantine_reason);
   return value;
 }
 
@@ -132,10 +143,14 @@ export class ControlPlane {
   readonly evidence: EvidenceAuthority;
   readonly changes: ChangeRequestAuthority;
   readonly requests: RequestAuthority;
+  readonly work: WorkAuthority;
+  readonly browser: BrowserAuthority;
   constructor(readonly database: ControlDatabase, gitPath = 'git') {
     this.evidence = new EvidenceAuthority(database, gitPath);
     this.changes = new ChangeRequestAuthority(database, gitPath);
     this.requests = new RequestAuthority(database);
+    this.work = new WorkAuthority(database);
+    this.browser = new BrowserAuthority(database);
   }
 
   private event(projectId: string | undefined, type: string, subject: string, payload: Record<string, unknown>, now: number): void {
@@ -306,6 +321,7 @@ export class ControlPlane {
     if (!Number.isInteger(now) || now <= 0) throw new Error('Agent browser observedAt is invalid');
     return this.database.transaction(() => {
       const slot = this.getAgentSlot(input.slotId);
+      if (slot.browserObservedAt !== undefined && now < slot.browserObservedAt) throw new Error('Stale agent browser observation');
       if (['opening','open'].includes(input.browserState) && slot.desiredState !== 'active') throw new Error('Browser cannot open a non-active agent slot');
       let conversationKey = slot.conversationKey;
       let nextEpoch = slot.leaseEpoch;
@@ -319,23 +335,45 @@ export class ControlPlane {
       }
       let status = slot.desiredState === 'active' ? (conversationKey ? 'assigned' : 'idle') : slot.status;
       const finalizingStop = input.browserState === 'absent' && slot.desiredState !== 'active' && slot.status !== slot.desiredState;
+      const tabId = input.browserState === 'absent' ? null : input.tabId ?? slot.browserTabId ?? null;
+      if (['opening','open'].includes(input.browserState) && tabId === null) throw new Error('Opening/open browser state requires tabId');
+
+      let browserLeaseId = slot.browserLeaseId ?? null;
+      let browserLeaseEpoch = slot.browserLeaseEpoch ?? null;
+      const addressChanged = tabId !== null && slot.browserTabId !== undefined && slot.browserTabId !== tabId;
+      if (slot.browserLeaseId && (input.browserState === 'absent' || addressChanged)) {
+        this.browser.releaseOccupancy(slot, now); browserLeaseId = null; browserLeaseEpoch = null;
+      }
+      if (tabId !== null && input.browserState !== 'absent') {
+        const occupancy = this.browser.ensureOccupancy(slot, profileId, tabId, now);
+        browserLeaseId = occupancy.id; browserLeaseEpoch = occupancy.epoch;
+      }
+      if (input.browserState === 'absent') this.browser.settleUnfinishedForSlot(slot.id, 'browser-tab-absent', now);
       if (finalizingStop) {
         this.fenceAgentAuthority(slot.id, slot.projectId, now);
-        nextEpoch += 1;
-        status = slot.desiredState === 'retired' ? 'retired' : 'suspended';
+        nextEpoch += 1; status = slot.desiredState === 'retired' ? 'retired' : 'suspended';
       }
-      const tabId = input.browserState === 'absent' ? null : input.tabId ?? slot.browserTabId ?? null;
       const error = input.browserState === 'error' ? nonEmpty(input.error ?? 'Browser runtime reported an error', 'Browser error') : null;
-      this.database.db.prepare(`UPDATE agent_slots SET conversation_key=?,status=?,browser_state=?,browser_profile_id=?,browser_tab_id=?,browser_error=?,browser_observed_at=?,lease_epoch=?,updated_at=? WHERE id=?`)
-        .run(conversationKey ?? null, status, input.browserState, profileId, tabId, error, now, nextEpoch, now, slot.id);
+      const clearRuntime = input.browserState === 'absent';
+      this.database.db.prepare(`UPDATE agent_slots SET conversation_key=?,status=?,browser_state=?,browser_profile_id=?,browser_tab_id=?,browser_error=?,browser_observed_at=?,
+        browser_lease_id=?,browser_lease_epoch=?,browser_content_epoch=?,browser_observation_revision=?,browser_page_status=?,browser_runtime_observed_at=?,browser_quarantined=?,browser_quarantine_reason=?,lease_epoch=?,updated_at=? WHERE id=?`)
+        .run(conversationKey ?? null, status, input.browserState, profileId, tabId, error, now, browserLeaseId, browserLeaseEpoch,
+          clearRuntime ? null : slot.browserContentEpoch ?? null, clearRuntime ? null : slot.browserObservationRevision ?? null, clearRuntime ? null : slot.browserPageStatus ?? null,
+          clearRuntime ? null : slot.browserRuntimeObservedAt ?? null, clearRuntime ? 0 : slot.browserQuarantined ? 1 : 0, clearRuntime ? null : slot.browserQuarantineReason ?? null, nextEpoch, now, slot.id);
       const next = this.getAgentSlot(slot.id);
-      if (finalizingStop) {
-        this.event(slot.projectId, slot.desiredState === 'retired' ? 'AGENT_SLOT_RETIRED' : 'AGENT_SLOT_SUSPENDED', slot.id, { conversationKey: next.conversationKey ?? null, finalized: true }, now);
-      }
-      if (slot.browserState !== next.browserState || slot.browserTabId !== next.browserTabId || slot.conversationKey !== next.conversationKey) {
-        this.event(slot.projectId, 'AGENT_BROWSER_OBSERVED', slot.id, { browserState: next.browserState, tabId: next.browserTabId ?? null, conversationKey: next.conversationKey ?? null }, now);
+      if (finalizingStop) this.event(slot.projectId, slot.desiredState === 'retired' ? 'AGENT_SLOT_RETIRED' : 'AGENT_SLOT_SUSPENDED', slot.id, { conversationKey: next.conversationKey ?? null, finalized: true }, now);
+      if (slot.browserState !== next.browserState || slot.browserTabId !== next.browserTabId || slot.conversationKey !== next.conversationKey || slot.browserLeaseId !== next.browserLeaseId) {
+        this.event(slot.projectId, 'AGENT_BROWSER_OBSERVED', slot.id, { browserState: next.browserState, tabId: next.browserTabId ?? null, conversationKey: next.conversationKey ?? null, browserLeaseId: next.browserLeaseId ?? null, browserLeaseEpoch: next.browserLeaseEpoch ?? null }, now);
       }
       return next;
+    });
+  }
+
+  reportAgentRuntime(input: ReportAgentRuntimeInput): AgentSlot {
+    return this.database.transaction(() => {
+      const slot = this.getAgentSlot(input.slotId);
+      this.browser.reportRuntime(slot, input);
+      return this.getAgentSlot(slot.id);
     });
   }
 
@@ -552,6 +590,8 @@ export class ControlPlane {
     if (!Number.isInteger(input.openTabs) || input.openTabs < 0) throw new Error('Browser openTabs is invalid');
     const extensionVersion = nonEmpty(input.extensionVersion, 'Extension version');
     if (!Number.isInteger(now) || now <= 0) throw new Error('Browser observedAt is invalid');
+    const current = this.database.db.prepare('SELECT observed_at FROM browser_runtime WHERE profile_id=?').get(profileId) as { observed_at?: number } | undefined;
+    if (current?.observed_at !== undefined && now < Number(current.observed_at)) throw new Error('Stale browser runtime observation');
     this.database.db.prepare(`
       INSERT INTO browser_runtime(profile_id,auth_status,page_health,open_tabs,extension_version,observed_at)
       VALUES(?,?,?,?,?,?)

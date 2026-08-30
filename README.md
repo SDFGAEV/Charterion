@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Chrome MV3](https://img.shields.io/badge/Chromium-Manifest%20V3-4285F4)](manifest.json)
-[![Version](https://img.shields.io/badge/version-0.4.1-blue.svg)](manifest.json)
+[![Version](https://img.shields.io/badge/version-0.5.0-blue.svg)](manifest.json)
 
 GPT Agent Manager (GAM) coordinates multiple **ChatGPT web conversations** as persistent, role-bound agents and adds a local durable control plane for projects, Git work, reviews, resources, and recovery.
 
@@ -90,7 +90,7 @@ AuthStatus:  authenticated | authentication-required | unknown
 PageHealth: ready | generating | blocked | error | unavailable | unknown
 ```
 
-Authentication identity and page health are deliberately separate. `blocked` or `error` pages are never treated as authentication evidence, and unhealthy page state blocks fleet expansion until a healthy/fresh observation replaces it. Runtime reports also carry open tab count, extension version, and observation time. If authentication expires, an agent-facing `GAM ... --json` call can report that human login is required, but GAM never attempts to enter credentials or bypass MFA/CAPTCHA.
+Authentication identity and page health are deliberately separate. Visible login/signup UI takes precedence over composer readiness, so an anonymous or expired-session composer is reported as `authentication-required`. `blocked` or `error` pages are never treated as authentication evidence, and unhealthy page state blocks fleet expansion until a healthy/fresh observation replaces it. Runtime reports also carry open tab count, extension version, and observation time. If authentication expires, an agent-facing `GAM ... --json` call can report that human login is required, but GAM never attempts to enter credentials or bypass MFA/CAPTCHA.
 ## Git / Change Request workflow
 
 For software projects, GAM follows a company-style Git workflow instead of treating a model reply as completion:
@@ -145,6 +145,7 @@ The browser plane still provides the v0.3 coordination features:
 - durable semantic message bus with exact-role and project-broadcast routing;
 - frozen recipient identities so later-opened conversations never receive stale broadcasts;
 - send-attempt ledger and crash recovery;
+- prompt delivery is acknowledged only after observable submission evidence (for example composer clear, generation start, URL transition, or assistant progress), not merely after `button.click()`;
 - fail-closed handling of ambiguous tabs and `uncertain` delivery;
 - portable browser-state export/import;
 - opt-in Auto Supervisor.
