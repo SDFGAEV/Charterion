@@ -52,6 +52,11 @@ Worker GPT        Supervisor GPT          GAM Kernel
 ```
 
 Worker autonomy is intentionally high inside the task and resource scope it owns. Authority remains narrow: a worker cannot approve itself, a Supervisor cannot forge machine evidence, and neither can silently mutate protected integration state.
+
+### Self-hosting safety
+
+GAM can develop GAM as a **Parent GAM -> isolated Candidate GAM** workflow. The Candidate must use distinct repository, `GAM_HOME`, SQLite database, named pipe, and browser profile identities; its `GAM_HOME` must also live outside the Parent `GAM_HOME` so child state cannot overwrite parent authority. Promotion is evidence-gated: Candidate changes are promoted only after committed work and objective Kernel verification bind the exact revision to the required evidence.
+
 ## Human and agent operation
 
 ### Human mode
