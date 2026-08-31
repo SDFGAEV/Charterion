@@ -33,7 +33,7 @@ describe('evidence authority', () => {
       projectId: setup.project.id, taskId: setup.taskId, subject: setup.holder,
       resourceId: setup.resource.id, leaseEpoch: setup.lease.epoch, summary: 'done',
     }, 20);
-    expect(CONTROL_SCHEMA_VERSION).toBe(12);
+    expect(CONTROL_SCHEMA_VERSION).toBe(13);
     expect(claim.leaseId).toBe(setup.lease.id);
     expect(() => h.plane.evidence.submitClaim({
       projectId: setup.project.id, taskId: setup.taskId, subject: 'other',

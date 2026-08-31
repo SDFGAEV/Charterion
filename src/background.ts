@@ -11,8 +11,9 @@ import { parseReviewResult } from './review';
 import { assertMessageDeliveryAvailable, buildSemanticMessagePrompt, createAgentMessage, planMessageDispatch } from './messageBus';
 import { createPortableManagerState, parsePortableManagerState, restorePortableAttempts, stringifyPortableManagerState } from './stateTransfer';
 import { recoverAttempt, type AttemptRecoveryObservation } from './recovery';
-import { dispatchNativeBrowserOperation, planNativeBrowserOperation, readNativeControlSnapshot, readNativeWorkSnapshot, replaceNativeWorkState, reportNativeAgentBrowser, reportNativeBrowserRuntime, settleNativeBrowserOperation } from './nativeControl';
+import { beginNativeAgentRollover, dispatchNativeBrowserOperation, planNativeBrowserOperation, readNativeControlSnapshot, readNativeWorkSnapshot, replaceNativeWorkState, reportNativeAgentBrowser, reportNativeBrowserRuntime, settleNativeBrowserOperation } from './nativeControl';
 import { filterFleetTaskTabs, planFleetReconciliation, workerRequestMessage } from './fleet';
+import { bootstrapPendingConversationRollover, bootstrapReplyAttemptId, completeConversationRolloverForReply, requestAutomaticConversationRollover } from './conversationRollover';
 import { deriveBrowserRuntimeObservation, fleetExpansionAllowed } from './browserRuntime';
 import { CoalescingRunner } from './coalescingRunner';
 import { TabOperationQueue } from './tabOperationQueue';
@@ -47,9 +48,7 @@ const FLEET_TABS_KEY = 'fleetTabs.v1';
 const CONTROL_REQUEST_MESSAGE_PREFIX = 'control-request:';
 let stateMutationTail: Promise<void> = Promise.resolve();
 const tabOperations = new TabOperationQueue();
-
 const contentRuntimeFence = new ContentRuntimeFence();
-
 async function localBindings(): Promise<Record<string, RoleBinding>> {
   const stored = await chrome.storage.local.get(BINDINGS_KEY);
   return (stored[BINDINGS_KEY] as Record<string, RoleBinding> | undefined) ?? {};
@@ -76,7 +75,6 @@ async function fleetTabMap(): Promise<Record<string, number>> {
 async function saveFleetTabMap(value: Record<string, number>): Promise<void> {
   await chrome.storage.session.set({ [FLEET_TABS_KEY]: value });
 }
-
 interface WorkState {
   revision: number;
   attempts: SendAttemptRecord[];
@@ -145,7 +143,6 @@ async function markReplyObserved(attemptId: string, contentEpoch: string, snapsh
   }
   return persisted;
 }
-
 async function reconcileAfterRestart(): Promise<void> {
   const state = await workState();
   const active = state.attempts.filter((attempt) =>
@@ -157,6 +154,7 @@ async function reconcileAfterRestart(): Promise<void> {
   const observations = (await Promise.all(tabs.map(recoveryStateForTab))).filter(
     (value): value is AttemptRecoveryObservation => value !== undefined,
   );
+  const control = await readNativeControlSnapshot().catch(() => undefined); if (control) for (const observation of observations) { const key = control.agents.find((agent) => agent.browserTabId === observation.tabId)?.conversationKey; if (key) observation.authoritativeConversationKey = key; }
   const byTab = new Map(observations.map((observation) => [observation.tabId, observation]));
 
   await serializeStateMutation(async () => {
@@ -711,6 +709,10 @@ async function reconcileAgentFleetOnce(): Promise<void> {
           await reportNativeAgentBrowser({ slotId: agent.id, profileId: 'gam-default', browserState: 'absent', observedAt: Date.now() });
           throw error;
         }
+      } else if (action.kind === 'rollover-start') {
+        await beginNativeAgentRollover(agent.id, action.rolloverId); scheduleFleetReconcile(0);
+      } else if (action.kind === 'rollover-close') {
+        await tabOperations.run(action.tabId, async () => { await beginNativeAgentRollover(agent.id, action.rolloverId); await reportNativeAgentBrowser({ slotId: agent.id, profileId: 'gam-default', browserState: 'closing', tabId: action.tabId, observedAt: Date.now() }); await clearFleetBinding(agent.conversationKey, action.tabId); try { await chrome.tabs.remove(action.tabId); } catch {} delete mapping[agent.id]; await saveFleetTabMap(mapping); await reportNativeAgentBrowser({ slotId: agent.id, profileId: 'gam-default', browserState: 'absent', observedAt: Date.now() }); });
       } else if (action.kind === 'close') {
         await tabOperations.run(action.tabId, async () => {
         await reportNativeAgentBrowser({ slotId: agent.id, profileId: 'gam-default', browserState: 'closing', tabId: action.tabId, observedAt: Date.now() });
@@ -756,7 +758,7 @@ chrome.runtime.onMessage.addListener((message: ManagerRequest | RuntimeNotice, s
     const tabId = sender.tab?.id;
     if (tabId === undefined || !contentRuntimeFence.observe(tabId, message.observation)) return false;
     void reportSlotRuntime(tabId, message.observation, message.snapshot, bindingFor)
-      .then(() => scheduleFleetReconcile(0))
+      .then(async (binding) => { scheduleFleetReconcile(0); await requestAutomaticConversationRollover(tabId, binding, message.snapshot); await bootstrapPendingConversationRollover(tabId, binding, message.snapshot, (id, text) => dispatchToTab(id, text, crypto.randomUUID())); const bootstrapAttempt = await bootstrapReplyAttemptId(binding, message.snapshot); if (bootstrapAttempt) { const persisted = await markReplyObserved(bootstrapAttempt, message.observation.contentEpoch, message.snapshot, tabId); if (persisted) await completeConversationRolloverForReply(binding, bootstrapAttempt); } })
       .catch((error) => reportIncident('agent-runtime-report-failed', String(tabId), { error: error instanceof Error ? error.message : String(error), contentEpoch: message.observation.contentEpoch }));
     void notifyManagerChanged();
     scheduleBrowserRuntimeReport();
@@ -771,7 +773,7 @@ chrome.runtime.onMessage.addListener((message: ManagerRequest | RuntimeNotice, s
       return false;
     }
     void reportSlotRuntime(tabId, message.observation, message.snapshot, bindingFor)
-      .then(() => markReplyObserved(message.attemptId, message.observation.contentEpoch, message.snapshot, tabId))
+      .then(async (binding) => { const persisted = await markReplyObserved(message.attemptId, message.observation.contentEpoch, message.snapshot, tabId); if (persisted) await completeConversationRolloverForReply(binding, message.attemptId); return persisted; })
       .then(async (persisted) => {
         if (persisted) {
           await notifyManagerChanged();

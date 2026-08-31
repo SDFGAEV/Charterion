@@ -4,6 +4,8 @@ import type { ControlAgentView, ControlWorkerRequestView } from './nativeControl
 export type FleetAction =
   | { kind: 'open'; slotId: string; url: string }
   | { kind: 'close'; slotId: string; tabId: number }
+  | { kind: 'rollover-start'; slotId: string; rolloverId: string }
+  | { kind: 'rollover-close'; slotId: string; rolloverId: string; tabId: number }
   | { kind: 'report-open'; slotId: string; tabId: number; conversationKey?: string }
   | { kind: 'report-absent'; slotId: string };
 
@@ -43,6 +45,13 @@ export function planFleetReconciliation(
   const actions: FleetAction[] = [];
   for (const agent of agents) {
     const tab = reconciliationTabForAgent(agent, tabs, mappedTabs[agent.id]);
+    if (agent.desiredState === 'active' && agent.rolloverState === 'requested') {
+      if (!agent.activeRolloverId) throw new Error(`AgentSlot ${agent.id} requested rollover without an id`);
+      if (tab && tab.snapshot.status !== 'generating') actions.push({ kind: 'rollover-close', slotId: agent.id, rolloverId: agent.activeRolloverId, tabId: tab.tabId });
+      else if (!tab && agent.browserState === 'absent') actions.push({ kind: 'rollover-start', slotId: agent.id, rolloverId: agent.activeRolloverId });
+      else if (!tab && agent.browserState !== 'absent') actions.push({ kind: 'report-absent', slotId: agent.id });
+      continue;
+    }
     if (agent.desiredState === 'active') {
       if (!tab) {
         const reservedTabId = mappedTabs[agent.id] ?? agent.browserTabId;
@@ -71,7 +80,7 @@ export function filterFleetTaskTabs(
 ): ManagedTab[] {
   const allowed = new Set<number>();
   for (const agent of agents) {
-    if (agent.desiredState !== 'active' || agent.browserQuarantined) continue;
+    if (agent.desiredState !== 'active' || agent.browserQuarantined || agent.rolloverState !== 'idle') continue;
     const tab = ownedTabForAgent(agent, tabs, mappedTabs[agent.id]);
     if (tab) allowed.add(tab.tabId);
   }

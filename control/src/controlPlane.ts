@@ -6,6 +6,7 @@ import { ChangeRequestAuthority } from './changeRequestAuthority';
 import { RequestAuthority } from './requestAuthority';
 import { WorkAuthority } from './workAuthority';
 import { BrowserAuthority } from './browserAuthority';
+import { ConversationAuthority } from './conversationAuthority';
 import type {
   AcquireLeaseInput,
   AgentSlot,
@@ -75,12 +76,15 @@ function agentFrom(row: Row): AgentSlot {
     status: String(row.status) as AgentSlot['status'],
     desiredState: String(row.desired_state) as AgentSlot['desiredState'],
     browserState: String(row.browser_state) as AgentSlot['browserState'],
+    conversationGeneration: Number(row.conversation_generation ?? 0),
+    rolloverState: String(row.rollover_state ?? 'idle') as AgentSlot['rolloverState'],
     browserQuarantined: Number(row.browser_quarantined ?? 0) === 1,
     leaseEpoch: Number(row.lease_epoch),
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
   };
   if (row.conversation_key !== null) value.conversationKey = String(row.conversation_key);
+  if (row.active_rollover_id !== null && row.active_rollover_id !== undefined) value.activeRolloverId = String(row.active_rollover_id);
   if (row.browser_profile_id !== null) value.browserProfileId = String(row.browser_profile_id);
   if (row.browser_tab_id !== null) value.browserTabId = Number(row.browser_tab_id);
   if (row.browser_error !== null) value.browserError = String(row.browser_error);
@@ -154,12 +158,14 @@ export class ControlPlane {
   readonly requests: RequestAuthority;
   readonly work: WorkAuthority;
   readonly browser: BrowserAuthority;
+  readonly conversations: ConversationAuthority;
   constructor(readonly database: ControlDatabase, gitPath = 'git') {
     this.evidence = new EvidenceAuthority(database, gitPath);
     this.changes = new ChangeRequestAuthority(database, gitPath);
     this.requests = new RequestAuthority(database);
     this.work = new WorkAuthority(database);
     this.browser = new BrowserAuthority(database);
+    this.conversations = new ConversationAuthority(database);
   }
 
   private event(projectId: string | undefined, type: string, subject: string, payload: Record<string, unknown>, now: number): void {
@@ -248,17 +254,43 @@ export class ControlPlane {
       const project = this.requireProject(slot.projectId);
       if (project.status === 'archived') throw new Error('Cannot bind an agent in an archived project');
       if (slot.desiredState !== 'active') throw new Error('Cannot bind a non-active agent slot');
-      const conflict = this.database.db.prepare(`
-        SELECT id FROM agent_slots WHERE project_id = ? AND conversation_key = ? AND id <> ?
-      `).get(slot.projectId, key, slotId) as { id?: string } | undefined;
+      if (slot.rolloverState !== 'idle') throw new Error('Cannot bind a conversation while rollover is active');
+      if (slot.conversationKey === key) return slot;
+      if (slot.conversationKey) throw new Error('Replacing a durable conversation requires an AgentSlot rollover');
+      const conflict = this.database.db.prepare('SELECT id FROM agent_slots WHERE project_id=? AND conversation_key=? AND id<>?').get(slot.projectId, key, slotId) as { id?: string } | undefined;
       if (conflict?.id) throw new Error(`Conversation ${key} is already bound inside project ${slot.projectId}`);
+      const generation = this.conversations.recordCanonical(slot, key, now);
       const nextEpoch = slot.leaseEpoch + 1;
-      this.database.db.prepare(`
-        UPDATE agent_slots SET conversation_key = ?, status = 'assigned', lease_epoch = ?, updated_at = ? WHERE id = ?
-      `).run(key, nextEpoch, now, slotId);
-      this.event(slot.projectId, 'AGENT_CONVERSATION_BOUND', slotId, { conversationKey: key, epoch: nextEpoch }, now);
+      this.database.db.prepare("UPDATE agent_slots SET conversation_key=?,conversation_generation=?,status='assigned',lease_epoch=?,updated_at=? WHERE id=?")
+        .run(key, generation, nextEpoch, now, slotId);
+      this.event(slot.projectId, 'AGENT_CONVERSATION_BOUND', slotId, { conversationKey: key, generation, epoch: nextEpoch }, now);
       return this.getAgentSlot(slotId);
     });
+  }
+
+  requestAgentConversationRollover(slotId: string, reason: string, handoffText: string, state: Record<string, unknown>, now = Date.now()) {
+    const slot = this.getAgentSlot(slotId); const project = this.requireProject(slot.projectId);
+    if (project.status !== 'active' || slot.desiredState !== 'active') throw new Error('Conversation rollover requires an active project and AgentSlot');
+    return this.conversations.request(slot, reason, handoffText, state, now);
+  }
+
+  beginAgentConversationRollover(slotId: string, rolloverId: string, now = Date.now()) {
+    const slot = this.getAgentSlot(slotId);
+    if (slot.desiredState !== 'active') throw new Error('Conversation rollover requires an active AgentSlot');
+    if (slot.browserPageStatus === 'generating') throw new Error('Cannot roll over a generating ChatGPT page');
+    return this.conversations.begin(slot, rolloverId, now);
+  }
+
+  markAgentRolloverBootstrap(slotId: string, rolloverId: string, attemptId: string, now = Date.now()) {
+    return this.conversations.markBootstrap(this.getAgentSlot(slotId), rolloverId, attemptId, now);
+  }
+
+  completeAgentConversationRollover(slotId: string, attemptId: string, now = Date.now()) {
+    return this.conversations.complete(this.getAgentSlot(slotId), attemptId, now);
+  }
+
+  failAgentConversationRollover(slotId: string, error: string, now = Date.now()) {
+    return this.conversations.fail(this.getAgentSlot(slotId), error, now);
   }
 
   private fenceAgentAuthority(slotId: string, projectId: string, now: number): void {
@@ -333,13 +365,17 @@ export class ControlPlane {
       if (slot.browserObservedAt !== undefined && now < slot.browserObservedAt) throw new Error('Stale agent browser observation');
       if (['opening','open'].includes(input.browserState) && slot.desiredState !== 'active') throw new Error('Browser cannot open a non-active agent slot');
       let conversationKey = slot.conversationKey;
+      let conversationGeneration = slot.conversationGeneration;
       let nextEpoch = slot.leaseEpoch;
       if (input.conversationKey) {
         const key = canonicalConversationKey(input.conversationKey);
         if (conversationKey && conversationKey !== key) throw new Error('Browser cannot rebind an agent slot to a different durable conversation');
         const conflict = this.database.db.prepare('SELECT id FROM agent_slots WHERE project_id=? AND conversation_key=? AND id<>?').get(slot.projectId, key, slot.id) as { id?: string } | undefined;
         if (conflict?.id) throw new Error(`Conversation ${key} is already bound inside project ${slot.projectId}`);
-        if (!conversationKey) { conversationKey = key; nextEpoch += 1; }
+        if (!conversationKey) {
+          const accepted = this.conversations.acceptCanonical(slot, key, now);
+          conversationKey = key; conversationGeneration = accepted.generation; nextEpoch += 1;
+        }
       }
       let status = slot.desiredState === 'active' ? (conversationKey ? 'assigned' : 'idle') : slot.status;
       const finalizingStop = input.browserState === 'absent' && slot.desiredState !== 'active' && slot.status !== slot.desiredState;
@@ -363,9 +399,9 @@ export class ControlPlane {
       }
       const error = input.browserState === 'error' ? nonEmpty(input.error ?? 'Browser runtime reported an error', 'Browser error') : null;
       const clearRuntime = input.browserState === 'absent';
-      this.database.db.prepare(`UPDATE agent_slots SET conversation_key=?,status=?,browser_state=?,browser_profile_id=?,browser_tab_id=?,browser_error=?,browser_observed_at=?,
+      this.database.db.prepare(`UPDATE agent_slots SET conversation_key=?,conversation_generation=?,status=?,browser_state=?,browser_profile_id=?,browser_tab_id=?,browser_error=?,browser_observed_at=?,
         browser_lease_id=?,browser_lease_epoch=?,browser_content_epoch=?,browser_observation_revision=?,browser_page_status=?,browser_runtime_observed_at=?,browser_quarantined=?,browser_quarantine_reason=?,lease_epoch=?,updated_at=? WHERE id=?`)
-        .run(conversationKey ?? null, status, input.browserState, profileId, tabId, error, now, browserLeaseId, browserLeaseEpoch,
+        .run(conversationKey ?? null, conversationGeneration, status, input.browserState, profileId, tabId, error, now, browserLeaseId, browserLeaseEpoch,
           clearRuntime ? null : slot.browserContentEpoch ?? null, clearRuntime ? null : slot.browserObservationRevision ?? null, clearRuntime ? null : slot.browserPageStatus ?? null,
           clearRuntime ? null : slot.browserRuntimeObservedAt ?? null, clearRuntime ? 0 : slot.browserQuarantined ? 1 : 0, clearRuntime ? null : slot.browserQuarantineReason ?? null, nextEpoch, now, slot.id);
       const next = this.getAgentSlot(slot.id);

@@ -3,6 +3,7 @@ export type IsolationTier = 'c0-host' | 'c1-container' | 'c2-hypervisor' | 'c3-e
 export type AgentSlotStatus = 'idle' | 'assigned' | 'suspended' | 'retired';
 export type AgentDesiredState = 'active' | 'suspended' | 'retired';
 export type AgentBrowserState = 'absent' | 'opening' | 'open' | 'closing' | 'error';
+export type AgentRolloverState = 'idle' | 'requested' | 'opening' | 'bootstrapping';
 export type AgentPageStatus = 'idle' | 'generating' | 'blocked' | 'unauthorized' | 'error' | 'unknown' | 'unavailable';
 export type ResourceKind =
   | 'workspace'
@@ -39,6 +40,9 @@ export interface AgentSlot {
   desiredState: AgentDesiredState;
   browserState: AgentBrowserState;
   conversationKey?: string;
+  conversationGeneration: number;
+  rolloverState: AgentRolloverState;
+  activeRolloverId?: string;
   browserProfileId?: string;
   browserTabId?: number;
   browserError?: string;
@@ -55,6 +59,12 @@ export interface AgentSlot {
   createdAt: number;
   updatedAt: number;
 }
+
+export type ConversationLifecycleStatus = 'active' | 'closed';
+export type ConversationRolloverStatus = 'requested' | 'opening' | 'bootstrapping' | 'completed' | 'failed';
+export interface AgentConversationRecord { id: string; projectId: string; slotId: string; generation: number; conversationKey: string; status: ConversationLifecycleStatus; predecessorConversationKey?: string; startedAt: number; endedAt?: number; closeReason?: string; }
+export interface WorkerCheckpoint { id: string; projectId: string; slotId: string; reason: string; handoffText: string; state: Record<string, unknown>; createdAt: number; }
+export interface AgentConversationRollover { id: string; projectId: string; slotId: string; fromConversationKey: string; toConversationKey?: string; fromGeneration: number; toGeneration: number; checkpointId: string; status: ConversationRolloverStatus; reason: string; bootstrapAttemptId?: string; error?: string; requestedAt: number; updatedAt: number; completedAt?: number; }
 
 export interface ResourceRecord {
   id: string;

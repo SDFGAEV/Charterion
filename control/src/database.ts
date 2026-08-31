@@ -2,7 +2,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-export const CONTROL_SCHEMA_VERSION = 12;
+export const CONTROL_SCHEMA_VERSION = 13;
 
 export class ControlDatabase {
   readonly db: DatabaseSync;
@@ -80,6 +80,7 @@ export class ControlDatabase {
     if (version < 10) this.migrateV10();
     if (version < 11) this.migrateV11();
     if (version < 12) this.migrateV12();
+    if (version < 13) this.migrateV13();
     this.db.prepare(`
       INSERT INTO schema_meta(key, value) VALUES('schema_version', ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value
@@ -271,6 +272,44 @@ export class ControlDatabase {
       add('browser_quarantine_reason', 'ALTER TABLE agent_slots ADD COLUMN browser_quarantine_reason TEXT;');
       this.createBrowserAuthorityTables();
     });
+  }
+
+  private migrateV13(): void {
+    this.transaction(() => {
+      const columns = this.db.prepare('PRAGMA table_info(agent_slots)').all();
+      const add = (name: string, sql: string): void => { if (!columns.some((row) => row.name === name)) this.db.exec(sql); };
+      add('conversation_generation', 'ALTER TABLE agent_slots ADD COLUMN conversation_generation INTEGER NOT NULL DEFAULT 0 CHECK(conversation_generation >= 0);');
+      add('rollover_state', "ALTER TABLE agent_slots ADD COLUMN rollover_state TEXT NOT NULL DEFAULT 'idle' CHECK(rollover_state IN ('idle','requested','opening','bootstrapping'));");
+      add('active_rollover_id', 'ALTER TABLE agent_slots ADD COLUMN active_rollover_id TEXT;');
+      this.createConversationContinuityTables();
+      this.db.exec("UPDATE agent_slots SET conversation_generation=1 WHERE conversation_key IS NOT NULL AND conversation_generation=0;");
+      this.db.exec("INSERT OR IGNORE INTO agent_conversations(id,project_id,slot_id,generation,conversation_key,status,predecessor_conversation_key,started_at,ended_at,close_reason) SELECT 'legacy:'||id,project_id,id,conversation_generation,conversation_key,'active',NULL,updated_at,NULL,NULL FROM agent_slots WHERE conversation_key IS NOT NULL;");
+    });
+  }
+
+  private createConversationContinuityTables(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS agent_conversations (
+        id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, slot_id TEXT NOT NULL REFERENCES agent_slots(id) ON DELETE CASCADE,
+        generation INTEGER NOT NULL CHECK(generation > 0), conversation_key TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('active','closed')),
+        predecessor_conversation_key TEXT, started_at INTEGER NOT NULL, ended_at INTEGER, close_reason TEXT,
+        UNIQUE(slot_id,generation), UNIQUE(project_id,conversation_key)
+      ) STRICT;
+      CREATE INDEX IF NOT EXISTS idx_agent_conversations_slot ON agent_conversations(slot_id,generation);
+      CREATE TABLE IF NOT EXISTS worker_checkpoints (
+        id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, slot_id TEXT NOT NULL REFERENCES agent_slots(id) ON DELETE CASCADE,
+        reason TEXT NOT NULL, handoff_text TEXT NOT NULL, state_json TEXT NOT NULL, created_at INTEGER NOT NULL
+      ) STRICT;
+      CREATE INDEX IF NOT EXISTS idx_worker_checkpoints_slot ON worker_checkpoints(slot_id,created_at);
+      CREATE TABLE IF NOT EXISTS agent_rollovers (
+        id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, slot_id TEXT NOT NULL REFERENCES agent_slots(id) ON DELETE CASCADE,
+        from_conversation_key TEXT NOT NULL, to_conversation_key TEXT, from_generation INTEGER NOT NULL CHECK(from_generation > 0), to_generation INTEGER NOT NULL CHECK(to_generation > from_generation),
+        checkpoint_id TEXT NOT NULL REFERENCES worker_checkpoints(id) ON DELETE RESTRICT, status TEXT NOT NULL CHECK(status IN ('requested','opening','bootstrapping','completed','failed')),
+        reason TEXT NOT NULL, bootstrap_attempt_id TEXT, error TEXT, requested_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, completed_at INTEGER
+      ) STRICT;
+      CREATE INDEX IF NOT EXISTS idx_agent_rollovers_slot ON agent_rollovers(slot_id,requested_at);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_rollovers_active ON agent_rollovers(slot_id) WHERE status IN ('requested','opening','bootstrapping');
+    `);
   }
 
   private createBrowserAuthorityTables(): void {

@@ -26,4 +26,27 @@ describe('control database migrations', () => {
     expect(Number(version.value)).toBe(CONTROL_SCHEMA_VERSION);
     database.close(); rmSync(dir, { recursive: true, force: true });
   });
+
+  it('migrates v12 AgentSlots into v13 conversation lineage without losing the active conversation', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'gam-db-v12-'));
+    const path = join(dir, 'global.db');
+    const legacy = new DatabaseSync(path);
+    legacy.exec(`CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
+      INSERT INTO schema_meta(key,value) VALUES('schema_version','12');
+      CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, root_path TEXT NOT NULL, status TEXT NOT NULL, isolation_tier TEXT NOT NULL, min_slots INTEGER NOT NULL, max_slots INTEGER NOT NULL, weight INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL) STRICT;
+      CREATE TABLE agent_slots (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, role TEXT NOT NULL, status TEXT NOT NULL, desired_state TEXT NOT NULL DEFAULT 'active', browser_state TEXT NOT NULL DEFAULT 'absent', conversation_key TEXT, browser_profile_id TEXT, browser_tab_id INTEGER, browser_error TEXT, browser_observed_at INTEGER, lease_epoch INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, browser_lease_id TEXT, browser_lease_epoch INTEGER, browser_content_epoch TEXT, browser_observation_revision INTEGER, browser_page_status TEXT, browser_runtime_observed_at INTEGER, browser_quarantined INTEGER NOT NULL DEFAULT 0, browser_quarantine_reason TEXT) STRICT;
+      INSERT INTO projects VALUES('p','Legacy','E:/legacy','active','c0-host',0,1,1,1,1);
+      INSERT INTO agent_slots(id,project_id,role,status,desired_state,browser_state,conversation_key,lease_epoch,created_at,updated_at,browser_quarantined) VALUES('slot-1','p','ROLE01','assigned','active','absent','conversation:legacy',4,2,20,0);`);
+    legacy.close();
+
+    const database = new ControlDatabase(path);
+    const slot = database.db.prepare('SELECT conversation_key,conversation_generation,rollover_state,active_rollover_id FROM agent_slots WHERE id=?').get('slot-1') as Record<string, unknown>;
+    const lineage = database.db.prepare('SELECT * FROM agent_conversations WHERE slot_id=?').all('slot-1') as Record<string, unknown>[];
+    const version = database.db.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get() as { value: string };
+    expect(slot).toMatchObject({ conversation_key: 'conversation:legacy', conversation_generation: 1, rollover_state: 'idle', active_rollover_id: null });
+    expect(lineage).toHaveLength(1);
+    expect(lineage[0]).toMatchObject({ id: 'legacy:slot-1', generation: 1, conversation_key: 'conversation:legacy', status: 'active' });
+    expect(Number(version.value)).toBe(13);
+    database.close(); rmSync(dir, { recursive: true, force: true });
+  });
 });

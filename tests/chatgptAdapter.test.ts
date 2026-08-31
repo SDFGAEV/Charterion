@@ -51,6 +51,18 @@ describe('ChatGPT page observation', () => {
     expect(observePageStatus(dom.window.document, 'https://chatgpt.com/c/live').status).toBe('generating');
   });
 
+  it('detects conversation exhaustion only on direct error surfaces', () => {
+    const exhausted = new JSDOM('<!doctype html><title>ChatGPT</title><div role="alert">This conversation has reached the maximum length. Start a new chat to continue.</div><textarea id="prompt-textarea"></textarea>');
+    const observed = observePageStatus(exhausted.window.document, 'https://chatgpt.com/c/full');
+    expect(observed).toMatchObject({ status: 'error', confidence: 'direct' });
+    expect(observed.signals).toContain('conversation-limit');
+
+    const ordinaryText = new JSDOM('<!doctype html><title>ChatGPT</title><main>This conversation has reached the maximum length.</main><textarea id="prompt-textarea"></textarea>');
+    const ordinary = observePageStatus(ordinaryText.window.document, 'https://chatgpt.com/c/not-full');
+    expect(ordinary.status).toBe('idle');
+    expect(ordinary.signals).not.toContain('conversation-limit');
+  });
+
   it('classifies access, login, and explicit error surfaces before readiness', () => {
     const blocked = new JSDOM('<!doctype html><title>Access Denied</title><main></main>');
     expect(observePageStatus(blocked.window.document, 'https://chatgpt.com/').status).toBe('blocked');

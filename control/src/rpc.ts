@@ -54,6 +54,10 @@ function numberParam(params: Record<string, unknown>, key: string, optional = fa
   return value;
 }
 
+function objectParam(params: Record<string, unknown>, key: string, optional = false): Record<string, unknown> | undefined {
+  const value = params[key]; if (value === undefined && optional) return undefined; return record(value, key);
+}
+
 function objectArrayParam(params: Record<string, unknown>, key: string): Record<string, unknown>[] {
   const value = params[key];
   if (!Array.isArray(value)) throw new Error(`${key} must be an array`);
@@ -156,6 +160,15 @@ export class RpcRouter {
       case 'agent.resume': return this.agentResume(request, params);
       case 'agent.retire': return this.agentRetire(request, params);
       case 'agent.browser-report': return this.agentBrowserReport(request, params);
+      case 'agent.rollover-request': return this.agentRolloverRequest(request, params);
+      case 'agent.rollover-begin': return this.agentRolloverBegin(request, params);
+      case 'agent.rollover-bootstrap': return this.agentRolloverBootstrap(request, params);
+      case 'agent.rollover-complete': return this.agentRolloverComplete(request, params);
+      case 'agent.rollover-fail': return this.agentRolloverFail(request, params);
+      case 'agent.rollover-status': return this.agentRolloverStatus(request, params);
+      case 'agent.conversation-list': return this.agentConversationList(request, params);
+      case 'agent.checkpoint-list': return this.agentCheckpointList(request, params);
+      case 'agent.rollover-list': return this.agentRolloverList(request, params);
       case 'agent.runtime-report': return this.agentRuntimeReport(request, params);
       case 'browser.operation-plan': return this.browserOperationPlan(request, params);
       case 'browser.operation-dispatch': return this.browserOperationDispatch(request, params);
@@ -248,6 +261,19 @@ export class RpcRouter {
     const error = stringParam(params, 'error', true);
     return this.plane.reportAgentBrowser({ slotId: stringParam(params, 'slotId')!, profileId: stringParam(params, 'profileId')!, browserState: enumParam(params, 'browserState', ['absent','opening','open','closing','error'] as const)!, ...(tabId !== undefined ? { tabId } : {}), ...(conversationKey !== undefined ? { conversationKey } : {}), ...(error !== undefined ? { error } : {}), ...(observedAt !== undefined ? { observedAt } : {}) });
   }
+
+  private agentRolloverRequest(request: RpcRequest, params: Record<string, unknown>): unknown {
+    this.requireBrowserOrAdmin(request);
+    return this.plane.requestAgentConversationRollover(stringParam(params,'slotId')!, stringParam(params,'reason')!, stringParam(params,'handoffText')!, objectParam(params,'state',true) ?? {});
+  }
+  private agentRolloverBegin(request: RpcRequest, params: Record<string, unknown>): unknown { this.requireBrowserOrAdmin(request); return this.plane.beginAgentConversationRollover(stringParam(params,'slotId')!, stringParam(params,'rolloverId')!); }
+  private agentRolloverBootstrap(request: RpcRequest, params: Record<string, unknown>): unknown { this.requireBrowserOrAdmin(request); return this.plane.markAgentRolloverBootstrap(stringParam(params,'slotId')!, stringParam(params,'rolloverId')!, stringParam(params,'attemptId')!); }
+  private agentRolloverComplete(request: RpcRequest, params: Record<string, unknown>): unknown { this.requireBrowserOrAdmin(request); return this.plane.completeAgentConversationRollover(stringParam(params,'slotId')!, stringParam(params,'attemptId')!); }
+  private agentRolloverFail(request: RpcRequest, params: Record<string, unknown>): unknown { this.requireBrowserOrAdmin(request); return this.plane.failAgentConversationRollover(stringParam(params,'slotId')!, stringParam(params,'error')!); }
+  private agentRolloverStatus(request: RpcRequest, params: Record<string, unknown>): unknown { this.requireBrowserOrAdmin(request); const slotId=stringParam(params,'slotId')!; const rollover=this.plane.conversations.activeRollover(slotId); return rollover ? { rollover, checkpoint: this.plane.conversations.checkpoint(rollover.checkpointId) } : null; }
+  private agentConversationList(request: RpcRequest, params: Record<string, unknown>): unknown { this.requireBrowserOrAdmin(request); return this.plane.conversations.listConversations(stringParam(params,'slotId',true)); }
+  private agentCheckpointList(request: RpcRequest, params: Record<string, unknown>): unknown { this.requireBrowserOrAdmin(request); return this.plane.conversations.listCheckpoints(stringParam(params,'slotId',true)); }
+  private agentRolloverList(request: RpcRequest, params: Record<string, unknown>): unknown { this.requireBrowserOrAdmin(request); return this.plane.conversations.listRollovers(stringParam(params,'slotId',true)); }
 
   private dispatchResources(request: RpcRequest, params: Record<string, unknown>): unknown {
     switch (request.method) {

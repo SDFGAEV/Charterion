@@ -32,6 +32,9 @@ export interface ControlAgentView {
   desiredState: 'active' | 'suspended' | 'retired';
   browserState: 'absent' | 'opening' | 'open' | 'closing' | 'error';
   conversationKey?: string;
+  conversationGeneration: number;
+  rolloverState: 'idle'|'requested'|'opening'|'bootstrapping';
+  activeRolloverId?: string;
   browserProfileId?: string;
   browserTabId?: number;
   browserError?: string;
@@ -179,10 +182,13 @@ export function parseNativeControlSnapshot(value: unknown): NativeControlSnapsho
       role: stringField(item.role, 'agent.role'), status: enumField(item.status, 'agent.status', AGENT_STATUSES) as ControlAgentView['status'],
       desiredState: enumField(item.desiredState, 'agent.desiredState', AGENT_DESIRED_STATES) as ControlAgentView['desiredState'],
       browserState: enumField(item.browserState, 'agent.browserState', AGENT_BROWSER_STATES) as ControlAgentView['browserState'],
+      conversationGeneration: numberField(item.conversationGeneration, 'agent.conversationGeneration'),
+      rolloverState: stringField(item.rolloverState, 'agent.rolloverState') as ControlAgentView['rolloverState'],
       browserQuarantined: item.browserQuarantined === true,
       leaseEpoch: numberField(item.leaseEpoch, 'agent.leaseEpoch'),
     };
     if (item.conversationKey !== undefined) agent.conversationKey = stringField(item.conversationKey, 'agent.conversationKey');
+    if (item.activeRolloverId !== undefined) agent.activeRolloverId = stringField(item.activeRolloverId, 'agent.activeRolloverId');
     if (item.browserProfileId !== undefined) agent.browserProfileId = stringField(item.browserProfileId, 'agent.browserProfileId');
     if (item.browserTabId !== undefined) agent.browserTabId = numberField(item.browserTabId, 'agent.browserTabId');
     if (item.browserError !== undefined) agent.browserError = stringField(item.browserError, 'agent.browserError');
@@ -318,6 +324,15 @@ export async function reportNativeAgentBrowser(input: AgentBrowserReportInput): 
   catch (error) { throw new Error(`Native control plane is unavailable: ${error instanceof Error ? error.message : String(error)}`); }
   if (!response?.ok) throw new Error(response?.error?.message ?? 'Native control host rejected agent browser report');
 }
+
+export interface NativeRolloverStatus { rollover: { id: string; slotId: string; status: 'requested'|'opening'|'bootstrapping'; checkpointId: string; fromConversationKey: string; toConversationKey?: string; bootstrapAttemptId?: string; reason: string; }; checkpoint: { id: string; handoffText: string; reason: string; state: Record<string, unknown>; }; }
+
+export async function requestNativeAgentRollover(input: { slotId: string; reason: string; handoffText: string; state: Record<string, unknown> }): Promise<void> { await sendNativeMutation('agent.rollover-request', input as unknown as Record<string, unknown>); }
+export async function beginNativeAgentRollover(slotId: string, rolloverId: string): Promise<void> { await sendNativeMutation('agent.rollover-begin', { slotId, rolloverId }); }
+export async function markNativeAgentRolloverBootstrap(slotId: string, rolloverId: string, attemptId: string): Promise<void> { await sendNativeMutation('agent.rollover-bootstrap', { slotId, rolloverId, attemptId }); }
+export async function completeNativeAgentRollover(slotId: string, attemptId: string): Promise<void> { await sendNativeMutation('agent.rollover-complete', { slotId, attemptId }); }
+export async function failNativeAgentRollover(slotId: string, error: string): Promise<void> { await sendNativeMutation('agent.rollover-fail', { slotId, error }); }
+export async function readNativeAgentRolloverStatus(slotId: string): Promise<NativeRolloverStatus | null> { return await sendNativeMutation('agent.rollover-status', { slotId }) as NativeRolloverStatus | null; }
 
 export interface NativeWorkSnapshot {
   revision: number;

@@ -5,7 +5,7 @@ function snapshot() {
   return {
     protocolVersion: 2,
     projects: [{ id: 'p', name: 'P', rootPath: 'E:/p', status: 'active', isolationTier: 'c1-container', minSlots: 1, maxSlots: 4, weight: 1 }],
-    agents: [{ id: 'a', projectId: 'p', role: 'worker', status: 'assigned', desiredState: 'active', browserState: 'open', conversationKey: 'conversation:x', browserProfileId: 'gam-default', browserTabId: 7, browserObservedAt: 4, leaseEpoch: 2 }],
+    agents: [{ id: 'a', projectId: 'p', role: 'worker', status: 'assigned', desiredState: 'active', browserState: 'open', conversationKey: 'conversation:x', conversationGeneration: 1, rolloverState: 'idle', browserProfileId: 'gam-default', browserTabId: 7, browserObservedAt: 4, leaseEpoch: 2 }],
     resources: [{ id: 'r', projectId: 'p', kind: 'workspace', label: 'W', metadata: {} }],
     leases: [{ id: 'l', resourceId: 'r', projectId: 'p', holderId: 'a', mode: 'exclusive', epoch: 3, status: 'active' }],
     changeRequests: [{ id: 'cr', projectId: 'p', taskId: 'T1', authorSubject: 'worker', branch: 'gam/p/T1/A1', targetBranch: 'main', baseSha: 'a'.repeat(40), headSha: 'b'.repeat(40), claimId: 'c', revision: 1, status: 'open' }],

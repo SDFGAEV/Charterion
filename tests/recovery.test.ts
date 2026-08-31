@@ -78,6 +78,16 @@ describe('restart attempt recovery', () => {
     expect(recoverAttempt(attempt('acknowledged'), wrongConversation).nextState).toBe('uncertain');
   });
 
+  it('accepts root-to-canonical recovery only when Kernel owns the canonical destination', () => {
+    const root = { ...attempt('acknowledged'), conversationKey: 'url:https://chatgpt.com/' };
+    const canonical = observation();
+    expect(recoverAttempt(root, canonical).nextState).toBe('uncertain');
+    canonical.authoritativeConversationKey = 'conversation:c1';
+    expect(recoverAttempt(root, canonical)).toEqual({ attemptId: 'attempt-1' });
+    canonical.authoritativeConversationKey = 'conversation:other';
+    expect(recoverAttempt(root, canonical).nextState).toBe('uncertain');
+  });
+
   it('never auto-retries terminal or already-uncertain states', () => {
     for (const state of ['failed', 'reply-observed', 'uncertain'] as const) {
       expect(recoverAttempt(attempt(state), observation())).toEqual({ attemptId: 'attempt-1' });

@@ -34,6 +34,8 @@ const ACTIVITY_SELECTORS = [
   '[data-testid*="reasoning"]',
 ];
 const ERROR_SELECTORS = ['.error-message', '[data-testid="error-message"]', '[role="alert"] .text-red-500'];
+const CONVERSATION_LIMIT_SELECTORS = ['[data-testid="conversation-turn-error"]', '[data-testid="error-message"]', '[role="alert"]', '.error-message'];
+const CONVERSATION_LIMIT_RE = /(?:reached|maximum).{0,48}(?:conversation|chat).{0,48}(?:length|limit)|(?:conversation|chat).{0,48}(?:too long|maximum length)|start a new (?:chat|conversation).{0,80}(?:limit|long)|对话.{0,24}(?:达到|已达|超过).{0,24}(?:上限|最大|长度)|对话.{0,24}(?:过长|太长)/i;
 const BLOCKED_SELECTORS = ['.cloudflare-challenge', '[data-testid="access-denied"]'];
 const AUTH_REQUIRED_SELECTORS = [
   'button[data-mobile-auth-entry-action="login"]',
@@ -121,6 +123,17 @@ interface StatusObservation {
   detail?: string;
 }
 
+export function conversationLimitDetail(doc: Document): string | undefined {
+  for (const selector of CONVERSATION_LIMIT_SELECTORS) {
+    for (const element of doc.querySelectorAll<HTMLElement>(selector)) {
+      if (!isUsableElement(element)) continue;
+      const text = (element.innerText || element.textContent || '').trim();
+      if (text && CONVERSATION_LIMIT_RE.test(text)) return text.slice(0, 1200);
+    }
+  }
+  return undefined;
+}
+
 export function observePageStatus(doc: Document, url: string): StatusObservation {
   const signals: string[] = [];
   let path = '';
@@ -137,6 +150,8 @@ export function observePageStatus(doc: Document, url: string): StatusObservation
   if (authRequired) {
     return { status: 'unauthorized', confidence: 'direct', signals: ['login-ui'], detail: 'ChatGPT authentication UI detected' };
   }
+  const limitDetail = conversationLimitDetail(doc);
+  if (limitDetail) return { status: 'error', confidence: 'direct', signals: ['conversation-limit','error-ui'], detail: limitDetail };
   const error = ERROR_SELECTORS.map((selector) => doc.querySelector<HTMLElement>(selector)).find((element) => Boolean(element && isUsableElement(element)));
   if (error) {
     const detail = error.textContent?.trim() || 'ChatGPT error UI detected';

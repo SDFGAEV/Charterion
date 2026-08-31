@@ -86,5 +86,20 @@ if (!controlPlane.includes('canonicalConversationKey(input.conversationKey)') ||
 for (const fence of ['Stale agent browser observation', 'Stale browser runtime observation']) {
   if (!controlPlane.includes(fence)) throw new Error(`Kernel observation fence missing: ${fence}`);
 }
+const nativeHost = await readFile(resolve(root, 'native-host/GamNativeHost/Program.cs'), 'utf8');
+for (const method of ['agent.rollover-request','agent.rollover-begin','agent.rollover-bootstrap','agent.rollover-complete','agent.rollover-fail','agent.rollover-status']) {
+  if (!nativeHost.includes(`"${method}"`)) throw new Error(`Native Host rollover allowlist is missing ${method}`);
+}
+const database = await readFile(resolve(root, 'control/src/database.ts'), 'utf8');
+for (const token of ['CONTROL_SCHEMA_VERSION = 13', 'agent_conversations', 'worker_checkpoints', 'agent_rollovers']) {
+  if (!database.includes(token)) throw new Error(`Conversation continuity schema fence missing: ${token}`);
+}
+const conversationAuthority = await readFile(resolve(root, 'control/src/conversationAuthority.ts'), 'utf8');
+if (!conversationAuthority.includes("operation.outcome !== 'reply-observed'")) throw new Error('Kernel rollover completion lost reply-evidence authority');
+if (!fleet.includes("agent.rolloverState !== 'idle'")) throw new Error('Rollover workers must remain excluded from normal task dispatch');
+const rolloverRuntime = textByFile.get(resolve(srcRoot, 'conversationRollover.ts')) ?? '';
+for (const token of ['GAM CONVERSATION ROLLOVER HANDOFF', 'conversationLimitRetryTransition', 'bootstrapPendingConversationRollover']) {
+  if (!rolloverRuntime.includes(token)) throw new Error(`Conversation rollover runtime fence missing: ${token}`);
+}
 
 console.log(`Architecture hard-cut checks passed (${files.length} src files; background ${backgroundLines} lines).`);

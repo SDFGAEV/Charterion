@@ -6,7 +6,7 @@ import type { ControlAgentView, ControlWorkerRequestView } from '../src/nativeCo
 function agent(overrides: Partial<ControlAgentView> = {}): ControlAgentView {
   return {
     id: 'slot-1', projectId: 'p', role: 'ROLE01', status: 'idle',
-    desiredState: 'active', browserState: 'absent', browserQuarantined: false, leaseEpoch: 0,
+    desiredState: 'active', browserState: 'absent', conversationGeneration: 0, rolloverState: 'idle', browserQuarantined: false, leaseEpoch: 0,
     ...overrides,
   };
 }
@@ -68,6 +68,24 @@ describe('agent fleet reconciliation', () => {
   it('reports a durable conversation once an active tab acquires identity', () => {
     const actions = planFleetReconciliation([agent()], [tab(7, 'conversation:canonical-new')], { 'slot-1': 7 });
     expect(actions).toEqual([{ kind: 'report-open', slotId: 'slot-1', tabId: 7, conversationKey: 'conversation:canonical-new' }]);
+  });
+
+  it('drains the old page before beginning a requested rollover', () => {
+    const requested = agent({ conversationKey: 'conversation:old', conversationGeneration: 1, rolloverState: 'requested', activeRolloverId: 'r1', browserState: 'open', browserTabId: 9 });
+    expect(planFleetReconciliation([requested], [tab(9, 'conversation:old')], { 'slot-1': 9 })).toEqual([
+      { kind: 'rollover-close', slotId: 'slot-1', rolloverId: 'r1', tabId: 9 },
+    ]);
+    const generating = tab(9, 'conversation:old'); generating.snapshot.status = 'generating';
+    expect(planFleetReconciliation([requested], [generating], { 'slot-1': 9 })).toEqual([]);
+    expect(filterFleetTaskTabs([tab(9, 'conversation:old')], [requested], { 'slot-1': 9 })).toEqual([]);
+  });
+
+  it('starts an already-absent requested rollover and opens a fresh root page after begin', () => {
+    const requested = agent({ conversationKey: 'conversation:old', conversationGeneration: 1, rolloverState: 'requested', activeRolloverId: 'r1' });
+    expect(planFleetReconciliation([requested], [], {})).toEqual([{ kind: 'rollover-start', slotId: 'slot-1', rolloverId: 'r1' }]);
+    const opening = agent({ conversationGeneration: 1, rolloverState: 'opening', activeRolloverId: 'r1' });
+    expect(planFleetReconciliation([opening], [], {})).toEqual([{ kind: 'open', slotId: 'slot-1', url: 'https://chatgpt.com/' }]);
+    expect(filterFleetTaskTabs([tab(10, 'url:https://chatgpt.com/')], [opening], { 'slot-1': 10 })).toEqual([]);
   });
 
   it('gracefully drains a generating worker before closing its page', () => {

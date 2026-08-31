@@ -10,8 +10,8 @@ function snapshot(): NativeControlSnapshot {
       isolationTier: 'c0-host', minSlots: 0, maxSlots: 3, weight: 1,
     }],
     agents: [
-      { id: 'worker-1', projectId: 'p1', role: 'ROLE01', status: 'assigned', desiredState: 'active', browserState: 'open', browserQuarantined: false, leaseEpoch: 1 },
-      { id: 'supervisor-1', projectId: 'p1', role: 'SUPERVISOR', status: 'assigned', desiredState: 'active', browserState: 'open', browserQuarantined: false, leaseEpoch: 1 },
+      { id: 'worker-1', projectId: 'p1', role: 'ROLE01', status: 'assigned', desiredState: 'active', browserState: 'open', conversationGeneration: 1, rolloverState: 'idle', browserQuarantined: false, leaseEpoch: 1 },
+      { id: 'supervisor-1', projectId: 'p1', role: 'SUPERVISOR', status: 'assigned', desiredState: 'active', browserState: 'open', conversationGeneration: 1, rolloverState: 'idle', browserQuarantined: false, leaseEpoch: 1 },
     ],
     resources: [], leases: [], browserRuntime: [], workerRequests: [], events: [],
     changeRequests: [{

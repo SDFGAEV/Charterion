@@ -158,6 +158,8 @@ Worker pages are controlled by durable `AgentSlot` desired state, not by ad-hoc 
 
 Suspension and retirement are graceful by default: once the Supervisor requests a stop, that Worker is excluded from new task routing and cannot acquire new leases or capabilities. Existing authority remains long enough to finish the current ChatGPT generation. When the Browser Plane observes the page idle, it closes the managed tab and reports `absent`; `gamd` then atomically revokes the old capabilities, releases remaining leases, advances the slot epoch, and finalizes `suspended` or `retired`.
 
+A Worker identity is also independent of any single ChatGPT conversation. When a conversation must roll over, the Kernel persists a `WorkerCheckpoint` and `AgentConversationRollover`, closes the old `AgentConversationRecord`, fences the old browser lease, opens a new page for the same `AgentSlot`, canonicalizes the destination conversation, dispatches the handoff checkpoint, and completes only after Kernel-verified `reply-observed` evidence for that bootstrap attempt. Provisional `WEB:*` or `new` conversation identities never become durable authority.
+
 Workers can also submit typed requests such as `suggestion`, `blocker`, `question`, `resource-request`, `scope-change`, `dependency-request`, `cross-system-request`, `review-request`, and `risk-alert`. A Worker request never mutates fleet or project authority by itself; the Supervisor must accept/reject it and perform any resulting action through its own capability.
 
 ## Local control plane
@@ -167,6 +169,9 @@ Current durable entities include:
 ```text
 ProjectCell
 AgentSlot
+AgentConversationRecord
+WorkerCheckpoint
+AgentConversationRollover
 Resource
 ResourceLease
 CapabilityGrant

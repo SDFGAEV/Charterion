@@ -118,3 +118,43 @@ describe('browser runtime reporting', () => {
     expect(denied.ok).toBe(false);
   });
 });
+
+
+describe('conversation rollover RPC', () => {
+  it('requires Kernel reply evidence before completing a browser-driven rollover', () => {
+    const { plane, router } = setup();
+    const project = plane.createProject({ name: 'Rollover', rootPath: 'E:/rollover' });
+    const slot = plane.createAgentSlot(project.id, 'ROLE01');
+    plane.bindAgentConversation(slot.id, 'conversation:old');
+    const auth = { browserToken: 'browser-secret' };
+
+    const requested = router.handle({ id: 'request-roll', method: 'agent.rollover-request', auth, params: {
+      slotId: slot.id, reason: 'manual-test', handoffText: 'resume ROLE01', state: { task: 'T1' },
+    }});
+    expect(requested).toMatchObject({ ok: true, result: { status: 'requested', fromConversationKey: 'conversation:old' } });
+    if (!requested.ok) throw new Error('rollover request failed');
+    const rolloverId = String((requested.result as { id: string }).id);
+    expect(router.handle({ id: 'status-roll', method: 'agent.rollover-status', auth, params: { slotId: slot.id } }))
+      .toMatchObject({ ok: true, result: { rollover: { id: rolloverId }, checkpoint: { handoffText: 'resume ROLE01' } } });
+
+    expect(router.handle({ id: 'begin-roll', method: 'agent.rollover-begin', auth, params: { slotId: slot.id, rolloverId } })).toMatchObject({ ok: true });
+    expect(router.handle({ id: 'opening', method: 'agent.browser-report', auth, params: { slotId: slot.id, profileId: 'gam-default', browserState: 'opening', tabId: 19 } })).toMatchObject({ ok: true });
+    expect(router.handle({ id: 'canonical', method: 'agent.browser-report', auth, params: { slotId: slot.id, profileId: 'gam-default', browserState: 'open', tabId: 19, conversationKey: 'conversation:canonical-b' } }))
+      .toMatchObject({ ok: true, result: { conversationKey: 'conversation:canonical-b', conversationGeneration: 2 } });
+    expect(router.handle({ id: 'bootstrap', method: 'agent.rollover-bootstrap', auth, params: { slotId: slot.id, rolloverId, attemptId: 'boot-1' } })).toMatchObject({ ok: true });
+    expect(router.handle({ id: 'premature', method: 'agent.rollover-complete', auth, params: { slotId: slot.id, attemptId: 'boot-1' } }))
+      .toMatchObject({ ok: false, error: { message: expect.stringMatching(/verified reply evidence/i) } });
+
+    expect(router.handle({ id: 'op-plan', method: 'browser.operation-plan', auth, params: {
+      id: 'boot-1', idempotencyKey: 'rollover:boot-1', operation: 'prompt.send', slotId: slot.id, preconditionsHash: 'semantic-hash',
+    }})).toMatchObject({ ok: true });
+    expect(router.handle({ id: 'op-dispatch', method: 'browser.operation-dispatch', auth, params: { id: 'boot-1' } })).toMatchObject({ ok: true });
+    expect(router.handle({ id: 'op-settle', method: 'browser.operation-settle', auth, params: {
+      id: 'boot-1', outcome: 'reply-observed', evidence: { assistantMessageId: 'm1' },
+    }})).toMatchObject({ ok: true });
+    expect(router.handle({ id: 'complete', method: 'agent.rollover-complete', auth, params: { slotId: slot.id, attemptId: 'boot-1' } }))
+      .toMatchObject({ ok: true, result: { status: 'completed', toConversationKey: 'conversation:canonical-b' } });
+    expect(router.handle({ id: 'history', method: 'agent.conversation-list', auth, params: { slotId: slot.id } }))
+      .toMatchObject({ ok: true, result: [{ generation: 1, conversationKey: 'conversation:old', status: 'closed' }, { generation: 2, conversationKey: 'conversation:canonical-b', status: 'active' }] });
+  });
+});
