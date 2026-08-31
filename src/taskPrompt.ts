@@ -1,4 +1,5 @@
 import { buildReviewPrompt } from './review';
+import { buildStructuredResultPrompt, type StructuredResultRetryContext } from './structuredResult';
 import type { AgentTask, ManagedTask } from './contracts';
 
 export interface TaskWorkspacePromptContext {
@@ -27,6 +28,7 @@ export function buildTaskDispatchPrompt(
   task: AgentTask,
   directDependencies: readonly ManagedTask[],
   workspace?: TaskWorkspacePromptContext,
+  structuredRetry?: StructuredResultRetryContext,
 ): string {
   const blocks: string[] = [];
   let used = 0;
@@ -67,5 +69,7 @@ capabilityFile: ${workspace.capabilityTokenPath}
 
 Completion authority is verified-claim, not your prose reply. Commit the owned changes, run the required tests, then obtain the full HEAD SHA. Submit a claim with the control CLI using --capability-file and --stdin. The JSON must contain projectId, taskId, subject=agentSlotId, resourceId, leaseEpoch, summary, and commitSha=the full HEAD SHA. Read the returned claim id, then call claim.verify with the same --capability-file and JSON {"claimId":"<id>"}. Never use --admin. Kernel verification is authoritative; if it fails, fix the workspace and submit new valid evidence rather than claiming success.`;
   }
-  return task.kind === 'review' ? buildReviewPrompt(prompt) : prompt;
+  if (task.kind === 'review') return buildReviewPrompt(prompt);
+  if (task.completionPolicy === 'structured-result') return buildStructuredResultPrompt(prompt, structuredRetry);
+  return prompt;
 }

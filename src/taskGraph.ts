@@ -1,6 +1,7 @@
 import { parseReviewResult } from './review';
+import { parseStructuredTaskResult } from './structuredResult';
 import { DEFAULT_MAX_REVIEW_ROUNDS, validateTaskPolicy } from './taskPolicy';
-import type { AgentTask, ManagedTask, ReviewResult, SendAttemptRecord, TaskDisplayStatus } from './contracts';
+import type { AgentTask, ManagedTask, ReviewResult, SendAttemptRecord, StructuredTaskResult, TaskDisplayStatus } from './contracts';
 
 export function validateTaskGraph(tasks: readonly AgentTask[]): void {
   const byId = new Map(tasks.map((task) => [task.id, task]));
@@ -33,11 +34,19 @@ function evaluateAttempt(task: AgentTask, attempt: SendAttemptRecord | undefined
   status?: TaskDisplayStatus;
   reviewResult?: ReviewResult;
   reviewError?: string;
+  structuredResult?: StructuredTaskResult;
+  structuredResultError?: string;
 } {
   if (task.completionPolicy === 'verified-claim' && task.machineCompletion) return { status: 'completed' };
   switch (attempt?.state) {
     case 'reply-observed': {
       if (task.completionPolicy === 'verified-claim') return { status: 'running' };
+      if (task.completionPolicy === 'structured-result') {
+        const parsed = parseStructuredTaskResult(attempt.replyTextTail ?? '');
+        return parsed.ok
+          ? { status: 'completed', structuredResult: parsed.result }
+          : { status: 'attention', structuredResultError: parsed.error };
+      }
       if (task.kind !== 'review') return { status: 'completed' };
       const parsed = parseReviewResult(attempt.replyTextTail ?? '');
       if (!parsed.ok) return { status: 'attention', reviewError: parsed.error };
@@ -62,6 +71,9 @@ export function isRetryableTaskAttempt(task: AgentTask, attempt: SendAttemptReco
   if (!attempt) return false;
   if (attempt.state === 'failed' || attempt.state === 'uncertain') {
     return task.kind !== 'review' || !reviewAttemptsExhausted(task);
+  }
+  if (attempt.state === 'reply-observed' && task.completionPolicy === 'structured-result') {
+    return !parseStructuredTaskResult(attempt.replyTextTail ?? '').ok;
   }
   if (task.kind !== 'review' || attempt.state !== 'reply-observed' || reviewAttemptsExhausted(task)) return false;
   const parsed = parseReviewResult(attempt.replyTextTail ?? '');
@@ -96,7 +108,8 @@ export function deriveManagedTasks(
       task.retryAfterAttemptId === lastAttempt.attemptId &&
       (isRetryableTaskAttempt(task, lastAttempt) || isReviewRevisionRetry(task, lastAttempt)),
     );
-    const evaluation = retryRequested ? {} : evaluateAttempt(task, lastAttempt);
+    const observedEvaluation = evaluateAttempt(task, lastAttempt);
+    const evaluation = retryRequested ? {} : observedEvaluation;
     const reviewLoopExhausted = Boolean(
       task.kind === 'review' &&
       evaluation.status === 'attention' &&
@@ -134,8 +147,10 @@ export function deriveManagedTasks(
 
     const managed: ManagedTask = { task, status, attemptHistory };
     if (lastAttempt) managed.lastAttempt = lastAttempt;
-    if (evaluation.reviewResult) managed.reviewResult = evaluation.reviewResult;
-    if (evaluation.reviewError) managed.reviewError = evaluation.reviewError;
+    if (observedEvaluation.reviewResult) managed.reviewResult = observedEvaluation.reviewResult;
+    if (observedEvaluation.reviewError) managed.reviewError = observedEvaluation.reviewError;
+    if (observedEvaluation.structuredResult) managed.structuredResult = observedEvaluation.structuredResult;
+    if (observedEvaluation.structuredResultError) managed.structuredResultError = observedEvaluation.structuredResultError;
     if (task.kind === 'review') {
       managed.reviewRound = attemptHistory.length;
       managed.reviewLoopExhausted = reviewLoopExhausted;

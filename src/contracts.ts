@@ -95,9 +95,14 @@ export interface ContentRecoveryState {
 }
 
 export type TaskKind = 'work' | 'review' | 'human';
-export type TaskCompletionPolicy = 'reply' | 'verified-claim' | 'review-pass' | 'human-approval';
+export type TaskCompletionPolicy = 'reply' | 'structured-result' | 'verified-claim' | 'review-pass' | 'human-approval';
 export interface VerifiedTaskCompletion {
   kind: 'verified-claim'; claimId: string; verificationId: string; completedAt: number; commitSha?: string;
+}
+export interface StructuredTaskResult {
+  status: 'completed';
+  summary: string;
+  evidence: string[];
 }
 export type TaskDisplayStatus =
   | 'pending'
@@ -192,6 +197,8 @@ export interface ManagedTask {
   attemptHistory: SendAttemptRecord[];
   reviewResult?: ReviewResult;
   reviewError?: string;
+  structuredResult?: StructuredTaskResult;
+  structuredResultError?: string;
   reviewRound?: number;
   reviewLoopExhausted?: boolean;
 }

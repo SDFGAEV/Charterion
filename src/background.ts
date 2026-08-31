@@ -458,7 +458,7 @@ async function requestTaskRetry(taskId: string): Promise<AgentTask> {
     if (!lastAttemptId) throw new Error('Task has no failed or uncertain attempt to retry');
     const lastAttempt = state.attempts.find((attempt) => attempt.attemptId === lastAttemptId);
     if (!isRetryableTaskAttempt(task, lastAttempt)) {
-      throw new Error('This task does not have a retryable failed, uncertain, or protocol-invalid review attempt');
+      throw new Error('This task does not have a retryable failed, uncertain, or protocol-invalid structured/review attempt');
     }
     if (task.kind === 'review' && lastAttempt?.state === 'reply-observed') {
       const parsed = parseReviewResult(lastAttempt.replyTextTail ?? '');

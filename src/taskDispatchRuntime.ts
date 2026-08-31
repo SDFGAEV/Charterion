@@ -26,7 +26,12 @@ export async function dispatchReadyManagedTasks(
     const dependencies = managed.task.dependsOn.map((id) => byTaskId.get(id))
       .filter((item): item is ManagedTask => item !== undefined);
     const workspace = await provisionTaskWorkspaceForDispatch(managed.task, decision.tabId, dispatchTabs, control);
-    const sent = await dispatch(decision.tabId, buildTaskDispatchPrompt(managed.task, dependencies, workspace), batchId, managed.task.id);
+    const lastAttempt = managed.lastAttempt;
+    const structuredRetry = managed.task.completionPolicy === 'structured-result' &&
+      lastAttempt && managed.task.retryAfterAttemptId === lastAttempt.attemptId && managed.structuredResultError
+      ? { attemptId: lastAttempt.attemptId, error: managed.structuredResultError }
+      : undefined;
+    const sent = await dispatch(decision.tabId, buildTaskDispatchPrompt(managed.task, dependencies, workspace, structuredRetry), batchId, managed.task.id);
     const result: TaskDispatchResult = { taskId: managed.task.id, ok: sent.ok, attemptId: sent.attemptId };
     if (sent.error) result.error = sent.error;
     results.push(result);

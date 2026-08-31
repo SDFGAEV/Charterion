@@ -113,6 +113,39 @@ describe('task status derivation', () => {
   });
 
 });
+
+describe('structured-result completion', () => {
+  const resultReply = '<GAM_RESULT>{"status":"completed","summary":"Audited the task completion policy.","evidence":["src/taskGraph.ts requires the structured parser for this policy"]}</GAM_RESULT>';
+
+  it('surfaces valid parsed results and releases dependents only after validation', () => {
+    const audit = { ...task('audit', [], ['audit-attempt']), completionPolicy: 'structured-result' as const };
+    const downstream = task('after', ['audit']);
+    const placeholder = { ...attempt('audit-attempt', 'reply-observed'), replyTextTail: 'Read' };
+    const invalid = deriveManagedTasks([audit, downstream], [placeholder]);
+    expect(invalid.map((item) => item.status)).toEqual(['attention', 'blocked']);
+    expect(invalid[0]?.structuredResultError).toMatch(/GAM_RESULT|structured-result/i);
+
+    const validReply = { ...placeholder, replyTextTail: resultReply };
+    const valid = deriveManagedTasks([audit, downstream], [validReply]);
+    expect(valid.map((item) => item.status)).toEqual(['completed', 'ready']);
+    expect(valid[0]?.structuredResult).toEqual({
+      status: 'completed',
+      summary: 'Audited the task completion policy.',
+      evidence: ['src/taskGraph.ts requires the structured parser for this policy'],
+    });
+  });
+
+  it('makes protocol-invalid structured replies retryable only after an explicit retry fact', () => {
+    const audit = { ...task('audit', [], ['audit-attempt']), completionPolicy: 'structured-result' as const };
+    const bad = { ...attempt('audit-attempt', 'reply-observed'), replyTextTail: 'OK' };
+    expect(deriveManagedTasks([audit], [bad])[0]?.status).toBe('attention');
+    const retried = { ...audit, retryAfterAttemptId: 'audit-attempt' };
+    const managed = deriveManagedTasks([retried], [bad])[0]!;
+    expect(managed.status).toBe('ready');
+    expect(managed.structuredResultError).toBeTruthy();
+  });
+});
+
 describe('verified claim completion', () => {
   it('does not let a browser reply complete a verified-claim task', () => {
     const verified = { ...task('machine', [], ['attempt-machine']), completionPolicy: 'verified-claim' as const };

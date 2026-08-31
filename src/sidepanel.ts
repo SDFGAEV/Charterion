@@ -212,6 +212,19 @@ function renderTask(managed: ManagedTask): HTMLElement {
     error.textContent = managed.lastAttempt.error;
     card.append(error);
   }
+  if (managed.structuredResult) {
+    const result = el('div', 'task-review task-review-pass');
+    result.textContent = `Structured result: ${managed.structuredResult.summary}`;
+    card.append(result);
+    const evidence = el('pre', 'history-reply');
+    evidence.textContent = managed.structuredResult.evidence.map((item) => `- ${item}`).join('\n');
+    card.append(evidence);
+  }
+  if (managed.structuredResultError) {
+    const resultError = el('div', 'task-error');
+    resultError.textContent = `Structured-result protocol error: ${managed.structuredResultError}`;
+    card.append(resultError);
+  }
   if (managed.reviewResult) {
     const review = el('div', `task-review task-review-${managed.reviewResult.decision}`);
     review.textContent = `Review ${managed.reviewResult.decision.toUpperCase()}: ${managed.reviewResult.reason}`;

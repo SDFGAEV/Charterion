@@ -48,6 +48,24 @@ describe('task dispatch prompt', () => {
     expect(prompt).toContain('<GAM_REVIEW>');
     expect(prompt.trim().endsWith('Do not place any text after the closing tag.')).toBe(true);
   });
+  it('adds the strict structured-result protocol for semantic work', () => {
+    const structured = { ...task('audit'), completionPolicy: 'structured-result' as const };
+    const prompt = buildTaskDispatchPrompt(structured, []);
+    expect(prompt).toContain('<GAM_RESULT>');
+    expect(prompt).toContain('exactly status, summary, and evidence');
+    expect(prompt.trim().endsWith('Do not place any text after the closing tag.')).toBe(true);
+  });
+
+  it('makes protocol retries explicit in the next structured-result dispatch', () => {
+    const structured = { ...task('audit'), completionPolicy: 'structured-result' as const, retryAfterAttemptId: 'attempt-bad' };
+    const prompt = buildTaskDispatchPrompt(structured, [], undefined, {
+      attemptId: 'attempt-bad',
+      error: 'Structured-result reply must end with one <GAM_RESULT> JSON block',
+    });
+    expect(prompt).toContain('Protocol retry: prior attempt attempt-bad was rejected');
+    expect(prompt).toContain('explicit retry of that protocol-invalid reply');
+  });
+
   it('requires a Kernel workspace for verified-claim work', () => {
     const verified = { ...task('verified'), completionPolicy: 'verified-claim' as const };
     expect(() => buildTaskDispatchPrompt(verified, [])).toThrow(/requires a Kernel-provisioned workspace/i);

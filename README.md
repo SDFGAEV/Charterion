@@ -155,6 +155,12 @@ The browser plane still provides the v0.3 coordination features:
 - portable browser-state export/import;
 - opt-in Auto Supervisor.
 
+### Semantic completion for non-code work
+
+Ordinary `work` tasks now default to the typed `structured-result` completion policy. A browser reply is only completion evidence when its latest assistant text ends with exactly one terminal `<GAM_RESULT>` block whose JSON contains exactly `status`, `summary`, and `evidence`: `status` must be `"completed"`, `summary` must be substantive, and `evidence` must contain at least one concrete non-placeholder string. Replies such as `Read`, `OK`, or `acknowledged`, malformed JSON, duplicate markers, or trailing text are surfaced as `attention` and do not release dependent tasks.
+
+Protocol-invalid structured replies are explicitly retryable. GAM records the retry lineage, re-prompts with the prior protocol error and attempt id, and only releases dependencies after a fresh reply validates. Parsed structured results and protocol errors are exposed through `ManagedTask` and rendered in the Side Panel. The existing explicit `reply` policy still means "any correlated reply completes" when that behavior is intentionally selected; `verified-claim`, `review-pass`, and `human-approval` retain their existing authority semantics.
+
 Physical prompt sends pass through a persistent account-level dispatch governor before touching the ChatGPT composer. The default policy spaces bursts globally, applies per-Project and per-AgentSlot gaps, caps simultaneous GAM-managed generations, and enforces a rolling minute budget. Direct ChatGPT rate-limit/error UI triggers persisted exponential backoff. Deferred sends do not create a fake successful delivery and are retried only when the normal supervisor/reconciliation loop sees capacity again; GAM favors safe throughput over maximum instantaneous concurrency.
 
 The local control plane augments these browser workflows; failure of `gamd` does not cause the extension to invent state or silently resend prompts. Manifest V3 reconciliation is event-driven with a `chrome.alarms` one-minute wakeup as a durability fallback; the service worker does not rely on `setInterval` remaining alive.

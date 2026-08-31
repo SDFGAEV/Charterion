@@ -1,5 +1,6 @@
 ﻿import { describe, expect, it } from 'vitest';
 import { createPortableManagerState, parsePortableManagerState, restorePortableAttempts, stringifyPortableManagerState } from '../src/stateTransfer';
+import { deriveManagedTasks } from '../src/taskGraph';
 import type { AgentMessage, AgentTask, SendAttemptRecord } from '../src/contracts';
 
 function task(): AgentTask {
@@ -33,6 +34,20 @@ describe('portable manager state', () => {
       [task()], [attempt()], [message()], true, 99,
     );
     expect(parsePortableManagerState(stringifyPortableManagerState(state))).toEqual(state);
+  });
+
+  it('preserves structured-result completion semantics across state transfer', () => {
+    const structuredTask = { ...task(), completionPolicy: 'structured-result' as const };
+    const structuredAttempt = {
+      ...attempt(),
+      replyTextTail: '<GAM_RESULT>{"status":"completed","summary":"Audited persisted task state.","evidence":["Portable state retained the structured-result policy and reply evidence"]}</GAM_RESULT>',
+    };
+    const state = createPortableManagerState({}, [structuredTask], [structuredAttempt], [], false, 1);
+    const parsed = parsePortableManagerState(stringifyPortableManagerState(state));
+    const restored = restorePortableAttempts(parsed.attempts);
+    const managed = deriveManagedTasks(parsed.tasks, restored)[0]!;
+    expect(managed.status).toBe('completed');
+    expect(managed.structuredResult?.summary).toBe('Audited persisted task state.');
   });
 
   it('does not export Kernel-local AgentSlot identity in portable browser state', () => {
