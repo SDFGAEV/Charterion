@@ -974,3 +974,249 @@ A capable Agent may lack authority for a specific destructive production operati
 The standardization layer should make operations legible to the organization without deciding the Agent's reasoning path. It provides normalized discovery, invocation boundaries, effect classification, receipts, audit records, artifact references, idempotency/fencing metadata, and failure semantics.
 
 This is the platform's core value: **turn powerful but potentially uncoordinated Agent actions into powerful, coordinated, inspectable organizational actions without reducing the underlying capability surface.**
+
+## 33. Optional Execution-Fabric Plugins and Default Distribution
+
+Charterion Core MUST be a complete standalone product. Noetrium is an optional integration plugin, not a required runtime, default dependency, hidden service, or architectural root.
+
+The default public Charterion release MUST install, start, self-host, manage persistent web Agents, coordinate Missions, use the plugin system, perform review/promotion, and operate its built-in web-agent/runtime surfaces with **no Noetrium installation present**.
+
+Noetrium may provide a large first-party optional capability bundle when installed, especially for advanced execution, scientific experiments, environments, resources, recovery, artifacts, and evidence. Its absence must not place Charterion in a degraded or unsupported state.
+
+The product relationship is therefore:
+
+```text
+Charterion Core
+  + optional capability plugins
+      - Remote / filesystem / terminal providers
+      - Git / GitHub providers
+      - MCP providers
+      - document / research / productivity providers
+      - Noetrium integration plugin
+      - future providers
+```
+
+Noetrium has no privileged bypass around ordinary plugin contracts, authority checks, capability discovery, lifecycle management, or observability.
+
+### 33.1 Charterion Core owns the plugin contract, not provider semantics
+
+Core should expose stable generic extension primitives such as:
+
+```text
+PluginManifest
+CapabilityProvider
+CapabilityOffer
+CapabilityRequirement
+OperationEnvelope
+OperationReceipt
+ArtifactRef
+EvidenceRef
+ProviderHealth
+ProviderLifecycle
+```
+
+These contracts describe organization-level interoperability. They do not require every provider to share one internal implementation model.
+
+A provider remains free to use MCP, CLI, HTTP, SDKs, native code, a local daemon, cloud services, or another execution fabric behind its adapter.
+
+Core MUST NOT contain provider-name conditionals such as `if (provider === "noetrium")` in Mission, Agent, Review, or Promotion logic. Provider-specific behavior belongs inside that provider's adapter or explicitly declared capability metadata.
+
+Plugin availability is additive. Installing or removing one optional plugin changes the available CapabilityOffers, not Organization, Agent identity, Mission semantics, Conversation lineage, review authority, or promotion authority.
+
+### 33.2 Default release profile
+
+The canonical public release profile is `charterion-core` and MUST NOT bundle Noetrium binaries, Python environments, model/runtime stacks, scientific infrastructure, or Noetrium-specific configuration.
+
+A default installation may include Charterion-owned components required for its identity and web-Agent purpose, for example the browser extension, local kernel/daemon, native messaging host, CLI, durable organization state, ChatGPT Web conversation runtime, plugin host, and small built-in adapters needed for core operation.
+
+Heavy or domain-specific capability bundles are separately installable. Illustrative packaging:
+
+```text
+charterion-core
+charterion-plugin-noetrium
+charterion-plugin-github
+charterion-plugin-mcp
+charterion-plugin-<provider>
+```
+
+The names are illustrative; the invariant is the package boundary.
+
+`charterion-plugin-noetrium` may detect and connect to an independently installed Noetrium runtime or gateway. Installing Charterion MUST NOT implicitly install Noetrium.
+
+Release qualification for Charterion Core MUST run with Noetrium absent from PATH, package resolution, services, and configuration, proving there is no accidental dependency.
+
+## 34. Scope Contraction: Organization Runtime, Not Tool Runtime
+
+This section supersedes the tool-mediation implications of Sections 29 and 33. Charterion MUST NOT become a generic computer-tool, filesystem, browser, terminal, Git, MCP-client, document, or execution-fabric platform merely because its Agents can use those things.
+
+A capable ChatGPT Web Agent already has its own native reasoning surface and may have direct access to Remote/computer control, connected tools, browser capabilities, files, terminals, Git, external applications, and future OpenAI capabilities. Charterion should preserve and exploit that direct capability instead of inserting itself between the Agent and every tool call.
+
+The Charterion core responsibility is therefore deliberately narrow:
+
+```text
+Organization
+  -> persistent Agent
+  -> Department / Domain / ownership
+  -> Mission / Work / DRI
+  -> Finding / coordination
+  -> Review / decision
+  -> Candidate / promotion when applicable
+```
+
+plus a standardized ingress surface through which humans and external AI systems can submit, inspect, update, and receive outcomes from organizational work.
+
+Principle: **standardize organizational work, not every action an intelligent Agent performs.**
+### 34.1 Explicit non-responsibilities
+
+Charterion Core SHOULD NOT implement or require generic wrappers for:
+
+- filesystem browsing or file manipulation;
+- shell/terminal execution;
+- browser navigation as a general capability;
+- Git/GitHub as a generic tool abstraction;
+- generic MCP-client capability federation;
+- document/PDF/slides/spreadsheet execution;
+- literature/search tooling;
+- model, experiment, environment, GPU, server, or scientific-execution fabrics;
+- a universal Capability Registry describing everything an Agent can do.
+
+Those capabilities may be available directly to the Agent through ChatGPT, Remote, connected tools, local software, external services, or optional project-specific integrations.
+
+Charterion may record references produced by Agent work when organizational state needs them, such as a commit SHA, PR, document path, URL, artifact ID, experiment ID, or evidence location. Recording a reference does not make Charterion the execution or storage authority for the referenced system.
+
+The Kernel should intervene only where Charterion itself owns an authoritative organizational transition or where an explicitly protected shared resource requires coordination. It should not demand that every benign Agent action be predeclared as a Charterion Operation.
+
+### 34.2 Direct-Agent capability principle
+
+The preferred execution path is:
+
+```text
+Mission / Work assigned by Charterion
+          -> Agent reasons autonomously
+          -> Agent directly uses available computer/tools
+          -> Agent reports durable outcome/references
+          -> Charterion updates organizational state
+```
+
+not:
+
+```text
+Agent -> Charterion generic tool proxy -> filesystem/browser/Git/etc.
+```
+### 34.3 Human and external-AI work ingress is a core product surface
+
+Charterion MUST expose one normalized organizational ingress model that can be used by a human UI/CLI and by external AI systems without giving either caller direct access to internal durable state.
+
+The canonical ingress object should be work-oriented rather than tool-oriented:
+
+```text
+WorkRequest
+  requestId
+  requesterIdentity
+  requesterKind = human | external-ai | internal-agent | system
+  organizationId / projectId?
+  objective
+  contextRefs[]
+  constraints[]
+  desiredOutputs[]
+  priority?
+  deadline?
+  requestedAuthority?
+  idempotencyKey?
+```
+
+Ingress translates accepted requests into Organization-owned objects such as Mission, WorkItem, Finding, ReviewRequest, or HumanDecisionRequest. The caller does not choose internal database rows, browser tabs, AgentSlot IDs, or implementation-specific dispatch paths.
+
+Minimum external surfaces SHOULD include submit, inspect status, append context/reference, cancel/request-stop, answer a clarification, and retrieve final outcome/references. Transport may be HTTP/JSON-RPC/CLI/UI and MAY include an MCP server surface specifically for **submitting organizational work to Charterion**, without making Charterion a general MCP tool broker.
+
+The same Mission semantics, authority checks, deduplication, DRI assignment, review policy, and durable status apply regardless of whether the request came from a person or another AI.
+
+### 34.4 Result surface
+
+A completed organizational work item should return a compact typed outcome:
+
+```text
+WorkOutcome
+  requestId
+  missionId / workId
+  disposition
+  summary
+  producedRefs[]
+  decisionRefs[]
+  blockerRefs[]
+  responsibleAgentIds[]
+  completedAt
+```
+
+`producedRefs` may point to code, PRs, documents, papers, slide decks, Notion pages, datasets, experiment results, external systems, or anything else the Agent created. Charterion need not understand or own every referenced format.
+### 34.5 Noetrium and other integrations are optional organizational attachments
+
+Noetrium is optional. The default Charterion release MUST NOT bundle, install, start, or require Noetrium. If present, Noetrium is simply an external system that Agents or organization policy may reference/use for advanced research and execution workflows.
+
+Charterion does not need a privileged `ExecutionFabricPort` solely to accommodate Noetrium. A future Noetrium integration may be implemented as a narrow optional connector when concrete coordination value exists, for example importing run/evidence references, submitting a research run, or observing completion state.
+
+The same rule applies to GitHub, Notion, Linear, external MCP systems, research platforms, CI services, or future applications: integrate only organizational facts/workflows that Charterion needs to coordinate; do not reproduce the application's full capability surface inside Charterion.
+
+Default distribution invariant:
+
+```text
+charterion-core = complete organization runtime + web-Agent runtime + work ingress
+optional integrations = separately installable / separately configured
+```
+
+Removing every optional integration MUST still leave a fully valid Charterion organization capable of receiving work, assigning persistent Agents, coordinating their conversations, tracking Missions, running review/governance, and returning outcomes.
+
+### 34.6 Revised bounded contexts
+
+The target Charterion core should converge toward only these primary bounded contexts:
+
+```text
+OrganizationRegistry
+AgentRegistry
+ConversationRegistry
+MissionRegistry
+WorkRegistry
+FindingRegistry
+ReviewRegistry
+Decision/PromotionRegistry
+WorkIngress
+WorkOutcome / organizational projections
+WebAgentRuntime
+Kernel authority/persistence
+```
+
+Software-specific Change/Worktree/PR support may remain as an organizational workflow module because concurrent engineering benefits strongly from it, but it is not the universal Work model.
+
+Generic `CapabilityProvider`, `ArtifactRegistry`, `EvidenceRegistry`, `ResourceRegistry`, and universal tool-proxy subsystems SHOULD NOT be introduced into Core unless later evidence proves a genuinely organization-owned authority that cannot remain external.
+### 34.7 Acceptance tests for the contracted scope
+
+The architecture is not correctly scoped unless all of these can be demonstrated:
+
+- a human can submit a broad goal without selecting an Agent or tool;
+- an external AI can submit the same class of goal through the public ingress contract;
+- Charterion can deduplicate/route the request, create a Mission, select/retain a persistent Agent, and assign one DRI;
+- the Agent can use direct computer/tool capabilities that Charterion does not model;
+- completion can attach arbitrary external references without adding a new Core provider type;
+- an optional integration can be absent with no degraded Core state;
+- Noetrium can be entirely absent from installation and tests of the default distribution;
+- a new class of work such as paper writing or slide creation requires no Core enum or tool implementation;
+- unrelated Agent conversations are not interrupted by ordinary work/review traffic;
+- authoritative organizational transitions remain durable and replay-safe.
+
+### 34.8 New anti-patterns
+
+Reject any redesign that:
+
+- creates a generic filesystem/browser/terminal/Git proxy because Agents already have direct tool access;
+- requires every Agent action to pass through Charterion before it can occur;
+- models the full external tool ecosystem inside the Charterion database;
+- treats optional integration availability as Agent capability ceilings;
+- makes Noetrium or another external platform a dependency of `charterion-core`;
+- adds task-kind enums for every new profession or output format;
+- conflates receiving/organizing work with performing the work;
+- turns Charterion into an MCP client aggregator instead of an organization runtime;
+- lets transport-specific APIs define Mission, Agent, Review, or authority semantics.
+
+The resulting product definition is:
+
+**Charterion receives work, organizes persistent intelligent workers, coordinates responsibility and review, preserves durable organizational truth, and returns outcomes. The Agents themselves perform the work using whatever legitimate capabilities are available to them.**
