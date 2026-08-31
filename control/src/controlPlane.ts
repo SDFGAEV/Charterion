@@ -12,6 +12,8 @@ import { PromotionAuthority } from './promotionAuthority';
 import { OrganizationAuthority } from './organizationAuthority';
 import { WorkIngressAuthority } from './workIngressAuthority';
 import { AgentContinuityAuthority } from './agentContinuityAuthority';
+import { FindingAuthority } from './findingAuthority';
+import { ReviewPoolAuthority } from './reviewPoolAuthority';
 import { planElasticFleet, type ElasticFleetDecision } from './elasticFleet';
 import type {
   AcquireLeaseInput,
@@ -171,6 +173,8 @@ export class ControlPlane {
   readonly organization: OrganizationAuthority;
   readonly ingress: WorkIngressAuthority;
   readonly agentContinuity: AgentContinuityAuthority;
+  readonly findings: FindingAuthority;
+  readonly reviewPool: ReviewPoolAuthority;
   constructor(readonly database: ControlDatabase, gitPath = 'git') {
     this.evidence = new EvidenceAuthority(database, gitPath);
     this.changes = new ChangeRequestAuthority(database, gitPath);
@@ -183,6 +187,8 @@ export class ControlPlane {
     this.organization = new OrganizationAuthority(database);
     this.ingress = new WorkIngressAuthority(database);
     this.agentContinuity = new AgentContinuityAuthority(database);
+    this.findings = new FindingAuthority(database);
+    this.reviewPool = new ReviewPoolAuthority(database);
   }
 
   provisionTaskWorkspace(projectId: string, slotId: string, taskId: string, now = Date.now()) {
