@@ -1340,3 +1340,23 @@ A release is not workspace-safe unless tests demonstrate that an autonomous Agen
 Tests MUST cover isolation provisioning failure without host fallback, independent credential revocation, workspace-generation replacement, allowed project mounts, denied peer/Kernel paths, and cleanup that cannot delete shared/authoritative resources.
 
 Constitutional rule: **give every Agent a powerful computer of its own; do not give every Agent the operator's computer.**
+
+### 35.8 Browser and tool-profile isolation
+
+A dedicated filesystem alone is insufficient if the ChatGPT Web session can still select a host-wide Remote/MCP/tool connection. Each live AgentWorkspace therefore SHOULD own a distinct browser profile identity and tool-configuration profile.
+
+The browser profile used by the bound AgentSlot MUST match the active AgentWorkspace. Two live AgentWorkspaces MUST NOT share the same browser/tool profile by default.
+
+The tool profile is expected to expose workspace-scoped endpoints, not host administration endpoints. The host/operator browser profile and its privileged connectors are outside ordinary Agent workspaces.
+
+This creates an enforceable chain:
+
+```text
+Persistent Agent
+-> AgentWorkspace
+-> dedicated browser profile
+-> workspace-scoped tool profile/endpoints
+-> sandbox/VM/container/remote workspace
+```
+
+A mismatched browser profile is a runtime identity violation and must fail closed before the page is accepted as that Organization Agent's active runtime.
