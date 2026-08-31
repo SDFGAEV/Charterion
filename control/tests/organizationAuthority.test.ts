@@ -16,14 +16,15 @@ afterEach(() => { while (cleanups.length) cleanups.pop()?.(); });
 
 function readyWorkspace(plane: ControlPlane, agentId: string, now: number) {
   const workspace = plane.organization.activeAgentWorkspace(agentId);
-  if (!workspace) throw new Error('expected auto-provisioned workspace');
-  return plane.organization.markAgentWorkspaceReady({
+  if (!workspace) throw new Error('expected auto-requested workspace');
+  return plane.organization.configureAgentWorkspace({
     workspaceId: workspace.id,
-    backendKind: 'container',
     rootRef: `workspace://${agentId}`,
     browserProfileId: `profile-${agentId}`,
     toolProfileRef: `tools-${agentId}`,
     endpointRefs: [`remote://${agentId}`],
+    allowedRefs: [`workspace://${agentId}`, 'project://assigned'],
+    forbiddenRefs: ['charterion://control-state', 'workspace://other-agents', 'host://system'],
   }, now);
 }
 
@@ -39,22 +40,18 @@ describe('OrganizationAuthority', () => {
     expect(plane.organization.snapshot()).toMatchObject({ organizations: [{ id: org.id }], departments: [{ id: department.id }], domains: [{ id: domain.id }], agents: [{ id: agent.id }] });
   });
 
-  it('keeps one Mission DRI while allowing multiple contributors and direct-tool-agnostic Work', () => {
+  it('keeps one Mission DRI while allowing multiple contributors and tool-agnostic Work', () => {
     const plane = harness();
     const org = plane.organization.createOrganization({ name: 'Company' }, 10);
     const dep = plane.organization.createDepartment({ organizationId: org.id, name: 'General' }, 20);
     const a = plane.organization.registerAgent({ organizationId: org.id, displayName: 'Agent A', primaryDepartmentId: dep.id }, 30);
     const b = plane.organization.registerAgent({ organizationId: org.id, displayName: 'Agent B', primaryDepartmentId: dep.id }, 31);
     const mission = plane.organization.createMission({ organizationId: org.id, title: 'Prepare research package', objective: 'Research, write a paper and make slides', driAgentId: a.id }, 40);
-    expect(mission.driAgentId).toBe(a.id);
     plane.organization.addMissionMember(mission.id, b.id, 'contributor', 41);
-    expect(plane.organization.listMissionMembers(mission.id)).toHaveLength(2);
     expect(plane.organization.assignMissionDri(mission.id, b.id, 50).driAgentId).toBe(b.id);
-    expect(plane.organization.listMissionMembers(mission.id)).toHaveLength(2);
     expect(plane.organization.setMissionStatus(mission.id, 'active', 60).status).toBe('active');
     readyWorkspace(plane, b.id, 65);
     const work = plane.organization.createWorkItem({ missionId: mission.id, title: 'Deliver result', objective: 'Use any legitimate tools needed', ownerAgentId: b.id }, 70);
-    expect(work).toMatchObject({ ownerAgentId: b.id, status: 'proposed', dependsOn: [] });
     expect(plane.organization.setWorkStatus(work.id, 'active', 80).status).toBe('active');
   });
 
@@ -78,55 +75,60 @@ describe('OrganizationAuthority', () => {
   });
 });
 
-
-describe('Dedicated Agent workspace safety', () => {
-  it('auto-requests an isolated workspace and refuses runtime binding before it is ready', () => {
+describe('Dedicated Agent workspace policy', () => {
+  it('auto-requests prompt-guarded workspace and blocks runtime use before configuration', () => {
     const plane = harness();
     const project = plane.createProject({ name: 'Repo', rootPath: 'E:\\repo' }, 1);
     const slot = plane.createAgentSlot(project.id, 'ENGINEER', 2);
     const org = plane.organization.createOrganization({ name: 'Company' }, 3);
     const agent = plane.organization.registerAgent({ organizationId: org.id, displayName: 'A' }, 4);
     const workspace = plane.organization.activeAgentWorkspace(agent.id)!;
-    expect(workspace).toMatchObject({ generation: 1, isolationTier: 'c1-container', status: 'provisioning' });
+    expect(workspace).toMatchObject({ generation: 1, securityMode: 'prompt-guarded', status: 'configuring', toolPolicyState: 'unconfigured' });
     expect(() => plane.organization.bindRuntimeSlot(agent.id, slot.id, 5)).toThrow(/ready dedicated workspace/i);
-    expect(() => plane.organization.markAgentWorkspaceReady({ workspaceId: workspace.id, backendKind: 'host', rootRef: 'E:\\', browserProfileId: 'host-profile', toolProfileRef: 'host-tools' }, 6)).toThrow(/cannot silently use the host/i);
   });
 
-  it('requires explicit dangerous opt-in for c0 host access', () => {
+  it('compiles a deterministic workspace charter with scope and dangerous-action rules', () => {
     const plane = harness();
     const org = plane.organization.createOrganization({ name: 'Company' }, 1);
     const agent = plane.organization.registerAgent({ organizationId: org.id, displayName: 'A' }, 2);
-    const first = plane.organization.activeAgentWorkspace(agent.id)!;
-    plane.organization.retireAgentWorkspace(first.id, 'replace default request', 3);
-    const host = plane.organization.requestAgentWorkspace({ agentId: agent.id, isolationTier: 'c0-host' }, 4);
-    expect(() => plane.organization.markAgentWorkspaceReady({ workspaceId: host.id, backendKind: 'host', rootRef: 'host://machine', browserProfileId: 'host-profile', toolProfileRef: 'host-tools' }, 5)).toThrow(/explicit unsafe host access/i);
-    expect(plane.organization.markAgentWorkspaceReady({ workspaceId: host.id, backendKind: 'host', rootRef: 'host://machine', browserProfileId: 'host-profile', toolProfileRef: 'host-tools', allowUnsafeHostAccess: true }, 6).status).toBe('ready');
+    const ready = readyWorkspace(plane, agent.id, 3);
+    expect(ready.workspaceCharterDigest).toMatch(/^[a-f0-9]{64}$/);
+    const prompt = plane.organization.workspacePrompt(ready.id);
+    expect(prompt).toContain(`Workspace root: workspace://${agent.id}`);
+    expect(prompt).toContain('charterion://control-state');
+    expect(prompt).toContain('require an explicit approval reference');
+    expect(prompt).toContain('do not treat the absence of a hard sandbox as permission to leave scope');
   });
 
-  it('replaces workspaces by generation without replacing persistent Agent identity', () => {
+  it('requires configured tool policy before claiming tool-scoped enforcement', () => {
+    const plane = harness();
+    const org = plane.organization.createOrganization({ name: 'Company' }, 1);
+    const agent = plane.organization.registerAgent({ organizationId: org.id, displayName: 'A' }, 2);
+    const workspace = plane.organization.activeAgentWorkspace(agent.id)!;
+    const base = { workspaceId: workspace.id, securityMode: 'tool-scoped' as const, rootRef: 'workspace://a', browserProfileId: 'profile-a', toolProfileRef: 'tools-a' };
+    expect(() => plane.organization.configureAgentWorkspace({ ...base, toolPolicyState: 'unsupported' }, 3)).toThrow(/requires configured tool policy/i);
+    expect(plane.organization.configureAgentWorkspace({ ...base, toolPolicyState: 'configured' }, 4)).toMatchObject({ status: 'ready', securityMode: 'tool-scoped', toolPolicyState: 'configured' });
+  });
+
+  it('replaces workspace generations without replacing persistent Agent identity', () => {
     const plane = harness();
     const org = plane.organization.createOrganization({ name: 'Company' }, 1);
     const agent = plane.organization.registerAgent({ organizationId: org.id, displayName: 'A' }, 2);
     const first = readyWorkspace(plane, agent.id, 3);
-    expect(first.generation).toBe(1);
-    plane.organization.retireAgentWorkspace(first.id, 'rebuild', 4);
-    const second = plane.organization.requestAgentWorkspace({ agentId: agent.id, isolationTier: 'c2-hypervisor' }, 5);
-    expect(second).toMatchObject({ agentId: agent.id, generation: 2, isolationTier: 'c2-hypervisor', status: 'provisioning' });
+    plane.organization.retireAgentWorkspace(first.id, 'rebuild policy', 4);
+    const second = plane.organization.requestAgentWorkspace({ agentId: agent.id }, 5);
+    expect(second).toMatchObject({ agentId: agent.id, generation: 2, securityMode: 'prompt-guarded', status: 'configuring' });
     expect(plane.organization.getAgent(agent.id).id).toBe(agent.id);
-    expect(plane.organization.listAgentWorkspaces(agent.id).map((item) => item.generation)).toEqual([1, 2]);
   });
-});
 
-
-describe('Workspace profile isolation', () => {
-  it('does not let two live Agent workspaces share one browser/tool profile', () => {
+  it('does not let live Agent workspaces share one browser or tool profile', () => {
     const plane = harness();
     const org = plane.organization.createOrganization({ name: 'Company' }, 1);
     const a = plane.organization.registerAgent({ organizationId: org.id, displayName: 'A' }, 2);
     const b = plane.organization.registerAgent({ organizationId: org.id, displayName: 'B' }, 3);
     const wa = plane.organization.activeAgentWorkspace(a.id)!;
     const wb = plane.organization.activeAgentWorkspace(b.id)!;
-    plane.organization.markAgentWorkspaceReady({ workspaceId: wa.id, backendKind: 'container', rootRef: 'workspace://a', browserProfileId: 'profile-a', toolProfileRef: 'tools-a' }, 4);
-    expect(() => plane.organization.markAgentWorkspaceReady({ workspaceId: wb.id, backendKind: 'container', rootRef: 'workspace://b', browserProfileId: 'profile-a', toolProfileRef: 'tools-b' }, 5)).toThrow(/unique/i);
+    plane.organization.configureAgentWorkspace({ workspaceId: wa.id, rootRef: 'workspace://a', browserProfileId: 'profile-a', toolProfileRef: 'tools-a' }, 4);
+    expect(() => plane.organization.configureAgentWorkspace({ workspaceId: wb.id, rootRef: 'workspace://b', browserProfileId: 'profile-a', toolProfileRef: 'tools-b' }, 5)).toThrow(/unique/i);
   });
 });

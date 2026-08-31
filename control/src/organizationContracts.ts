@@ -139,22 +139,27 @@ export interface OrganizationSnapshot {
 }
 
 
-export type AgentWorkspaceIsolationTier = 'c0-host' | 'c1-container' | 'c2-hypervisor' | 'c3-ephemeral-vm';
-export type AgentWorkspaceBackendKind = 'host' | 'container' | 'hypervisor-vm' | 'ephemeral-vm' | 'remote-host';
-export type AgentWorkspaceStatus = 'provisioning' | 'ready' | 'suspended' | 'error' | 'retired';
+export type AgentWorkspaceSecurityMode = 'prompt-guarded' | 'tool-scoped' | 'sandboxed';
+export type AgentWorkspaceToolPolicyState = 'unconfigured' | 'configured' | 'unsupported';
+export type AgentWorkspaceDangerousActionPolicy = 'approval-required' | 'deny';
+export type AgentWorkspaceStatus = 'configuring' | 'ready' | 'suspended' | 'error' | 'retired';
 
 export interface AgentWorkspaceRecord {
   id: string;
   organizationId: string;
   agentId: string;
   generation: number;
-  isolationTier: AgentWorkspaceIsolationTier;
-  backendKind?: AgentWorkspaceBackendKind;
+  securityMode: AgentWorkspaceSecurityMode;
   rootRef?: string;
   browserProfileId?: string;
   toolProfileRef?: string;
   endpointRefs: string[];
-  mountedResourceRefs: string[];
+  allowedRefs: string[];
+  forbiddenRefs: string[];
+  workspaceCharterVersion: string;
+  workspaceCharterDigest: string;
+  dangerousActionPolicy: AgentWorkspaceDangerousActionPolicy;
+  toolPolicyState: AgentWorkspaceToolPolicyState;
   status: AgentWorkspaceStatus;
   error?: string;
   createdAt: number;
@@ -163,23 +168,23 @@ export interface AgentWorkspaceRecord {
 
 export interface RequestAgentWorkspaceInput {
   agentId: string;
-  isolationTier?: AgentWorkspaceIsolationTier | undefined;
 }
 
-export interface MarkAgentWorkspaceReadyInput {
+export interface ConfigureAgentWorkspaceInput {
   workspaceId: string;
-  backendKind: AgentWorkspaceBackendKind;
+  securityMode?: AgentWorkspaceSecurityMode | undefined;
   rootRef: string;
   browserProfileId: string;
   toolProfileRef: string;
   endpointRefs?: string[] | undefined;
-  mountedResourceRefs?: string[] | undefined;
-  allowUnsafeHostAccess?: boolean | undefined;
+  allowedRefs?: string[] | undefined;
+  forbiddenRefs?: string[] | undefined;
+  dangerousActionPolicy?: AgentWorkspaceDangerousActionPolicy | undefined;
+  toolPolicyState?: AgentWorkspaceToolPolicyState | undefined;
 }
 
 export interface ReplaceAgentWorkspaceInput {
   agentId: string;
-  isolationTier?: AgentWorkspaceIsolationTier | undefined;
   reason: string;
 }
 

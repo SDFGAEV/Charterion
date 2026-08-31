@@ -2,7 +2,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-export const CONTROL_SCHEMA_VERSION = 17;
+export const CONTROL_SCHEMA_VERSION = 18;
 
 export class ControlDatabase {
   readonly db: DatabaseSync;
@@ -85,6 +85,7 @@ export class ControlDatabase {
     if (version < 15) this.migrateV15();
     if (version < 16) this.migrateV16();
     if (version < 17) this.migrateV17();
+    if (version < 18) this.migrateV18();
     this.db.prepare(`
       INSERT INTO schema_meta(key, value) VALUES('schema_version', ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value
@@ -438,6 +439,56 @@ export class ControlDatabase {
         CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_workspaces_browser_profile_live
           ON agent_workspaces(browser_profile_id) WHERE browser_profile_id IS NOT NULL AND status<>'retired';
         CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_workspaces_tool_profile_live
+          ON agent_workspaces(tool_profile_ref) WHERE tool_profile_ref IS NOT NULL AND status<>'retired';
+      `);
+    });
+  }
+  private migrateV18(): void {
+    const columns = this.db.prepare('PRAGMA table_info(agent_workspaces)').all() as Array<{ name: string }>;
+    if (columns.some((row) => row.name === 'security_mode')) return;
+    this.transaction(() => {
+      this.db.exec(`
+        ALTER TABLE agent_workspaces RENAME TO agent_workspaces_v17;
+        CREATE TABLE agent_workspaces (
+          id TEXT PRIMARY KEY,
+          organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+          agent_id TEXT NOT NULL REFERENCES organization_agents(id) ON DELETE CASCADE,
+          generation INTEGER NOT NULL CHECK(generation > 0),
+          security_mode TEXT NOT NULL CHECK(security_mode IN ('prompt-guarded','tool-scoped','sandboxed')),
+          root_ref TEXT,
+          browser_profile_id TEXT,
+          tool_profile_ref TEXT,
+          endpoint_refs_json TEXT NOT NULL DEFAULT '[]',
+          allowed_refs_json TEXT NOT NULL DEFAULT '[]',
+          forbidden_refs_json TEXT NOT NULL DEFAULT '[]',
+          workspace_charter_version TEXT NOT NULL,
+          workspace_charter_digest TEXT NOT NULL,
+          dangerous_action_policy TEXT NOT NULL CHECK(dangerous_action_policy IN ('approval-required','deny')),
+          tool_policy_state TEXT NOT NULL CHECK(tool_policy_state IN ('unconfigured','configured','unsupported')),
+          status TEXT NOT NULL CHECK(status IN ('configuring','ready','suspended','error','retired')),
+          error TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          UNIQUE(agent_id,generation)
+        ) STRICT;
+        INSERT INTO agent_workspaces(
+          id,organization_id,agent_id,generation,security_mode,root_ref,browser_profile_id,tool_profile_ref,
+          endpoint_refs_json,allowed_refs_json,forbidden_refs_json,workspace_charter_version,workspace_charter_digest,
+          dangerous_action_policy,tool_policy_state,status,error,created_at,updated_at
+        ) SELECT
+          id,organization_id,agent_id,generation,
+          CASE WHEN backend_kind IN ('container','hypervisor-vm','ephemeral-vm') THEN 'sandboxed' ELSE 'prompt-guarded' END,
+          root_ref,browser_profile_id,tool_profile_ref,endpoint_refs_json,mounted_resource_refs_json,'[]',
+          'workspace-charter-v2','', 'approval-required','unconfigured',
+          CASE WHEN status='provisioning' THEN 'configuring' ELSE status END,error,created_at,updated_at
+        FROM agent_workspaces_v17;
+        DROP TABLE agent_workspaces_v17;
+        CREATE UNIQUE INDEX idx_agent_workspaces_one_live
+          ON agent_workspaces(agent_id) WHERE status IN ('configuring','ready','suspended','error');
+        CREATE INDEX idx_agent_workspaces_org_status ON agent_workspaces(organization_id,status,created_at);
+        CREATE UNIQUE INDEX idx_agent_workspaces_browser_profile_live
+          ON agent_workspaces(browser_profile_id) WHERE browser_profile_id IS NOT NULL AND status<>'retired';
+        CREATE UNIQUE INDEX idx_agent_workspaces_tool_profile_live
           ON agent_workspaces(tool_profile_ref) WHERE tool_profile_ref IS NOT NULL AND status<>'retired';
       `);
     });

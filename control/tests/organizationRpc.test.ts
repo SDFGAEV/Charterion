@@ -60,25 +60,30 @@ describe('organization and external work ingress RPC', () => {
 
 
 describe('Agent workspace RPC authority', () => {
-  it('keeps workspace lifecycle admin-controlled and rejects unsafe host fallback', () => {
+  it('keeps workspace policy configuration admin-controlled and exposes the compiled charter', () => {
     const h = harness();
     const org = h.plane.organization.createOrganization({ name: 'Company' });
     const agent = h.plane.organization.registerAgent({ organizationId: org.id, displayName: 'A' });
     const workspace = h.plane.organization.activeAgentWorkspace(agent.id)!;
 
-    const unauthenticated = h.router.handle({ id: 'x', method: 'org-agent.workspace-ready', params: {
-      workspaceId: workspace.id, backendKind: 'container', rootRef: 'workspace://a', browserProfileId: 'profile-a', toolProfileRef: 'tools-a',
+    const unauthenticated = h.router.handle({ id: 'x', method: 'org-agent.workspace-configure', params: {
+      workspaceId: workspace.id, rootRef: 'workspace://a', browserProfileId: 'profile-a', toolProfileRef: 'tools-a',
     } });
     expect(unauthenticated.ok).toBe(false);
 
-    const unsafe = h.router.handle({ id: 'unsafe', method: 'org-agent.workspace-ready', auth: { adminToken: 'admin' }, params: {
-      workspaceId: workspace.id, backendKind: 'host', rootRef: 'host://machine', browserProfileId: 'profile-host', toolProfileRef: 'tools-host',
+    const invalidScoped = h.router.handle({ id: 'invalid', method: 'org-agent.workspace-configure', auth: { adminToken: 'admin' }, params: {
+      workspaceId: workspace.id, securityMode: 'tool-scoped', toolPolicyState: 'unsupported', rootRef: 'workspace://a', browserProfileId: 'profile-a', toolProfileRef: 'tools-a',
     } });
-    expect(unsafe.ok).toBe(false);
+    expect(invalidScoped.ok).toBe(false);
 
-    const ready = h.router.handle({ id: 'ready', method: 'org-agent.workspace-ready', auth: { adminToken: 'admin' }, params: {
-      workspaceId: workspace.id, backendKind: 'container', rootRef: 'workspace://a', browserProfileId: 'profile-a', toolProfileRef: 'tools-a', endpointRefs: ['remote://a'],
+    const ready = h.router.handle({ id: 'ready', method: 'org-agent.workspace-configure', auth: { adminToken: 'admin' }, params: {
+      workspaceId: workspace.id, rootRef: 'workspace://a', browserProfileId: 'profile-a', toolProfileRef: 'tools-a',
+      endpointRefs: ['remote://a'], allowedRefs: ['project://assigned'], forbiddenRefs: ['host://system'],
     } });
-    expect(ready).toMatchObject({ ok: true, result: { status: 'ready', backendKind: 'container', endpointRefs: ['remote://a'] } });
+    expect(ready).toMatchObject({ ok: true, result: { status: 'ready', securityMode: 'prompt-guarded', endpointRefs: ['remote://a'] } });
+
+    const prompt = h.router.handle({ id: 'prompt', method: 'org-agent.workspace-prompt', auth: { browserToken: 'browser' }, params: { workspaceId: workspace.id } });
+    expect(prompt.ok).toBe(true);
+    if (prompt.ok) expect(String(prompt.result)).toContain('host://system');
   });
 });

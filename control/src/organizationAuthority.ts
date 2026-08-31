@@ -22,11 +22,12 @@ import type {
 } from './organizationContracts';
 
 import type {
-  AgentWorkspaceIsolationTier,
   AgentWorkspaceRecord,
-  MarkAgentWorkspaceReadyInput,
+  AgentWorkspaceSecurityMode,
+  ConfigureAgentWorkspaceInput,
   RequestAgentWorkspaceInput,
 } from './organizationContracts';
+import { buildWorkspacePolicy, WORKSPACE_CHARTER_VERSION } from './workspacePolicy';
 type Row = Record<string, string | number | null>;
 
 function required(value: string, label: string): string {
@@ -96,12 +97,16 @@ function workItemFrom(row: Row): WorkItemRecord {
 function workspaceFrom(row: Row): AgentWorkspaceRecord {
   const value: AgentWorkspaceRecord = {
     id: String(row.id), organizationId: String(row.organization_id), agentId: String(row.agent_id),
-    generation: Number(row.generation), isolationTier: String(row.isolation_tier) as AgentWorkspaceIsolationTier,
+    generation: Number(row.generation), securityMode: String(row.security_mode) as AgentWorkspaceSecurityMode,
     endpointRefs: JSON.parse(String(row.endpoint_refs_json)) as string[],
-    mountedResourceRefs: JSON.parse(String(row.mounted_resource_refs_json)) as string[],
+    allowedRefs: JSON.parse(String(row.allowed_refs_json)) as string[],
+    forbiddenRefs: JSON.parse(String(row.forbidden_refs_json)) as string[],
+    workspaceCharterVersion: String(row.workspace_charter_version),
+    workspaceCharterDigest: String(row.workspace_charter_digest),
+    dangerousActionPolicy: String(row.dangerous_action_policy) as AgentWorkspaceRecord['dangerousActionPolicy'],
+    toolPolicyState: String(row.tool_policy_state) as AgentWorkspaceRecord['toolPolicyState'],
     status: String(row.status) as AgentWorkspaceRecord['status'], createdAt: Number(row.created_at), updatedAt: Number(row.updated_at),
   };
-  if (row.backend_kind !== null) value.backendKind = String(row.backend_kind) as NonNullable<AgentWorkspaceRecord['backendKind']>;
   if (row.root_ref !== null) value.rootRef = String(row.root_ref);
   if (row.browser_profile_id !== null) value.browserProfileId = String(row.browser_profile_id);
   if (row.tool_profile_ref !== null) value.toolProfileRef = String(row.tool_profile_ref);
@@ -220,10 +225,10 @@ export class OrganizationAuthority {
       this.database.db.prepare("INSERT INTO organization_agents(id,organization_id,display_name,primary_department_id,status,created_at,updated_at) VALUES(?,?,?,?, 'active',?,?)")
         .run(id, organization.id, displayName, departmentId, now, now);
       const workspaceId = randomUUID();
-      this.database.db.prepare(`INSERT INTO agent_workspaces(id,organization_id,agent_id,generation,isolation_tier,status,created_at,updated_at)
-        VALUES(?,?,?,1,'c1-container','provisioning',?,?)`).run(workspaceId, organization.id, id, now, now);
+      this.database.db.prepare(`INSERT INTO agent_workspaces(id,organization_id,agent_id,generation,security_mode,workspace_charter_version,workspace_charter_digest,dangerous_action_policy,tool_policy_state,status,created_at,updated_at)
+        VALUES(?,?,?,1,'prompt-guarded',?,'','approval-required','unconfigured','configuring',?,?)`).run(workspaceId, organization.id, id, WORKSPACE_CHARTER_VERSION, now, now);
       this.event('ORGANIZATION_AGENT_REGISTERED', id, { organizationId: organization.id, displayName, primaryDepartmentId: departmentId }, now);
-      this.event('AGENT_WORKSPACE_REQUESTED', workspaceId, { agentId: id, generation: 1, isolationTier: 'c1-container' }, now);
+      this.event('AGENT_WORKSPACE_REQUESTED', workspaceId, { agentId: id, generation: 1, securityMode: 'prompt-guarded' }, now);
       return this.getAgent(id);
     });
   }
@@ -253,35 +258,45 @@ export class OrganizationAuthority {
       if (this.activeAgentWorkspace(agent.id)) throw new Error('Agent already has a live workspace generation');
       const row = this.database.db.prepare('SELECT COALESCE(MAX(generation),0) AS generation FROM agent_workspaces WHERE agent_id=?').get(agent.id) as { generation: number };
       const generation = Number(row.generation) + 1;
-      const isolationTier = input.isolationTier ?? 'c1-container';
       const id = randomUUID();
-      this.database.db.prepare(`INSERT INTO agent_workspaces(id,organization_id,agent_id,generation,isolation_tier,status,created_at,updated_at)
-        VALUES(?,?,?,?,?,'provisioning',?,?)`).run(id, agent.organizationId, agent.id, generation, isolationTier, now, now);
-      this.event('AGENT_WORKSPACE_REQUESTED', id, { agentId: agent.id, generation, isolationTier }, now);
+      this.database.db.prepare(`INSERT INTO agent_workspaces(id,organization_id,agent_id,generation,security_mode,workspace_charter_version,workspace_charter_digest,dangerous_action_policy,tool_policy_state,status,created_at,updated_at)
+        VALUES(?,?,?,?,'prompt-guarded',?,'','approval-required','unconfigured','configuring',?,?)`).run(id, agent.organizationId, agent.id, generation, WORKSPACE_CHARTER_VERSION, now, now);
+      this.event('AGENT_WORKSPACE_REQUESTED', id, { agentId: agent.id, generation, securityMode: 'prompt-guarded' }, now);
       return this.getAgentWorkspace(id);
     });
   }
-  markAgentWorkspaceReady(input: MarkAgentWorkspaceReadyInput, now = Date.now()): AgentWorkspaceRecord {
+
+  configureAgentWorkspace(input: ConfigureAgentWorkspaceInput, now = Date.now()): AgentWorkspaceRecord {
     return this.database.transaction(() => {
       const current = this.getAgentWorkspace(input.workspaceId);
-      if (current.status !== 'provisioning' && current.status !== 'error') throw new Error('Only provisioning/error workspace can become ready');
+      if (current.status !== 'configuring' && current.status !== 'error') throw new Error('Only configuring/error workspace can be configured');
+      const securityMode = input.securityMode ?? 'prompt-guarded';
       const rootRef = required(input.rootRef, 'Workspace root ref');
-      if (current.isolationTier === 'c0-host') {
-        if (input.backendKind !== 'host' || input.allowUnsafeHostAccess !== true) throw new Error('c0-host workspace requires explicit unsafe host access approval');
-      } else if (input.backendKind === 'host') {
-        throw new Error('Isolated workspace cannot silently use the host backend');
-      }
       const browserProfileId = required(input.browserProfileId, 'Workspace browser profile id');
       const toolProfileRef = required(input.toolProfileRef, 'Workspace tool profile ref');
       const endpointRefs = [...new Set(input.endpointRefs ?? [])].map((value) => required(value, 'Workspace endpoint ref'));
-      const mountedResourceRefs = [...new Set(input.mountedResourceRefs ?? [])].map((value) => required(value, 'Workspace mounted resource ref'));
-      this.database.db.prepare(`UPDATE agent_workspaces SET backend_kind=?,root_ref=?,browser_profile_id=?,tool_profile_ref=?,endpoint_refs_json=?,mounted_resource_refs_json=?,status='ready',error=NULL,updated_at=? WHERE id=?`)
-        .run(input.backendKind, rootRef, browserProfileId, toolProfileRef, JSON.stringify(endpointRefs), JSON.stringify(mountedResourceRefs), now, current.id);
-      this.event('AGENT_WORKSPACE_READY', current.id, { agentId: current.agentId, generation: current.generation, isolationTier: current.isolationTier, backendKind: input.backendKind }, now);
+      const allowedRefs = [...new Set(input.allowedRefs ?? [])].map((value) => required(value, 'Workspace allowed ref'));
+      const forbiddenRefs = [...new Set(input.forbiddenRefs ?? [])].map((value) => required(value, 'Workspace forbidden ref'));
+      const dangerousActionPolicy = input.dangerousActionPolicy ?? 'approval-required';
+      const toolPolicyState = input.toolPolicyState ?? (securityMode === 'tool-scoped' ? 'configured' : 'unconfigured');
+      if (securityMode === 'tool-scoped' && toolPolicyState !== 'configured') throw new Error('tool-scoped workspace requires configured tool policy');
+      const policy = buildWorkspacePolicy({ agentId: current.agentId, rootRef, browserProfileId, toolProfileRef, securityMode, allowedRefs, forbiddenRefs, dangerousActionPolicy, toolPolicyState });
+      this.database.db.prepare(`UPDATE agent_workspaces SET security_mode=?,root_ref=?,browser_profile_id=?,tool_profile_ref=?,endpoint_refs_json=?,allowed_refs_json=?,forbidden_refs_json=?,workspace_charter_version=?,workspace_charter_digest=?,dangerous_action_policy=?,tool_policy_state=?,status='ready',error=NULL,updated_at=? WHERE id=?`)
+        .run(securityMode, rootRef, browserProfileId, toolProfileRef, JSON.stringify(endpointRefs), JSON.stringify(policy.allowedRefs), JSON.stringify(policy.forbiddenRefs), policy.version, policy.digest, dangerousActionPolicy, toolPolicyState, now, current.id);
+      this.event('AGENT_WORKSPACE_CONFIGURED', current.id, { agentId: current.agentId, generation: current.generation, securityMode, toolPolicyState, charterDigest: policy.digest }, now);
       return this.getAgentWorkspace(current.id);
     });
   }
 
+  workspacePrompt(workspaceId: string): string {
+    const current = this.getAgentWorkspace(workspaceId);
+    if (current.status !== 'ready' || !current.rootRef || !current.browserProfileId || !current.toolProfileRef) throw new Error('Workspace must be ready before its charter prompt is issued');
+    return buildWorkspacePolicy({
+      agentId: current.agentId, rootRef: current.rootRef, browserProfileId: current.browserProfileId,
+      toolProfileRef: current.toolProfileRef, securityMode: current.securityMode, allowedRefs: current.allowedRefs,
+      forbiddenRefs: current.forbiddenRefs, dangerousActionPolicy: current.dangerousActionPolicy, toolPolicyState: current.toolPolicyState,
+    }).prompt;
+  }
   failAgentWorkspace(workspaceId: string, error: string, now = Date.now()): AgentWorkspaceRecord {
     return this.database.transaction(() => {
       const current = this.getAgentWorkspace(workspaceId);

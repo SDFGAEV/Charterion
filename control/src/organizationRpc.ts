@@ -1,6 +1,6 @@
 import type { CapabilityGrant, RpcRequest } from './contracts';
 import type { ControlPlane } from './controlPlane';
-import type { AgentWorkspaceBackendKind, AgentWorkspaceIsolationTier, MissionMemberRole, MissionStatus, WorkItemStatus } from './organizationContracts';
+import type { AgentWorkspaceDangerousActionPolicy, AgentWorkspaceSecurityMode, AgentWorkspaceToolPolicyState, MissionMemberRole, MissionStatus, WorkItemStatus } from './organizationContracts';
 import type { WorkPriority, WorkRequesterKind, WorkRequestStatus } from './workIngressContracts';
 
 type Params = Record<string, unknown>;
@@ -24,12 +24,6 @@ function numberParam(params: Params, key: string, optional = false): number | un
   return value;
 }
 
-function booleanParam(params: Params, key: string, optional = false): boolean | undefined {
-  const value = params[key];
-  if (value === undefined && optional) return undefined;
-  if (typeof value !== 'boolean') throw new Error(`${key} must be a boolean`);
-  return value;
-}
 function stringArray(params: Params, key: string): string[] | undefined {
   const value = params[key];
   if (value === undefined) return undefined;
@@ -48,7 +42,7 @@ const METHODS = new Set([
   'organization.create','organization.list','organization.snapshot',
   'department.create','department.list','domain.create','domain.list',
   'org-agent.create','org-agent.list','org-agent.bind-runtime','org-agent.unbind-runtime','org-agent.assign-domain',
-  'org-agent.workspace-list','org-agent.workspace-request','org-agent.workspace-ready','org-agent.workspace-fail','org-agent.workspace-retire',
+  'org-agent.workspace-list','org-agent.workspace-request','org-agent.workspace-configure','org-agent.workspace-prompt','org-agent.workspace-fail','org-agent.workspace-retire',
   'mission.create','mission.list','mission.assign-dri','mission.add-member','mission.status',
   'org-work.create','org-work.list','org-work.assign-owner','org-work.status','org-work.complete','org-work.outcome',
   'work-request.submit','work-request.get','work-request.list','work-request.accept','work-request.reject','work-request.cancel',
@@ -74,7 +68,8 @@ export class OrganizationRpcController {
       case 'org-agent.unbind-runtime': this.auth.requireAdmin(request); return this.plane.organization.unbindRuntimeSlot(stringParam(params,'agentId')!);
       case 'org-agent.workspace-list': this.auth.requireBrowserOrAdmin(request); return this.plane.organization.listAgentWorkspaces(stringParam(params,'agentId',true));
       case 'org-agent.workspace-request': return this.workspaceRequest(request, params);
-      case 'org-agent.workspace-ready': return this.workspaceReady(request, params);
+      case 'org-agent.workspace-configure': return this.workspaceConfigure(request, params);
+      case 'org-agent.workspace-prompt': this.auth.requireBrowserOrAdmin(request); return this.plane.organization.workspacePrompt(stringParam(params,'workspaceId')!);
       case 'org-agent.workspace-fail': this.auth.requireAdmin(request); return this.plane.organization.failAgentWorkspace(stringParam(params,'workspaceId')!, stringParam(params,'error')!);
       case 'org-agent.workspace-retire': this.auth.requireAdmin(request); return this.plane.organization.retireAgentWorkspace(stringParam(params,'workspaceId')!, stringParam(params,'reason')!);
       case 'org-agent.assign-domain': return this.agentAssignDomain(request, params);
@@ -121,23 +116,22 @@ export class OrganizationRpcController {
 
   private workspaceRequest(request: RpcRequest, params: Params): unknown {
     this.auth.requireAdmin(request);
-    return this.plane.organization.requestAgentWorkspace({
-      agentId: stringParam(params,'agentId')!,
-      isolationTier: enumParam<AgentWorkspaceIsolationTier>(params,'isolationTier',['c0-host','c1-container','c2-hypervisor','c3-ephemeral-vm'] as const,true),
-    });
+    return this.plane.organization.requestAgentWorkspace({ agentId: stringParam(params,'agentId')! });
   }
 
-  private workspaceReady(request: RpcRequest, params: Params): unknown {
+  private workspaceConfigure(request: RpcRequest, params: Params): unknown {
     this.auth.requireAdmin(request);
-    return this.plane.organization.markAgentWorkspaceReady({
+    return this.plane.organization.configureAgentWorkspace({
       workspaceId: stringParam(params,'workspaceId')!,
-      backendKind: enumParam<AgentWorkspaceBackendKind>(params,'backendKind',['host','container','hypervisor-vm','ephemeral-vm','remote-host'] as const)!,
+      securityMode: enumParam<AgentWorkspaceSecurityMode>(params,'securityMode',['prompt-guarded','tool-scoped','sandboxed'] as const,true),
       rootRef: stringParam(params,'rootRef')!,
       browserProfileId: stringParam(params,'browserProfileId')!,
       toolProfileRef: stringParam(params,'toolProfileRef')!,
       endpointRefs: stringArray(params,'endpointRefs'),
-      mountedResourceRefs: stringArray(params,'mountedResourceRefs'),
-      allowUnsafeHostAccess: booleanParam(params,'allowUnsafeHostAccess',true),
+      allowedRefs: stringArray(params,'allowedRefs'),
+      forbiddenRefs: stringArray(params,'forbiddenRefs'),
+      dangerousActionPolicy: enumParam<AgentWorkspaceDangerousActionPolicy>(params,'dangerousActionPolicy',['approval-required','deny'] as const,true),
+      toolPolicyState: enumParam<AgentWorkspaceToolPolicyState>(params,'toolPolicyState',['unconfigured','configured','unsupported'] as const,true),
     });
   }
   private agentAssignDomain(request: RpcRequest, params: Params): unknown {
