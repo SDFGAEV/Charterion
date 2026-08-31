@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { createConnection } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ControlDatabase } from '../src/database';
 import { ControlPlane } from '../src/controlPlane';
@@ -50,6 +51,28 @@ describe('RPC authentication', () => {
   });
 });
 describe('named-pipe transport', () => {
+  it('survives clients that disconnect after sending a request', async () => {
+    const { router } = setup();
+    const pipe = process.platform === 'win32'
+      ? `\\\\.\\pipe\\gam-test-${randomUUID()}`
+      : join(tmpdir(), `gam-test-${randomUUID()}.sock`);
+    const server = await startIpcServer(pipe, router);
+    cleanups.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
+    for (let i = 0; i < 20; i += 1) {
+      await new Promise<void>((resolve) => {
+        const socket = createConnection(pipe);
+        socket.once('error', () => resolve());
+        socket.once('connect', () => {
+          socket.write(JSON.stringify({ id: `drop-${i}`, method: 'health' }) + '\n');
+          socket.destroy();
+          resolve();
+        });
+      });
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    await expect(sendRpc(pipe, { id: 'still-alive', method: 'health' })).resolves.toMatchObject({ id: 'still-alive', ok: true });
+  });
+
   it('round-trips one RPC request over the daemon transport', async () => {
     const { router } = setup();
     const pipe = process.platform === 'win32'

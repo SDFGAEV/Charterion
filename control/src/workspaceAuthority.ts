@@ -24,6 +24,7 @@ function workspaceFrom(row: Row): TaskWorkspace {
 
 export interface MaterializedWorkspace { repoPath: string; path: string; branch: string; baseSha: string; }
 export interface WorkspaceObservation { headSha: string; branch: string; dirty: boolean; }
+export type VerifiedWorkspaceCleanup = 'removed' | 'already-released' | 'orphan-preserved';
 
 export class WorkspaceAuthority {
   readonly managedRoot: string;
@@ -148,19 +149,45 @@ export class WorkspaceAuthority {
     return { headSha, branch, dirty };
   }
 
-  release(id: string, now = Date.now()): TaskWorkspace {
+  private registeredWorktree(repoPath: string, path: string): boolean {
+    const wanted = resolve(path);
+    return this.git(repoPath, ['worktree', 'list', '--porcelain']).split(/\r?\n/).some((line) => {
+      if (!line.startsWith('worktree ')) return false;
+      const actual = resolve(line.slice('worktree '.length));
+      return process.platform === 'win32' ? actual.toLowerCase() === wanted.toLowerCase() : actual === wanted;
+    });
+  }
+
+  finalizeVerified(id: string, now = Date.now(), options: { attempts?: number; timeoutMs?: number } = {}): { workspace: TaskWorkspace; cleanup: VerifiedWorkspaceCleanup } {
+    const workspace = this.get(id);
+    if (workspace.status === 'released') return { workspace, cleanup: 'already-released' };
+    try {
+      const released = this.release(id, now, options);
+      return { workspace: released, cleanup: 'removed' };
+    } catch (error) {
+      if (this.registeredWorktree(workspace.repoPath, workspace.path)) throw error;
+      this.database.db.prepare("UPDATE task_workspaces SET status='released',updated_at=? WHERE id=?").run(now, id);
+      return { workspace: this.get(id), cleanup: 'orphan-preserved' };
+    }
+  }
+
+  release(id: string, now = Date.now(), options: { attempts?: number; timeoutMs?: number } = {}): TaskWorkspace {
     const workspace = this.get(id);
     if (workspace.status === 'released') return workspace;
     const observation = this.observe(id);
     if (observation.dirty) throw new Error(`Task workspace ${id} is dirty; refusing to remove uncommitted work`);
     let error: Error | undefined;
-    for (let attempt = 0; attempt < (process.platform === 'win32' ? 8 : 1); attempt += 1) {
+    const attempts = options.attempts ?? (process.platform === 'win32' ? 8 : 1);
+    const timeoutMs = options.timeoutMs ?? 15_000;
+    if (!Number.isInteger(attempts) || attempts < 1) throw new Error('Workspace release attempts must be a positive integer');
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 1) throw new Error('Workspace release timeoutMs must be a positive integer');
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
       const result = spawnSync(this.gitPath, ['-C', workspace.repoPath, 'worktree', 'remove', workspace.path], {
-        encoding: 'utf8', windowsHide: true, timeout: 15_000, shell: false,
+        encoding: 'utf8', windowsHide: true, timeout: timeoutMs, shell: false,
       });
       if (result.status === 0) { error = undefined; break; }
       error = new Error((result.stderr || result.error?.message || 'git worktree remove failed').trim());
-      if (attempt < 7) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.min(50 * (2 ** attempt), 500));
+      if (attempt + 1 < attempts) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.min(50 * (2 ** attempt), 500));
     }
     if (error) throw error;
     this.database.db.prepare("UPDATE task_workspaces SET status='released',updated_at=? WHERE id=?").run(now, id);

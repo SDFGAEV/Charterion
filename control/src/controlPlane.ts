@@ -212,6 +212,25 @@ export class ControlPlane {
     return released;
   }
 
+  private finalizeVerifiedTaskWorkspace(workspaceId: string, now: number): void {
+    const workspace = this.workspaces.get(workspaceId);
+    const lease = this.getLease(workspace.leaseId);
+    if (lease.status === 'active') this.releaseLease(lease.id, lease.epoch, now);
+    this.revokeCapability(workspace.capabilityId, now);
+    this.workspaces.removeCapabilityToken(workspace.id);
+    if (workspace.status === 'released') return;
+    try {
+      const finalized = this.workspaces.finalizeVerified(workspace.id, now, { attempts: 1, timeoutMs: 1_000 });
+      const type = finalized.cleanup === 'orphan-preserved' ? 'TASK_WORKSPACE_ORPHAN_PRESERVED' : 'TASK_WORKSPACE_RELEASED';
+      this.event(workspace.projectId, type, workspace.id, { taskId: workspace.taskId, slotId: workspace.slotId, branch: workspace.branch, cleanup: finalized.cleanup }, now);
+    } catch (error) {
+      this.event(workspace.projectId, 'TASK_WORKSPACE_RELEASE_DEFERRED', workspace.id, {
+        taskId: workspace.taskId, slotId: workspace.slotId, branch: workspace.branch,
+        error: error instanceof Error ? error.message : String(error),
+      }, now);
+    }
+  }
+
   verifyClaimAndCompleteTask(claimId: string, now = Date.now()) {
     const claim = this.evidence.getClaim(claimId);
     const verification = this.evidence.verifyClaim(claimId, now);
@@ -223,7 +242,7 @@ export class ControlPlane {
         if (completion.kind !== 'verified-claim' || completion.claimId !== claim.id || completion.verificationId !== verification.id || completion.commitSha !== claim.commitSha) {
           throw new Error('Verified-claim task already has a different machine completion');
         }
-        if (workspace) this.releaseTaskWorkspace(workspace.id, now);
+        if (workspace) this.finalizeVerifiedTaskWorkspace(workspace.id, now);
         return verification;
       }
       if (!workspace || workspace.status !== 'active') throw new Error('Verified-claim task has no active durable TaskWorkspace');
@@ -231,7 +250,7 @@ export class ControlPlane {
         throw new Error('Verified claim does not match the task workspace authority');
       }
       this.work.completeVerifiedClaim({ taskId: claim.taskId, claimId: claim.id, verificationId: verification.id, commitSha: claim.commitSha }, verification.completedAt);
-      this.releaseTaskWorkspace(workspace.id, now);
+      this.finalizeVerifiedTaskWorkspace(workspace.id, now);
     }
     return verification;
   }

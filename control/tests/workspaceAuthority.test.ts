@@ -1,8 +1,8 @@
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ControlDatabase } from '../src/database';
 import { ControlPlane } from '../src/controlPlane';
 
@@ -82,6 +82,55 @@ describe('WorkspaceAuthority', () => {
     const revision = h.plane.work.snapshot().revision;
     expect(h.plane.verifyClaimAndCompleteTask(claim.id, 40).id).toBe(verification.id);
     expect(h.plane.work.snapshot().revision).toBe(revision);
+  });
+
+  it('fences verified authority even when physical workspace cleanup must be deferred', () => {
+    const h = harness();
+    const seeded = seedTask(h, 'task-deferred-release');
+    const workspace = h.plane.provisionTaskWorkspace(seeded.project.id, seeded.slot.id, seeded.task.id, 20);
+    writeFileSync(join(workspace.path, 'result.txt'), 'worker result\n');
+    git(workspace.path, 'add', 'result.txt');
+    git(workspace.path, 'commit', '-m', 'worker result');
+    const head = git(workspace.path, 'rev-parse', 'HEAD');
+    const claim = h.plane.evidence.submitClaim({ projectId: seeded.project.id, taskId: seeded.task.id, subject: seeded.slot.id, resourceId: workspace.resourceId, leaseEpoch: workspace.leaseEpoch, summary: 'done', commitSha: head }, 30);
+    const release = vi.spyOn(h.plane.workspaces, 'release').mockImplementation(() => { throw new Error('simulated Windows worktree lock'); });
+    const verification = h.plane.verifyClaimAndCompleteTask(claim.id, 31);
+    expect(verification.status).toBe('passed');
+    expect(h.plane.work.getTask(seeded.task.id)?.machineCompletion).toMatchObject({ claimId: claim.id, commitSha: head });
+    expect(h.plane.getLease(workspace.leaseId).status).toBe('released');
+    const capability = h.plane.database.db.prepare('SELECT revoked_at FROM capabilities WHERE id=?').get(workspace.capabilityId) as { revoked_at: number | null };
+    expect(capability.revoked_at).toBe(31);
+    expect(existsSync(workspace.capabilityTokenPath)).toBe(false);
+    expect(h.plane.workspaces.get(workspace.id).status).toBe('active');
+    expect(h.plane.listEvents(seeded.project.id, 0, 200).some((event) => event.type === 'TASK_WORKSPACE_RELEASE_DEFERRED')).toBe(true);
+    release.mockRestore();
+    expect(h.plane.verifyClaimAndCompleteTask(claim.id, 40).id).toBe(verification.id);
+    expect(h.plane.workspaces.get(workspace.id).status).toBe('released');
+  });
+
+  it('converges a verified crash orphan without deleting preserved files', () => {
+    const h = harness();
+    const seeded = seedTask(h, 'task-orphan-replay');
+    const workspace = h.plane.provisionTaskWorkspace(seeded.project.id, seeded.slot.id, seeded.task.id, 20);
+    writeFileSync(join(workspace.path, 'result.txt'), 'worker result\n');
+    git(workspace.path, 'add', 'result.txt');
+    git(workspace.path, 'commit', '-m', 'worker result');
+    const head = git(workspace.path, 'rev-parse', 'HEAD');
+    const claim = h.plane.evidence.submitClaim({ projectId: seeded.project.id, taskId: seeded.task.id, subject: seeded.slot.id, resourceId: workspace.resourceId, leaseEpoch: workspace.leaseEpoch, summary: 'done', commitSha: head }, 30);
+    const verification = h.plane.evidence.verifyClaim(claim.id, 31);
+    expect(verification.status).toBe('passed');
+    h.plane.work.completeVerifiedClaim({ taskId: seeded.task.id, claimId: claim.id, verificationId: verification.id, commitSha: head }, 31);
+    const staleGitLink = readFileSync(join(workspace.path, '.git'), 'utf8');
+    git(workspace.repoPath, 'worktree', 'remove', workspace.path);
+    mkdirSync(workspace.path, { recursive: true });
+    writeFileSync(join(workspace.path, '.git'), staleGitLink);
+    writeFileSync(join(workspace.path, 'preserved.txt'), 'do not delete\n');
+    expect(h.plane.verifyClaimAndCompleteTask(claim.id, 40).id).toBe(verification.id);
+    expect(h.plane.workspaces.get(workspace.id).status).toBe('released');
+    expect(h.plane.getLease(workspace.leaseId).status).toBe('released');
+    expect(existsSync(workspace.capabilityTokenPath)).toBe(false);
+    expect(existsSync(join(workspace.path, 'preserved.txt'))).toBe(true);
+    expect(h.plane.listEvents(seeded.project.id, 0, 200).some((event) => event.type === 'TASK_WORKSPACE_ORPHAN_PRESERVED')).toBe(true);
   });
 
   it('rejects an old or unrelated commit even though the object exists', () => {
