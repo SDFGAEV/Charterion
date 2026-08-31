@@ -1,0 +1,193 @@
+{
+  "schema": "charterion.readme-translation-state.v1",
+  "source_locale": "en",
+  "source_digest": "5f0e8593665de41f020a29771f97d44edc00a890b7c29a68edb5c19096353a2b",
+  "source_sections": {
+    "overview": "e624e63c6277c4a60cbed1601d655054783c96c0ef55ca642698da98aa3a3123",
+    "architecture": "abe2880e00373b2826e2aec224fed13e610e6fe709e8ff7d6334211a2bbeb6f3",
+    "operation": "020a2c66962ea3aefe723ef3a730c58e37ac1fe276d810e4c944cfd0a426dd51",
+    "git-workflow": "e6d7f8b7ac2617a89e1fe165af530415ce8acf39670bc48200e0edeb2ccb6d63",
+    "browser-orchestration": "8e1d6a0e45486749c6e11e933e79f657567eaf721c5542a81652ff2898622a15",
+    "control-plane": "1bb52220790be0ff2c3c38c9a1e475aef52b5f08bc9f7858ecd21e468ea39f2a",
+    "quick-start": "ee15322afd0944ea492d1babd74fedd4bacad57766054caac964a203db9ca305",
+    "security": "976f26e3c73d2e2f632366a1d3656f4bfad02ed6b09f7a8d5d881fe39aad7f45",
+    "verification": "4051aecebc784b971d48c3dff096ecedc98db979b0759ecee57d9ef6752a232f",
+    "development": "74ed4637586c24253b196b6648be68ed4aa5d8703ead487b34e99692e3a66f98",
+    "scope": "9eb6a1eae4eb9cbf9097aaadf37af72ee018b6d52c19241468b5f451f153b584",
+    "license": "69150d9b2ccf3f7cd10945f2713ef9f082932b5a5bc6c654626bc2dc497153cb",
+    "status": "3bef14483c5006981b34e118dcc6d1c26a613e78b171dc64571d8019fdf936a7"
+  },
+  "translations": {
+    "zh-CN": {
+      "source_digest": "5f0e8593665de41f020a29771f97d44edc00a890b7c29a68edb5c19096353a2b",
+      "status": "current",
+      "section_digests": {
+        "overview": "e624e63c6277c4a60cbed1601d655054783c96c0ef55ca642698da98aa3a3123",
+        "architecture": "abe2880e00373b2826e2aec224fed13e610e6fe709e8ff7d6334211a2bbeb6f3",
+        "operation": "020a2c66962ea3aefe723ef3a730c58e37ac1fe276d810e4c944cfd0a426dd51",
+        "git-workflow": "e6d7f8b7ac2617a89e1fe165af530415ce8acf39670bc48200e0edeb2ccb6d63",
+        "browser-orchestration": "8e1d6a0e45486749c6e11e933e79f657567eaf721c5542a81652ff2898622a15",
+        "control-plane": "1bb52220790be0ff2c3c38c9a1e475aef52b5f08bc9f7858ecd21e468ea39f2a",
+        "quick-start": "ee15322afd0944ea492d1babd74fedd4bacad57766054caac964a203db9ca305",
+        "security": "976f26e3c73d2e2f632366a1d3656f4bfad02ed6b09f7a8d5d881fe39aad7f45",
+        "verification": "4051aecebc784b971d48c3dff096ecedc98db979b0759ecee57d9ef6752a232f",
+        "development": "74ed4637586c24253b196b6648be68ed4aa5d8703ead487b34e99692e3a66f98",
+        "scope": "9eb6a1eae4eb9cbf9097aaadf37af72ee018b6d52c19241468b5f451f153b584",
+        "license": "69150d9b2ccf3f7cd10945f2713ef9f082932b5a5bc6c654626bc2dc497153cb",
+        "status": "3bef14483c5006981b34e118dcc6d1c26a613e78b171dc64571d8019fdf936a7"
+      }
+    },
+    "zh-TW": {
+      "source_digest": "5f0e8593665de41f020a29771f97d44edc00a890b7c29a68edb5c19096353a2b",
+      "status": "current",
+      "section_digests": {
+        "overview": "e624e63c6277c4a60cbed1601d655054783c96c0ef55ca642698da98aa3a3123",
+        "architecture": "abe2880e00373b2826e2aec224fed13e610e6fe709e8ff7d6334211a2bbeb6f3",
+        "operation": "020a2c66962ea3aefe723ef3a730c58e37ac1fe276d810e4c944cfd0a426dd51",
+        "git-workflow": "e6d7f8b7ac2617a89e1fe165af530415ce8acf39670bc48200e0edeb2ccb6d63",
+        "browser-orchestration": "8e1d6a0e45486749c6e11e933e79f657567eaf721c5542a81652ff2898622a15",
+        "control-plane": "1bb52220790be0ff2c3c38c9a1e475aef52b5f08bc9f7858ecd21e468ea39f2a",
+        "quick-start": "ee15322afd0944ea492d1babd74fedd4bacad57766054caac964a203db9ca305",
+        "security": "976f26e3c73d2e2f632366a1d3656f4bfad02ed6b09f7a8d5d881fe39aad7f45",
+        "verification": "4051aecebc784b971d48c3dff096ecedc98db979b0759ecee57d9ef6752a232f",
+        "development": "74ed4637586c24253b196b6648be68ed4aa5d8703ead487b34e99692e3a66f98",
+        "scope": "9eb6a1eae4eb9cbf9097aaadf37af72ee018b6d52c19241468b5f451f153b584",
+        "license": "69150d9b2ccf3f7cd10945f2713ef9f082932b5a5bc6c654626bc2dc497153cb",
+        "status": "3bef14483c5006981b34e118dcc6d1c26a613e78b171dc64571d8019fdf936a7"
+      }
+    },
+    "ja": {
+      "source_digest": "5f0e8593665de41f020a29771f97d44edc00a890b7c29a68edb5c19096353a2b",
+      "status": "current",
+      "section_digests": {
+        "overview": "e624e63c6277c4a60cbed1601d655054783c96c0ef55ca642698da98aa3a3123",
+        "architecture": "abe2880e00373b2826e2aec224fed13e610e6fe709e8ff7d6334211a2bbeb6f3",
+        "operation": "020a2c66962ea3aefe723ef3a730c58e37ac1fe276d810e4c944cfd0a426dd51",
+        "git-workflow": "e6d7f8b7ac2617a89e1fe165af530415ce8acf39670bc48200e0edeb2ccb6d63",
+        "browser-orchestration": "8e1d6a0e45486749c6e11e933e79f657567eaf721c5542a81652ff2898622a15",
+        "control-plane": "1bb52220790be0ff2c3c38c9a1e475aef52b5f08bc9f7858ecd21e468ea39f2a",
+        "quick-start": "ee15322afd0944ea492d1babd74fedd4bacad57766054caac964a203db9ca305",
+        "security": "976f26e3c73d2e2f632366a1d3656f4bfad02ed6b09f7a8d5d881fe39aad7f45",
+        "verification": "4051aecebc784b971d48c3dff096ecedc98db979b0759ecee57d9ef6752a232f",
+        "development": "74ed4637586c24253b196b6648be68ed4aa5d8703ead487b34e99692e3a66f98",
+        "scope": "9eb6a1eae4eb9cbf9097aaadf37af72ee018b6d52c19241468b5f451f153b584",
+        "license": "69150d9b2ccf3f7cd10945f2713ef9f082932b5a5bc6c654626bc2dc497153cb",
+        "status": "3bef14483c5006981b34e118dcc6d1c26a613e78b171dc64571d8019fdf936a7"
+      }
+    },
+    "ko": {
+      "source_digest": "5f0e8593665de41f020a29771f97d44edc00a890b7c29a68edb5c19096353a2b",
+      "status": "current",
+      "section_digests": {
+        "overview": "e624e63c6277c4a60cbed1601d655054783c96c0ef55ca642698da98aa3a3123",
+        "architecture": "abe2880e00373b2826e2aec224fed13e610e6fe709e8ff7d6334211a2bbeb6f3",
+        "operation": "020a2c66962ea3aefe723ef3a730c58e37ac1fe276d810e4c944cfd0a426dd51",
+        "git-workflow": "e6d7f8b7ac2617a89e1fe165af530415ce8acf39670bc48200e0edeb2ccb6d63",
+        "browser-orchestration": "8e1d6a0e45486749c6e11e933e79f657567eaf721c5542a81652ff2898622a15",
+        "control-plane": "1bb52220790be0ff2c3c38c9a1e475aef52b5f08bc9f7858ecd21e468ea39f2a",
+        "quick-start": "ee15322afd0944ea492d1babd74fedd4bacad57766054caac964a203db9ca305",
+        "security": "976f26e3c73d2e2f632366a1d3656f4bfad02ed6b09f7a8d5d881fe39aad7f45",
+        "verification": "4051aecebc784b971d48c3dff096ecedc98db979b0759ecee57d9ef6752a232f",
+        "development": "74ed4637586c24253b196b6648be68ed4aa5d8703ead487b34e99692e3a66f98",
+        "scope": "9eb6a1eae4eb9cbf9097aaadf37af72ee018b6d52c19241468b5f451f153b584",
+        "license": "69150d9b2ccf3f7cd10945f2713ef9f082932b5a5bc6c654626bc2dc497153cb",
+        "status": "3bef14483c5006981b34e118dcc6d1c26a613e78b171dc64571d8019fdf936a7"
+      }
+    },
+    "es": {
+      "source_digest": "5f0e8593665de41f020a29771f97d44edc00a890b7c29a68edb5c19096353a2b",
+      "status": "current",
+      "section_digests": {
+        "overview": "e624e63c6277c4a60cbed1601d655054783c96c0ef55ca642698da98aa3a3123",
+        "architecture": "abe2880e00373b2826e2aec224fed13e610e6fe709e8ff7d6334211a2bbeb6f3",
+        "operation": "020a2c66962ea3aefe723ef3a730c58e37ac1fe276d810e4c944cfd0a426dd51",
+        "git-workflow": "e6d7f8b7ac2617a89e1fe165af530415ce8acf39670bc48200e0edeb2ccb6d63",
+        "browser-orchestration": "8e1d6a0e45486749c6e11e933e79f657567eaf721c5542a81652ff2898622a15",
+        "control-plane": "1bb52220790be0ff2c3c38c9a1e475aef52b5f08bc9f7858ecd21e468ea39f2a",
+        "quick-start": "ee15322afd0944ea492d1babd74fedd4bacad57766054caac964a203db9ca305",
+        "security": "976f26e3c73d2e2f632366a1d3656f4bfad02ed6b09f7a8d5d881fe39aad7f45",
+        "verification": "4051aecebc784b971d48c3dff096ecedc98db979b0759ecee57d9ef6752a232f",
+        "development": "74ed4637586c24253b196b6648be68ed4aa5d8703ead487b34e99692e3a66f98",
+        "scope": "9eb6a1eae4eb9cbf9097aaadf37af72ee018b6d52c19241468b5f451f153b584",
+        "license": "69150d9b2ccf3f7cd10945f2713ef9f082932b5a5bc6c654626bc2dc497153cb",
+        "status": "3bef14483c5006981b34e118dcc6d1c26a613e78b171dc64571d8019fdf936a7"
+      }
+    },
+    "pt-BR": {
+      "source_digest": "5f0e8593665de41f020a29771f97d44edc00a890b7c29a68edb5c19096353a2b",
+      "status": "current",
+      "section_digests": {
+        "overview": "e624e63c6277c4a60cbed1601d655054783c96c0ef55ca642698da98aa3a3123",
+        "architecture": "abe2880e00373b2826e2aec224fed13e610e6fe709e8ff7d6334211a2bbeb6f3",
+        "operation": "020a2c66962ea3aefe723ef3a730c58e37ac1fe276d810e4c944cfd0a426dd51",
+        "git-workflow": "e6d7f8b7ac2617a89e1fe165af530415ce8acf39670bc48200e0edeb2ccb6d63",
+        "browser-orchestration": "8e1d6a0e45486749c6e11e933e79f657567eaf721c5542a81652ff2898622a15",
+        "control-plane": "1bb52220790be0ff2c3c38c9a1e475aef52b5f08bc9f7858ecd21e468ea39f2a",
+        "quick-start": "ee15322afd0944ea492d1babd74fedd4bacad57766054caac964a203db9ca305",
+        "security": "976f26e3c73d2e2f632366a1d3656f4bfad02ed6b09f7a8d5d881fe39aad7f45",
+        "verification": "4051aecebc784b971d48c3dff096ecedc98db979b0759ecee57d9ef6752a232f",
+        "development": "74ed4637586c24253b196b6648be68ed4aa5d8703ead487b34e99692e3a66f98",
+        "scope": "9eb6a1eae4eb9cbf9097aaadf37af72ee018b6d52c19241468b5f451f153b584",
+        "license": "69150d9b2ccf3f7cd10945f2713ef9f082932b5a5bc6c654626bc2dc497153cb",
+        "status": "3bef14483c5006981b34e118dcc6d1c26a613e78b171dc64571d8019fdf936a7"
+      }
+    },
+    "fr": {
+      "source_digest": "5f0e8593665de41f020a29771f97d44edc00a890b7c29a68edb5c19096353a2b",
+      "status": "current",
+      "section_digests": {
+        "overview": "e624e63c6277c4a60cbed1601d655054783c96c0ef55ca642698da98aa3a3123",
+        "architecture": "abe2880e00373b2826e2aec224fed13e610e6fe709e8ff7d6334211a2bbeb6f3",
+        "operation": "020a2c66962ea3aefe723ef3a730c58e37ac1fe276d810e4c944cfd0a426dd51",
+        "git-workflow": "e6d7f8b7ac2617a89e1fe165af530415ce8acf39670bc48200e0edeb2ccb6d63",
+        "browser-orchestration": "8e1d6a0e45486749c6e11e933e79f657567eaf721c5542a81652ff2898622a15",
+        "control-plane": "1bb52220790be0ff2c3c38c9a1e475aef52b5f08bc9f7858ecd21e468ea39f2a",
+        "quick-start": "ee15322afd0944ea492d1babd74fedd4bacad57766054caac964a203db9ca305",
+        "security": "976f26e3c73d2e2f632366a1d3656f4bfad02ed6b09f7a8d5d881fe39aad7f45",
+        "verification": "4051aecebc784b971d48c3dff096ecedc98db979b0759ecee57d9ef6752a232f",
+        "development": "74ed4637586c24253b196b6648be68ed4aa5d8703ead487b34e99692e3a66f98",
+        "scope": "9eb6a1eae4eb9cbf9097aaadf37af72ee018b6d52c19241468b5f451f153b584",
+        "license": "69150d9b2ccf3f7cd10945f2713ef9f082932b5a5bc6c654626bc2dc497153cb",
+        "status": "3bef14483c5006981b34e118dcc6d1c26a613e78b171dc64571d8019fdf936a7"
+      }
+    },
+    "de": {
+      "source_digest": "5f0e8593665de41f020a29771f97d44edc00a890b7c29a68edb5c19096353a2b",
+      "status": "current",
+      "section_digests": {
+        "overview": "e624e63c6277c4a60cbed1601d655054783c96c0ef55ca642698da98aa3a3123",
+        "architecture": "abe2880e00373b2826e2aec224fed13e610e6fe709e8ff7d6334211a2bbeb6f3",
+        "operation": "020a2c66962ea3aefe723ef3a730c58e37ac1fe276d810e4c944cfd0a426dd51",
+        "git-workflow": "e6d7f8b7ac2617a89e1fe165af530415ce8acf39670bc48200e0edeb2ccb6d63",
+        "browser-orchestration": "8e1d6a0e45486749c6e11e933e79f657567eaf721c5542a81652ff2898622a15",
+        "control-plane": "1bb52220790be0ff2c3c38c9a1e475aef52b5f08bc9f7858ecd21e468ea39f2a",
+        "quick-start": "ee15322afd0944ea492d1babd74fedd4bacad57766054caac964a203db9ca305",
+        "security": "976f26e3c73d2e2f632366a1d3656f4bfad02ed6b09f7a8d5d881fe39aad7f45",
+        "verification": "4051aecebc784b971d48c3dff096ecedc98db979b0759ecee57d9ef6752a232f",
+        "development": "74ed4637586c24253b196b6648be68ed4aa5d8703ead487b34e99692e3a66f98",
+        "scope": "9eb6a1eae4eb9cbf9097aaadf37af72ee018b6d52c19241468b5f451f153b584",
+        "license": "69150d9b2ccf3f7cd10945f2713ef9f082932b5a5bc6c654626bc2dc497153cb",
+        "status": "3bef14483c5006981b34e118dcc6d1c26a613e78b171dc64571d8019fdf936a7"
+      }
+    },
+    "ru": {
+      "source_digest": "5f0e8593665de41f020a29771f97d44edc00a890b7c29a68edb5c19096353a2b",
+      "status": "current",
+      "section_digests": {
+        "overview": "e624e63c6277c4a60cbed1601d655054783c96c0ef55ca642698da98aa3a3123",
+        "architecture": "abe2880e00373b2826e2aec224fed13e610e6fe709e8ff7d6334211a2bbeb6f3",
+        "operation": "020a2c66962ea3aefe723ef3a730c58e37ac1fe276d810e4c944cfd0a426dd51",
+        "git-workflow": "e6d7f8b7ac2617a89e1fe165af530415ce8acf39670bc48200e0edeb2ccb6d63",
+        "browser-orchestration": "8e1d6a0e45486749c6e11e933e79f657567eaf721c5542a81652ff2898622a15",
+        "control-plane": "1bb52220790be0ff2c3c38c9a1e475aef52b5f08bc9f7858ecd21e468ea39f2a",
+        "quick-start": "ee15322afd0944ea492d1babd74fedd4bacad57766054caac964a203db9ca305",
+        "security": "976f26e3c73d2e2f632366a1d3656f4bfad02ed6b09f7a8d5d881fe39aad7f45",
+        "verification": "4051aecebc784b971d48c3dff096ecedc98db979b0759ecee57d9ef6752a232f",
+        "development": "74ed4637586c24253b196b6648be68ed4aa5d8703ead487b34e99692e3a66f98",
+        "scope": "9eb6a1eae4eb9cbf9097aaadf37af72ee018b6d52c19241468b5f451f153b584",
+        "license": "69150d9b2ccf3f7cd10945f2713ef9f082932b5a5bc6c654626bc2dc497153cb",
+        "status": "3bef14483c5006981b34e118dcc6d1c26a613e78b171dc64571d8019fdf936a7"
+      }
+    }
+  }
+}

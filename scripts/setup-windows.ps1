@@ -36,12 +36,12 @@ Write-Host "Stable extension id: $ExtensionId"
 Write-Host "GAM launcher: $wrapper"
 if ($CreateDesktopShortcut) {
   $desktop = [Environment]::GetFolderPath('Desktop')
-  $shortcutPath = Join-Path $desktop 'GPT Agent Manager.lnk'
+  $shortcutPath = Join-Path $desktop 'Charterion.lnk'
   $shell = New-Object -ComObject WScript.Shell
   $shortcut = $shell.CreateShortcut($shortcutPath)
   $shortcut.TargetPath = $wrapper
   $shortcut.WorkingDirectory = $Repo
-  $shortcut.Description = 'Start GPT Agent Manager'
+  $shortcut.Description = 'Start Charterion'
   $shortcut.Save()
   Write-Host "Desktop shortcut: $shortcutPath"
 }

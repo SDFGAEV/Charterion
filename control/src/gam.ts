@@ -218,7 +218,7 @@ function printHuman(result: LauncherResult): void {
     for (const [key, value] of Object.entries(result.details ?? {})) console.log(`  ${key}: ${String(value)}`);
     return;
   }
-  console.log('GPT Agent Manager is ready.');
+  console.log('Charterion is ready.');
   if (result.daemon) console.log(`  Kernel: ${result.daemon}`);
   if (result.browser) console.log(`  Browser: ${result.browser}`);
   if (result.chromeProfile) console.log(`  Chrome profile: ${result.chromeProfile}`);

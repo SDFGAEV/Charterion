@@ -28,7 +28,7 @@ $config = [ordered]@{ pipeName = $PipeName; browserTokenPath = $browserTokenPath
 $manifestPath = Join-Path $installDir "$HostName.json"
 $manifest = [ordered]@{
   name = $HostName
-  description = 'GPT Agent Manager local control-plane bridge'
+  description = 'Charterion local control-plane bridge'
   path = $installedExe
   type = 'stdio'
   allowed_origins = @($allowedOrigin)

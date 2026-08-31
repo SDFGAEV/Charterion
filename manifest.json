@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "GPT Agent Manager",
+  "name": "Charterion",
   "version": "0.4.1",
-  "description": "Coordinate multiple ChatGPT conversations from one local-first side panel.",
+  "description": "Open-source multi-agent engineering control plane for ChatGPT Web Agents.",
   "permissions": [
     "tabs",
     "storage",
@@ -16,7 +16,7 @@
     "service_worker": "dist/background.js"
   },
   "action": {
-    "default_title": "Open GPT Agent Manager"
+    "default_title": "Open Charterion"
   },
   "side_panel": {
     "default_path": "dist/sidepanel.html"

@@ -1,16 +1,16 @@
 {
-  "name": "gpt-agent-manager",
+  "name": "charterion",
   "version": "0.4.1",
   "private": true,
-  "description": "Local-first Chrome side panel for coordinating multiple ChatGPT conversations.",
-  "license": "MIT",
+  "description": "Open-source multi-agent engineering control plane for ChatGPT Web Agents.",
+  "license": "Apache-2.0",
   "scripts": {
     "build": "node scripts/build.mjs",
     "check": "tsc --noEmit",
     "test": "vitest run --pool=forks --fileParallelism=false",
-    "verify": "npm run check && npm run check:control && npm run check:assets && npm run test && npm run build && npm run build:control",
+    "verify": "npm run check && npm run check:control && npm run check:assets && npm run check:readme-i18n && npm run test && npm run build && npm run build:control",
     "check:assets": "node scripts/check-assets.mjs",
-    "release": "npm run verify:full && node scripts/package-release.mjs && node scripts/package-runtime.mjs",
+    "release": "npm run verify:full && npm run check:readme-i18n:release && npm run third-party-notices && node scripts/package-release.mjs && node scripts/package-runtime.mjs",
     "check:control": "tsc -p tsconfig.control.json --noEmit",
     "build:control": "node scripts/build-control.mjs",
     "test:control": "vitest run control/tests",
@@ -31,7 +31,12 @@
     "verify:full": "npm run verify && npm run publish:native && npm run smoke:control && npm run smoke:evidence && npm run smoke:change-request && npm run smoke:fleet && npm run smoke:native && npm run smoke:runtime-install && npm run smoke:launcher",
     "package:runtime": "node scripts/package-runtime.mjs",
     "smoke:fleet": "npm run build:control && node scripts/smoke-fleet.mjs",
-    "smoke:runtime-install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-runtime-install.ps1"
+    "smoke:runtime-install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-runtime-install.ps1",
+    "readme:i18n:sync": "node scripts/readme-i18n.mjs sync-navigation",
+    "readme:i18n:status": "node scripts/readme-i18n.mjs status",
+    "check:readme-i18n": "node scripts/check-readme-i18n.mjs",
+    "check:readme-i18n:release": "node scripts/check-readme-i18n.mjs --release",
+    "third-party-notices": "node scripts/generate_third_party_notices.mjs"
   },
   "devDependencies": {
     "@types/chrome": "^0.1.4",

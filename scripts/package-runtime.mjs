@@ -5,7 +5,7 @@ import { basename, join, relative, resolve, sep } from 'node:path';
 const root = resolve(import.meta.dirname, '..');
 const outDir = resolve(root, 'release');
 const pkg = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8'));
-const archiveName = `gpt-agent-manager-v${pkg.version}-windows-runtime.zip`;
+const archiveName = `charterion-v${pkg.version}-windows-runtime.zip`;
 const archivePath = resolve(outDir, archiveName);
 
 const crcTable = Array.from({ length: 256 }, (_, n) => {
@@ -47,7 +47,18 @@ function zipName(path) {
 }
 
 const inputPaths = [
-  resolve(root, 'manifest.json'), resolve(root, 'LICENSE'), resolve(root, 'README.md'),
+  resolve(root, 'manifest.json'), resolve(root, 'LICENSE'), resolve(root, 'NOTICE'), resolve(root, 'THIRD_PARTY_NOTICES.md'),
+  resolve(root, 'README.md'),
+  resolve(root, 'README.zh-CN.md'),
+  resolve(root, 'README.zh-TW.md'),
+  resolve(root, 'README.ja.md'),
+  resolve(root, 'README.ko.md'),
+  resolve(root, 'README.es.md'),
+  resolve(root, 'README.pt-BR.md'),
+  resolve(root, 'README.fr.md'),
+  resolve(root, 'README.de.md'),
+  resolve(root, 'README.ru.md'),
+  ...await walk(resolve(root, 'docs', 'readme')),
   resolve(root, 'GAM.cmd'), resolve(root, 'SETUP.cmd'),
   ...await walk(resolve(root, 'dist')), ...await walk(resolve(root, 'dist-control')),
   resolve(root, 'dist-native-host', 'GamNativeHost.exe'),
