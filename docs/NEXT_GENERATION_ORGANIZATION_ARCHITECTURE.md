@@ -845,3 +845,132 @@ The architecture should optimize organizational learning and engineering through
 ---
 
 This design intentionally prioritizes systematic decoupling, typed boundaries, durable state, layered authority, worktree/PR-centered collaboration, and evolvable organization policy over backward compatibility with the current role/wave model.
+
+## 29. Capability-Neutral Standardized Action Substrate
+
+Charterion is not a software-development-only agent platform. Software engineering is one important organizational workload, not the boundary of Agent capability.
+
+The platform MUST preserve the native breadth of capable ChatGPT Web Agents. Agents may research literature, write papers, create presentations, analyze data, operate browsers, manage documents, conduct experiments, perform engineering, coordinate projects, use remote computers, inspect systems, and undertake future classes of work not known when Charterion is implemented.
+
+The platform's job is therefore **standardization without capability reduction**.
+
+Charterion should normalize how actions are described, authorized, isolated, observed, evidenced, reviewed, recovered, and audited. It should not encode a closed list of things Agents are allowed to be capable of.
+
+Principle: **standardize the interface; do not narrow the intelligence behind it.**
+
+A capability should be discoverable and invokable through typed contracts while remaining open-ended through adapters/plugins. Unknown future capabilities must be addable without redesigning Agent identity, Mission, review, or authority models.
+
+### 29.1 Generic capability contracts
+
+The generic execution boundary should be based on typed capability and operation contracts rather than code-centric commands:
+
+```text
+CapabilityDescriptor
+  capabilityId
+  providerId
+  operations[]
+  inputSchema
+  outputSchema
+  effectClass
+  authorityRequirements
+  recoverability
+  observability
+```
+
+```text
+OperationRequest -> OperationReceipt -> EvidenceRefs / ArtifactRefs
+```
+
+Every provider may expose richer domain-specific semantics, but the organization layer should always be able to reason about identity, authority, effects, receipts, failure, retry safety, artifacts, and evidence through common contracts.
+
+### 29.2 Open-ended capability providers
+
+Examples of capability providers include Git/worktree/PR tooling, filesystem and terminal access, browser and Remote Desktop operation, web and literature research, document/PDF/slide/spreadsheet creation, data analysis, scientific experiment execution, communication systems, cloud applications, compute resources, and future plugins.
+
+These are examples, not a platform allowlist. The generic platform must not contain assumptions such as `task.kind === code` or require every deliverable to become a Git commit.
+
+A provider may add capabilities at runtime through a typed registration boundary. Organization policy can govern effects and authority by capability metadata rather than by embedding every provider name into core logic.
+
+This preserves two properties simultaneously:
+
+- Agents retain the full breadth of tools and reasoning available to them.
+- Actions become normalized enough for multiple autonomous Agents to coordinate safely and predictably.
+
+The correct abstraction is not `what is the Agent allowed to know how to do?`; it is `how is an effect represented and governed when the Agent chooses to do it?`.
+
+## 30. Work Model Beyond Code
+
+`Mission`, `Finding`, `Task`, `Review`, `Evidence`, `Artifact`, and `Authority` are universal organization primitives. `Change`, Git worktree, branch, commit, and PR are specialized software-engineering primitives beneath them.
+
+Examples:
+
+```text
+Literature Mission -> Research Tasks -> Sources/Notes -> Synthesis -> Paper Artifact -> Review
+Paper Mission      -> Draft Sections -> DOCX/LaTeX Artifact -> Peer Review -> Submission
+Presentation       -> Research -> Narrative -> PPTX Artifact -> Review -> Publish
+Data Analysis      -> Dataset -> Analysis Run -> Tables/Charts -> Report Artifact -> Review
+Experiment         -> Protocol -> Run -> Raw Evidence -> Analysis -> Scientific Review
+Software Change    -> Finding -> Change -> Worktree -> Commits -> PR -> Merge
+Operations         -> Incident/Request -> Operation -> Receipts -> Verification
+```
+
+The organization runtime must not force non-code work through Git metaphors when they do not fit. It should preserve domain-native workflows while using common identity, responsibility, authority, evidence, review, and lifecycle contracts.
+
+### 30.1 Artifact and deliverable abstraction
+
+Non-code work should use first-class Artifact/Deliverable objects rather than pretending every result is a source-tree mutation:
+
+```text
+Artifact
+  artifactId
+  kind
+  producerAgentId
+  missionId
+  revisions[]
+  storageRefs[]
+  evidenceRefs[]
+  reviewPolicy
+  publicationState
+```
+
+Artifacts may be papers, notes, datasets, reports, spreadsheets, slide decks, figures, experiment outputs, designs, documents, software packages, or future media.
+
+The platform should support revision, provenance, review, approval, publication, supersession, and reproducibility where meaningful, while allowing each artifact type to retain native tooling and formats.
+
+### 30.2 Layered standardization, not lowest-common-denominator APIs
+
+Standardization must be layered. Charterion should define a small universal operation envelope for organizational concerns, then allow capability-specific typed protocols underneath it.
+
+The universal envelope describes who is acting, under which Mission/Task, against which resources, with which authority, whether the effect is reversible/idempotent/uncertain, what receipt was returned, and where evidence/artifacts live.
+
+The provider-specific contract preserves native power. Git retains branches, commits, worktrees, and PRs. Literature tooling retains citation/source/query semantics. Presentation tooling retains slides/themes/layouts. Experiment tooling retains protocol/run/checkpoint/measurement semantics.
+
+Charterion must not replace rich provider APIs with generic `execute(action: string, payload: object)` boundaries. Generic organization contracts and domain-specific typed capabilities coexist.
+
+Principle: **normalize coordination and effects; preserve domain expressiveness.**
+
+## 31. Departments Do Not Define Capability Ceilings
+
+Departments express durable responsibility and coordination boundaries, not limits on what an Agent may know or do.
+
+An Agent in Research may write code to support a study. An Engineer may perform literature review. A Data Agent may create slides. A Publication Agent may inspect repositories. A Principal Architect may run experiments. Capability is many-to-many and evolves over time.
+
+Department policy may determine ownership, expected review, resource authority, or who is accountable for an outcome. It MUST NOT imply that non-members are cognitively incapable of, or categorically forbidden from, performing the underlying work in an isolated and policy-compliant context.
+
+A real organization may define departments such as Engineering, Research, Science/Experimentation, Data & Analysis, Writing & Publication, Design & Presentation, Operations, Security/Governance, or project-specific alternatives. Charterion must not hard-code this taxonomy.
+
+Agent capability profiles are dynamic evidence-backed descriptions used for discovery and assignment. They are not closed permission lists. Authority over risky effects is a separate concern from capability.
+
+## 32. Capability, Authority, and Standardized Operations Are Orthogonal
+
+The architecture must keep three questions separate:
+
+1. **Capability:** can this Agent/provider perform the class of work?
+2. **Authority:** may this Agent perform this particular effect on this protected resource now?
+3. **Protocol:** how is the attempted operation represented, observed, recovered, and evidenced?
+
+A capable Agent may lack authority for a specific destructive production operation while retaining the ability to reason about it, simulate it, prepare artifacts, or propose it. Conversely, granting authority must never be interpreted as proof of competence.
+
+The standardization layer should make operations legible to the organization without deciding the Agent's reasoning path. It provides normalized discovery, invocation boundaries, effect classification, receipts, audit records, artifact references, idempotency/fencing metadata, and failure semantics.
+
+This is the platform's core value: **turn powerful but potentially uncoordinated Agent actions into powerful, coordinated, inspectable organizational actions without reducing the underlying capability surface.**
