@@ -95,6 +95,26 @@ describe('elastic fleet planner', () => {
     });
     expect(decisions.map((item) => item.kind)).toEqual(['suspend']);
   });
+  it('keeps reviewer demand after an explicit failed review', () => {
+    const task = { id: 'r1', project: 'Project One', targetRole: 'REVIEWER', completionPolicy: 'review-pass', dependsOn: [], attemptIds: ['x1'] };
+    const replyTextTail = 'review\n<GAM_REVIEW>\n{"decision":"fail","reason":"needs fix","nextInstruction":"fix it"}\n</GAM_REVIEW>';
+    const decisions = planElasticFleet({ project: project({ minSlots: 0 }), agents: [agent('a1', 'REVIEWER')], work: work([task], [{ attemptId: 'x1', state: 'reply-observed', replyTextTail }]), activeLeaseHolderIds: new Set(), unsettledBrowserSlotIds: new Set(), now: NOW, idleGraceMs: 0 });
+    expect(decisions).toEqual([]);
+  });
+
+  it('fails closed on protocol-invalid review replies', () => {
+    const task = { id: 'r1', project: 'Project One', targetRole: 'REVIEWER', completionPolicy: 'review-pass', dependsOn: [], attemptIds: ['x1'] };
+    const decisions = planElasticFleet({ project: project({ minSlots: 0 }), agents: [agent('a1', 'REVIEWER')], work: work([task], [{ attemptId: 'x1', state: 'reply-observed', replyTextTail: 'SUPERVISOR_REJECTED' }]), activeLeaseHolderIds: new Set(), unsettledBrowserSlotIds: new Set(), now: NOW, idleGraceMs: 0 });
+    expect(decisions).toEqual([]);
+  });
+
+  it('releases reviewer demand only after a strict passing review protocol', () => {
+    const task = { id: 'r1', project: 'Project One', targetRole: 'REVIEWER', completionPolicy: 'review-pass', dependsOn: [], attemptIds: ['x1'] };
+    const replyTextTail = 'review\n<GAM_REVIEW>\n{"decision":"pass","reason":"verified","nextInstruction":""}\n</GAM_REVIEW>';
+    const decisions = planElasticFleet({ project: project({ minSlots: 0 }), agents: [agent('a1', 'REVIEWER')], work: work([task], [{ attemptId: 'x1', state: 'reply-observed', replyTextTail }]), activeLeaseHolderIds: new Set(), unsettledBrowserSlotIds: new Set(), now: NOW, idleGraceMs: 0 });
+    expect(decisions.map((item) => item.kind)).toEqual(['suspend']);
+  });
+
   it('keeps only the number of same-role workers required by ready demand', () => {
     const task = { id: 't1', project: 'Project One', targetRole: 'WORKER', completionPolicy: 'verified-claim', dependsOn: [], attemptIds: [] };
     const decisions = planElasticFleet({
@@ -104,9 +124,10 @@ describe('elastic fleet planner', () => {
     expect(decisions).toEqual([{ kind: 'suspend', slotId: 'a1', reason: 'idle beyond 0ms and above target 0' }]);
   });
 
-  it('releases reviewer capacity after a review reply is observed', () => {
+  it('releases reviewer capacity after a strict passing review is observed', () => {
     const task = { id: 'r1', project: 'Project One', targetRole: 'REVIEWER', completionPolicy: 'review-pass', dependsOn: [], attemptIds: ['r-a1'] };
-    const decisions = planElasticFleet({ project: project({ minSlots: 0 }), agents: [agent('a1', 'REVIEWER')], work: work([task], [{ attemptId: 'r-a1', state: 'reply-observed' }]), activeLeaseHolderIds: new Set(), unsettledBrowserSlotIds: new Set(), now: NOW, idleGraceMs: 0 });
+    const replyTextTail = 'review\n<GAM_REVIEW>\n{"decision":"pass","reason":"verified","nextInstruction":""}\n</GAM_REVIEW>';
+    const decisions = planElasticFleet({ project: project({ minSlots: 0 }), agents: [agent('a1', 'REVIEWER')], work: work([task], [{ attemptId: 'r-a1', state: 'reply-observed', replyTextTail }]), activeLeaseHolderIds: new Set(), unsettledBrowserSlotIds: new Set(), now: NOW, idleGraceMs: 0 });
     expect(decisions.map((item) => item.kind)).toEqual(['suspend']);
   });
 

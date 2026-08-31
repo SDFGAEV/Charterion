@@ -21,16 +21,36 @@ function text(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
-function attemptStateById(work: KernelWorkSnapshot): Map<string, string> {
-  return new Map(work.attempts.map((attempt) => [text(attempt.attemptId) ?? '', text(attempt.state) ?? '']));
+function attemptById(work: KernelWorkSnapshot): Map<string, Record<string, unknown>> {
+  return new Map(work.attempts.map((attempt) => [text(attempt.attemptId) ?? '', attempt]));
 }
-function taskTerminal(task: Record<string, unknown>, attempts: ReadonlyMap<string, string>): boolean {
+
+function reviewAttemptPassed(attempt: Record<string, unknown> | undefined): boolean {
+  if (text(attempt?.state) !== 'reply-observed') return false;
+  const reply = text(attempt?.replyTextTail);
+  if (!reply) return false;
+  const open = '<GAM_REVIEW>'; const close = '</GAM_REVIEW>'; const trimmed = reply.trim();
+  const start = trimmed.lastIndexOf(open); const end = trimmed.lastIndexOf(close);
+  if (start < 0 || end < start || end + close.length !== trimmed.length) return false;
+  if (trimmed.indexOf(open) !== start || trimmed.indexOf(close) !== end) return false;
+  try {
+    const value = JSON.parse(trimmed.slice(start + open.length, end).trim());
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const item = value;
+    const keys = Object.keys(item).sort().join(',');
+    return keys === 'decision,nextInstruction,reason' && item.decision === 'pass' &&
+      typeof item.reason === 'string' && item.reason.trim().length > 0 && item.nextInstruction === '';
+  } catch { return false; }
+}
+
+function taskTerminal(task: Record<string, unknown>, attempts: ReadonlyMap<string, Record<string, unknown>>): boolean {
   if (typeof task.skippedAt === 'number' || typeof task.cancelledAt === 'number' || task.machineCompletion) return true;
   const policy = text(task.completionPolicy) ?? 'reply';
   const ids = Array.isArray(task.attemptIds) ? task.attemptIds.filter((id): id is string => typeof id === 'string') : [];
   const latestAttemptId = ids.at(-1);
   if (latestAttemptId && text(task.retryAfterAttemptId) === latestAttemptId) return false;
-  if (policy === 'reply' || policy === 'review-pass') return latestAttemptId ? attempts.get(latestAttemptId) === 'reply-observed' : false;
+  if (policy === 'reply') return latestAttemptId ? text(attempts.get(latestAttemptId)?.state) === 'reply-observed' : false;
+  if (policy === 'review-pass') return latestAttemptId ? reviewAttemptPassed(attempts.get(latestAttemptId)) : false;
   if (policy === 'human-approval') {
     const decision = task.humanDecision as Record<string, unknown> | undefined;
     return decision?.decision === 'approve' || decision?.decision === 'reject';
@@ -39,7 +59,7 @@ function taskTerminal(task: Record<string, unknown>, attempts: ReadonlyMap<strin
 }
 
 function roleDemand(project: ProjectCell, work: KernelWorkSnapshot): Map<string, number> {
-  const attempts = attemptStateById(work);
+  const attempts = attemptById(work);
   const tasks = new Map(work.tasks.map((task) => [text(task.id) ?? '', task]));
   const terminal = new Set([...tasks].filter(([, task]) => taskTerminal(task, attempts)).map(([id]) => id));
   const roles = new Map<string, number>();
