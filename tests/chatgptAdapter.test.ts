@@ -63,6 +63,21 @@ describe('ChatGPT page observation', () => {
     expect(ordinary.signals).not.toContain('conversation-limit');
   });
 
+  it('detects message-rate limits only on direct error surfaces', () => {
+    const limited = new JSDOM('<!doctype html><title>ChatGPT</title><div role="alert">Too many messages. Please try again later.</div><textarea id="prompt-textarea"></textarea>');
+    const observed = observePageStatus(limited.window.document, 'https://chatgpt.com/c/rate');
+    expect(observed).toMatchObject({ status: 'error', confidence: 'direct' });
+    expect(observed.signals).toContain('message-rate-limit');
+
+    const chinese = new JSDOM('<!doctype html><title>ChatGPT</title><div role="alert">消息过多，请稍后再试。</div><textarea id="prompt-textarea"></textarea>');
+    expect(observePageStatus(chinese.window.document, 'https://chatgpt.com/c/rate-cn').signals).toContain('message-rate-limit');
+
+    const ordinaryText = new JSDOM('<!doctype html><title>ChatGPT</title><main>We should avoid too many messages.</main><textarea id="prompt-textarea"></textarea>');
+    const ordinary = observePageStatus(ordinaryText.window.document, 'https://chatgpt.com/c/ordinary');
+    expect(ordinary.status).toBe('idle');
+    expect(ordinary.signals).not.toContain('message-rate-limit');
+  });
+
   it('classifies access, login, and explicit error surfaces before readiness', () => {
     const blocked = new JSDOM('<!doctype html><title>Access Denied</title><main></main>');
     expect(observePageStatus(blocked.window.document, 'https://chatgpt.com/').status).toBe('blocked');

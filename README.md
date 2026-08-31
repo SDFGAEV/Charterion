@@ -155,6 +155,8 @@ The browser plane still provides the v0.3 coordination features:
 - portable browser-state export/import;
 - opt-in Auto Supervisor.
 
+Physical prompt sends pass through a persistent account-level dispatch governor before touching the ChatGPT composer. The default policy spaces bursts globally, applies per-Project and per-AgentSlot gaps, caps simultaneous GAM-managed generations, and enforces a rolling minute budget. Direct ChatGPT rate-limit/error UI triggers persisted exponential backoff. Deferred sends do not create a fake successful delivery and are retried only when the normal supervisor/reconciliation loop sees capacity again; GAM favors safe throughput over maximum instantaneous concurrency.
+
 The local control plane augments these browser workflows; failure of `gamd` does not cause the extension to invent state or silently resend prompts. Manifest V3 reconciliation is event-driven with a `chrome.alarms` one-minute wakeup as a durability fallback; the service worker does not rely on `setInterval` remaining alive.
 
 ### Supervisor-managed Worker fleet

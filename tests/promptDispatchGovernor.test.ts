@@ -1,0 +1,104 @@
+import { describe, expect, it } from 'vitest';
+import {
+  DEFAULT_PROMPT_DISPATCH_POLICY,
+  PromptDispatchGovernor,
+  normalizePromptDispatchState,
+  planPromptDispatch,
+  type PromptDispatchGovernorState,
+} from '../src/promptDispatchGovernor';
+
+function memoryStore(initial?: unknown) {
+  let value = initial;
+  return {
+    read: async () => structuredClone(value),
+    write: async (next: PromptDispatchGovernorState) => { value = structuredClone(next); },
+    value: () => structuredClone(value) as PromptDispatchGovernorState | undefined,
+  };
+}
+
+function harness(initial?: unknown) {
+  let now = 1_000_000;
+  const store = memoryStore(initial);
+  const governor = new PromptDispatchGovernor(
+    store,
+    DEFAULT_PROMPT_DISPATCH_POLICY,
+    () => now,
+    async (ms) => { now += ms; },
+    () => 0,
+  );
+  return { governor, store, now: () => now, advance: (ms: number) => { now += ms; } };
+}
+
+describe('PromptDispatchGovernor', () => {
+  it('allows and durably reserves the first physical prompt', async () => {
+    const h = harness();
+    const permit = await h.governor.acquire({ project: 'P', slotId: 'S1', activeGenerations: 0 });
+    expect(permit).toMatchObject({ allowed: true, reservedAt: 1_000_000, waitedMs: 0 });
+    expect(h.store.value()).toMatchObject({ recentDispatches: [1_000_000], projectLastDispatch: { p: 1_000_000 }, slotLastDispatch: { s1: 1_000_000 } });
+  });  it('serializes concurrent sends and spaces them by the global gap', async () => {
+    const h = harness();
+    const [first, second] = await Promise.all([
+      h.governor.acquire({ project: 'P1', slotId: 'S1', activeGenerations: 0 }),
+      h.governor.acquire({ project: 'P2', slotId: 'S2', activeGenerations: 0 }),
+    ]);
+    expect(first).toMatchObject({ allowed: true, reservedAt: 1_000_000 });
+    expect(second).toMatchObject({ allowed: true, reservedAt: 1_004_000, waitedMs: 4_000 });
+    expect(h.store.value()?.recentDispatches).toEqual([1_000_000, 1_004_000]);
+  });
+
+  it('defers instead of blocking when the rolling budget needs a long wait', async () => {
+    const now = 1_000_000;
+    const recent = Array.from({ length: 8 }, (_, index) => now - 10_000 + index * 500);
+    const h = harness({ schemaVersion: 1, recentDispatches: recent, projectLastDispatch: {}, slotLastDispatch: {}, backoffUntil: 0, rateLimitStrikes: 0 });
+    const permit = await h.governor.acquire({ activeGenerations: 0 });
+    expect(permit).toMatchObject({ allowed: false, reason: 'global-window' });
+    expect(permit.allowed ? 0 : permit.retryAfterMs).toBeGreaterThan(DEFAULT_PROMPT_DISPATCH_POLICY.maxInlineWaitMs);
+  });
+
+  it('enforces project and AgentSlot pacing independently', () => {
+    const state = { schemaVersion: 1, recentDispatches: [], projectLastDispatch: { p: 998_000 }, slotLastDispatch: { s: 999_000 }, backoffUntil: 0, rateLimitStrikes: 0 };
+    const plan = planPromptDispatch(state, { project: 'P', slotId: 'S', activeGenerations: 0 }, 1_000_000);
+    expect(plan).toEqual({ allowed: false, reason: 'slot-gap', retryAfterMs: 11_000 });
+  });
+
+  it('defers immediately when too many GAM workers are already generating', async () => {
+    const h = harness();
+    const permit = await h.governor.acquire({ activeGenerations: DEFAULT_PROMPT_DISPATCH_POLICY.maxConcurrentGenerations });
+    expect(permit).toEqual({ allowed: false, reason: 'generation-capacity', retryAfterMs: 5_000 });
+    expect(h.store.value()).toBeUndefined();
+  });  it('keeps reservations across governor restarts', async () => {
+    const h = harness();
+    expect((await h.governor.acquire({ project: 'P', slotId: 'S', activeGenerations: 0 })).allowed).toBe(true);
+    const restarted = new PromptDispatchGovernor(h.store, DEFAULT_PROMPT_DISPATCH_POLICY, h.now, async (ms) => h.advance(ms), () => 0);
+    const next = await restarted.acquire({ project: 'Other', slotId: 'Other', activeGenerations: 0 });
+    expect(next).toMatchObject({ allowed: true, reservedAt: 1_004_000, waitedMs: 4_000 });
+  });
+
+  it('backs off exponentially after visible ChatGPT rate-limit signals', async () => {
+    const h = harness();
+    const firstUntil = await h.governor.noteRateLimit();
+    expect(firstUntil - h.now()).toBe(DEFAULT_PROMPT_DISPATCH_POLICY.baseRateLimitBackoffMs);
+    const blocked = await h.governor.acquire({ activeGenerations: 0 });
+    expect(blocked).toMatchObject({ allowed: false, reason: 'rate-limit-backoff' });
+    h.advance(60_000);
+    const secondUntil = await h.governor.noteRateLimit();
+    expect(secondUntil - h.now()).toBe(DEFAULT_PROMPT_DISPATCH_POLICY.baseRateLimitBackoffMs * 2);
+  });
+
+  it('resets strike severity after a long quiet period', async () => {
+    const h = harness();
+    await h.governor.noteRateLimit();
+    h.advance(DEFAULT_PROMPT_DISPATCH_POLICY.rateLimitStrikeResetMs + 1);
+    const until = await h.governor.noteRateLimit();
+    expect(until - h.now()).toBe(DEFAULT_PROMPT_DISPATCH_POLICY.baseRateLimitBackoffMs);
+    expect(h.store.value()?.rateLimitStrikes).toBe(1);
+  });
+
+  it('sanitizes malformed and expired persisted state', () => {
+    const state = normalizePromptDispatchState({
+      recentDispatches: ['bad', -1, 999_999], projectLastDispatch: { old: 1, ok: 999_500 },
+      slotLastDispatch: null, backoffUntil: 'bad', rateLimitStrikes: -4,
+    }, 1_000_000);
+    expect(state).toMatchObject({ schemaVersion: 1, recentDispatches: [999_999], projectLastDispatch: { ok: 999_500 }, slotLastDispatch: {}, backoffUntil: 0, rateLimitStrikes: 0 });
+  });
+});

@@ -21,6 +21,7 @@ import { ContentRuntimeFence } from './contentRuntimeFence';
 import { browserOperationPolicy } from './browserOperationPolicy';
 import { recoveryStateForTab, snapshotForTab } from './contentRuntimeBridge';
 import { reportIncident, reportSlotRuntime, sha256Text } from './browserRuntimeReporting';
+import { PROMPT_DISPATCH_GOVERNOR_KEY, PromptDispatchGovernor } from './promptDispatchGovernor';
 import {
   EMPTY_BINDING,
   type AgentMessage,
@@ -48,6 +49,10 @@ const CONTROL_REQUEST_MESSAGE_PREFIX = 'control-request:';
 let stateMutationTail: Promise<void> = Promise.resolve();
 const tabOperations = new TabOperationQueue();
 const contentRuntimeFence = new ContentRuntimeFence();
+const promptDispatchGovernor = new PromptDispatchGovernor({
+  read: async () => (await chrome.storage.local.get(PROMPT_DISPATCH_GOVERNOR_KEY))[PROMPT_DISPATCH_GOVERNOR_KEY],
+  write: async (state) => { await chrome.storage.local.set({ [PROMPT_DISPATCH_GOVERNOR_KEY]: state }); },
+});
 async function localBindings(): Promise<Record<string, RoleBinding>> {
   const stored = await chrome.storage.local.get(BINDINGS_KEY);
   return (stored[BINDINGS_KEY] as Record<string, RoleBinding> | undefined) ?? {};
@@ -287,12 +292,18 @@ async function dispatchToTabOnce(tabId: number, text: string, batchId: string, t
     if (!contentRuntimeFence.observe(tabId, recovery.state.observation, true)) throw new Error('Stale content runtime observation before dispatch');
     const snapshot = recovery.state.snapshot;
     const binding = await reportSlotRuntime(tabId, recovery.state.observation, snapshot, bindingFor);
-    record = await prepareAttempt(tabId, snapshot, recovery.state.observation.contentEpoch, text, batchId, taskId, messageId);
+    if (snapshot.signals.includes('message-rate-limit')) await promptDispatchGovernor.noteRateLimit();
     if (snapshot.status !== 'idle') {
+      record = await prepareAttempt(tabId, snapshot, recovery.state.observation.contentEpoch, text, batchId, taskId, messageId);
       const error = `Refusing send while ChatGPT status is ${snapshot.status}`;
       await transitionAttempt(record, 'failed', error);
       return { tabId, attemptId: record.attemptId, ok: false, error };
     }
+    const control = await readNativeControlSnapshot();
+    const activeGenerations = control.agents.filter((agent) => agent.desiredState === 'active' && agent.browserState === 'open' && agent.browserPageStatus === 'generating').length;
+    const permit = await promptDispatchGovernor.acquire({ project: binding.project, ...(binding.agentSlotId ? { slotId: binding.agentSlotId } : {}), activeGenerations });
+    if (!permit.allowed) return { tabId, attemptId: fallbackAttemptId, ok: false, error: `Prompt dispatch deferred by rate governor: ${permit.reason}; retry after ${permit.retryAfterMs}ms` };
+    record = await prepareAttempt(tabId, snapshot, recovery.state.observation.contentEpoch, text, batchId, taskId, messageId);
 
     const policy = browserOperationPolicy('prompt.send');
     const preconditionsHash = await sha256Text(recovery.state.observation.semanticSignature);
