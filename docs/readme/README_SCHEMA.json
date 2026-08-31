@@ -1,0 +1,29 @@
+{
+  "schema": "gpt-agent-manager.readme-schema.v1",
+  "source_locale": "en",
+  "section_ids": [
+    "overview",
+    "capabilities",
+    "architecture",
+    "core-concepts",
+    "organization",
+    "completion",
+    "parallelism",
+    "browser-lifecycle",
+    "self-hosting",
+    "quick-start",
+    "security",
+    "development",
+    "repository-layout",
+    "contributing",
+    "scope",
+    "license",
+    "status"
+  ],
+  "invariants": {
+    "code_blocks": "byte-identical-across-locales",
+    "relative_link_targets": "identical-excluding-language-navigation",
+    "canonical_project_name": "GPT Agent Manager",
+    "license": "Apache-2.0"
+  }
+}

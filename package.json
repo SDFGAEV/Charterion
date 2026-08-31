@@ -14,8 +14,8 @@
     "check:control": "tsc -p tsconfig.control.json --noEmit",
     "test:control": "vitest run control/tests",
     "test:faults": "vitest run tests/faultMatrix.test.ts tests/recovery.test.ts tests/contentRuntimeFence.test.ts tests/tabOperationQueue.test.ts tests/coalescingRunner.test.ts control/tests/controlPlane.test.ts --pool=forks --fileParallelism=false",
-    "verify": "npm run check && npm run check:control && npm run check:assets && npm run check:architecture && npm run test && npm run test:faults && npm run build && npm run check:dist && npm run build:control",
-    "release": "npm run verify:full && node scripts/package-release.mjs && node scripts/package-runtime.mjs",
+    "verify": "npm run check && npm run check:control && npm run check:assets && npm run check:readme-i18n && npm run check:architecture && npm run test && npm run test:faults && npm run build && npm run check:dist && npm run build:control",
+    "release": "npm run verify:full && npm run check:readme-i18n:release && node scripts/package-release.mjs && node scripts/package-runtime.mjs",
     "build:control": "node scripts/build-control.mjs",
     "gamd": "node dist-control/gamd.cjs",
     "gamctl": "node dist-control/gamctl.cjs",
@@ -34,7 +34,12 @@
     "smoke:runtime-install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-runtime-install.ps1",
     "smoke:launcher": "npm run build:control && node scripts/smoke-launcher.mjs",
     "verify:full": "npm run verify && npm run publish:native && npm run smoke:control && npm run smoke:evidence && npm run smoke:change-request && npm run smoke:fleet && npm run smoke:native && npm run smoke:runtime-install && npm run smoke:launcher",
-    "package:runtime": "node scripts/package-runtime.mjs"
+    "package:runtime": "node scripts/package-runtime.mjs",
+    "readme:i18n:sync": "node scripts/readme-i18n.mjs sync-navigation",
+    "readme:i18n:status": "node scripts/readme-i18n.mjs status",
+    "check:readme-i18n": "node scripts/check-readme-i18n.mjs",
+    "check:readme-i18n:release": "node scripts/check-readme-i18n.mjs --release",
+    "third-party-notices": "node scripts/generate_third_party_notices.mjs"
   },
   "devDependencies": {
     "@types/chrome": "^0.1.4",

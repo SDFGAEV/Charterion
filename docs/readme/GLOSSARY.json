@@ -1,0 +1,12 @@
+{
+  "schema": "gpt-agent-manager.readme-glossary.v1",
+  "terms": {
+    "authority": {"zh-CN": "authority / 权威", "zh-TW": "authority / 權威", "ja": "authority", "ko": "authority", "es": "authority", "pt-BR": "authority", "fr": "authority", "de": "Authority", "ru": "authority", "notes": "Do not flatten this into generic permission/access terminology."},
+    "binding": {"zh-CN": "绑定", "zh-TW": "綁定", "ja": "バインディング", "ko": "바인딩", "es": "vinculación", "pt-BR": "vinculação", "fr": "liaison", "de": "Binding", "ru": "привязка"},
+    "fail-closed": {"zh-CN": "fail-closed", "zh-TW": "fail-closed", "ja": "fail-closed", "ko": "fail-closed", "es": "fail-closed", "pt-BR": "fail-closed", "fr": "fail-closed", "de": "fail-closed", "ru": "fail-closed", "notes": "Keep the canonical English token."},
+    "evidence": {"zh-CN": "证据", "zh-TW": "證據", "ja": "証拠", "ko": "증거", "es": "evidencia", "pt-BR": "evidência", "fr": "preuve", "de": "Evidenz", "ru": "доказательство"},
+    "identity": {"zh-CN": "身份", "zh-TW": "身分", "ja": "アイデンティティ", "ko": "정체성", "es": "identidad", "pt-BR": "identidade", "fr": "identité", "de": "Identität", "ru": "идентичность"},
+    "reconciliation": {"zh-CN": "收敛 / reconciliation", "zh-TW": "收斂 / reconciliation", "ja": "reconciliation", "ko": "reconciliation", "es": "reconciliación", "pt-BR": "reconciliação", "fr": "réconciliation", "de": "Reconciliation", "ru": "reconciliation"},
+    "Source of Truth": {"zh-CN": "Source of Truth", "zh-TW": "Source of Truth", "ja": "Source of Truth", "ko": "Source of Truth", "es": "Source of Truth", "pt-BR": "Source of Truth", "fr": "Source of Truth", "de": "Source of Truth", "ru": "Source of Truth", "notes": "Keep canonical token in architecture contexts."}
+  }
+}

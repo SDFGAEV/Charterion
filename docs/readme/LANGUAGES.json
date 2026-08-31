@@ -1,0 +1,16 @@
+{
+  "schema": "gpt-agent-manager.readme-languages.v1",
+  "default": "en",
+  "languages": [
+    {"locale": "en", "name": "English", "file": "README.md", "tier": 0},
+    {"locale": "zh-CN", "name": "简体中文", "file": "README.zh-CN.md", "tier": 1},
+    {"locale": "zh-TW", "name": "繁體中文", "file": "README.zh-TW.md", "tier": 1},
+    {"locale": "ja", "name": "日本語", "file": "README.ja.md", "tier": 1},
+    {"locale": "ko", "name": "한국어", "file": "README.ko.md", "tier": 1},
+    {"locale": "es", "name": "Español", "file": "README.es.md", "tier": 2},
+    {"locale": "pt-BR", "name": "Português (Brasil)", "file": "README.pt-BR.md", "tier": 2},
+    {"locale": "fr", "name": "Français", "file": "README.fr.md", "tier": 2},
+    {"locale": "de", "name": "Deutsch", "file": "README.de.md", "tier": 2},
+    {"locale": "ru", "name": "Русский", "file": "README.ru.md", "tier": 2}
+  ]
+}
