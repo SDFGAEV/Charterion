@@ -10,7 +10,7 @@ Set-Location $Root
 $env:GAM_HOME = $GamHome
 $nodeVersion = (& node -p "process.versions.node").Trim()
 if ([int]($nodeVersion.Split('.')[0]) -lt 22) { throw "Node.js 22+ is required; found $nodeVersion" }
-$required = @('manifest.json','dist\background.js','dist-control\gam.cjs','dist-control\gamd.cjs','dist-native-host\GamNativeHost.exe')
+$required = @('manifest.json','dist\background.js','dist-control\gam.cjs','dist-control\gamctl.cjs','dist-control\gamd.cjs','dist-native-host\GamNativeHost.exe')
 foreach ($relative in $required) {
   if (-not (Test-Path (Join-Path $Root $relative))) { throw "Runtime package is incomplete: $relative is missing" }
 }
@@ -37,6 +37,9 @@ $runtime = [ordered]@{
 $wrapper = Join-Path $GamHome 'GAM.cmd'
 $wrapperText = "@echo off`r`nset `"GAM_HOME=$GamHome`"`r`nset `"GAM_PIPE_NAME=$PipeName`"`r`ncall `"$Root\GAM.cmd`" %*`r`n"
 [IO.File]::WriteAllText($wrapper, $wrapperText, [Text.Encoding]::ASCII)
+$controlWrapper = Join-Path $GamHome 'GAMCTL.cmd'
+$controlWrapperText = "@echo off`r`nset `"GAM_HOME=$GamHome`"`r`nset `"GAM_PIPE_NAME=$PipeName`"`r`ncall `"$Root\GAMCTL.cmd`" %*`r`n"
+[IO.File]::WriteAllText($controlWrapper, $controlWrapperText, [Text.Encoding]::ASCII)
 if ($CreateDesktopShortcut) {
   $desktop = [Environment]::GetFolderPath('Desktop')
   $shortcutPath = Join-Path $desktop 'GPT Agent Manager.lnk'

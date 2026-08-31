@@ -308,6 +308,9 @@ export class RpcRouter {
       case 'events.list': return this.eventsList(request, params);
       case 'work.snapshot': return this.workSnapshot(request);
       case 'work.replace': return this.workReplace(request, params);
+      case 'workspace.provision': return this.workspaceProvision(request, params);
+      case 'workspace.list': return this.workspaceList(request, params);
+      case 'workspace.release': return this.workspaceRelease(request, params);
       default: throw new Error(`Unknown RPC method ${request.method}`);
     }
   }
@@ -359,6 +362,22 @@ export class RpcRouter {
 
   private incidentResolve(request: RpcRequest, params: Record<string, unknown>): unknown {
     this.requireAdmin(request); return this.plane.browser.resolveIncident(stringParam(params, 'id')!);
+  }
+
+  private workspaceProvision(request: RpcRequest, params: Record<string, unknown>): unknown {
+    this.requireBrowserOrAdmin(request);
+    const workspace = this.plane.provisionTaskWorkspace(stringParam(params, 'projectId')!, stringParam(params, 'slotId')!, stringParam(params, 'taskId')!);
+    return { ...workspace, controlCliPath: this.plane.workspaces.controlCliPath };
+  }
+
+  private workspaceList(request: RpcRequest, params: Record<string, unknown>): unknown {
+    this.requireBrowserOrAdmin(request);
+    return this.plane.workspaces.list(stringParam(params, 'projectId', true));
+  }
+
+  private workspaceRelease(request: RpcRequest, params: Record<string, unknown>): unknown {
+    this.requireAdmin(request);
+    return this.plane.releaseTaskWorkspace(stringParam(params, 'workspaceId')!);
   }
 
   private resourceDeclare(request: RpcRequest, params: Record<string, unknown>): unknown {
@@ -504,8 +523,14 @@ export class RpcRouter {
     return this.plane.evidence.listArtifacts(claimId);
   }
   private claimVerify(request: RpcRequest, params: Record<string, unknown>): unknown {
-    this.requireAdmin(request);
-    return this.plane.evidence.verifyClaim(stringParam(params, 'claimId')!);
+    const claimId = stringParam(params, 'claimId')!;
+    const claim = this.plane.evidence.getClaim(claimId);
+    if (request.auth?.adminToken) this.requireAdmin(request);
+    else {
+      const grant = this.requireCapability(request, 'claim:verify', { projectId: claim.projectId, resourceId: claim.resourceId, leaseEpoch: claim.leaseEpoch });
+      if (grant.taskId !== claim.taskId || grant.subject !== claim.subject) throw new Error('Capability does not own this claim task');
+    }
+    return this.plane.verifyClaimAndCompleteTask(claimId);
   }
 
   private verificationList(request: RpcRequest, params: Record<string, unknown>): unknown {

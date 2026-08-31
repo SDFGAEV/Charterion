@@ -7,6 +7,7 @@ import { RequestAuthority } from './requestAuthority';
 import { WorkAuthority } from './workAuthority';
 import { BrowserAuthority } from './browserAuthority';
 import { ConversationAuthority } from './conversationAuthority';
+import { WorkspaceAuthority } from './workspaceAuthority';
 import type {
   AcquireLeaseInput,
   AgentSlot,
@@ -26,6 +27,7 @@ import type {
   AgentBrowserState,
   ReportAgentBrowserInput,
   ReportAgentRuntimeInput,
+  VerifiedTaskCompletion,
 } from './contracts';
 
 type Row = Record<string, string | number | null>;
@@ -159,6 +161,7 @@ export class ControlPlane {
   readonly work: WorkAuthority;
   readonly browser: BrowserAuthority;
   readonly conversations: ConversationAuthority;
+  readonly workspaces: WorkspaceAuthority;
   constructor(readonly database: ControlDatabase, gitPath = 'git') {
     this.evidence = new EvidenceAuthority(database, gitPath);
     this.changes = new ChangeRequestAuthority(database, gitPath);
@@ -166,6 +169,71 @@ export class ControlPlane {
     this.work = new WorkAuthority(database);
     this.browser = new BrowserAuthority(database);
     this.conversations = new ConversationAuthority(database);
+    this.workspaces = new WorkspaceAuthority(database, gitPath);
+  }
+
+  provisionTaskWorkspace(projectId: string, slotId: string, taskId: string, now = Date.now()) {
+    const project = this.requireProject(projectId);
+    if (project.status !== 'active') throw new Error('Task workspace requires an active project');
+    const slot = this.getAgentSlot(slotId);
+    if (slot.projectId !== project.id || slot.desiredState !== 'active' || slot.status === 'retired') throw new Error('Task workspace AgentSlot is not active in this project');
+    const task = this.work.getTask(taskId);
+    if (!task) throw new Error(`Task ${taskId} does not exist in Kernel work state`);
+    if (task.kind !== 'work' || task.completionPolicy !== 'verified-claim') throw new Error('Automatic workspaces require a verified-claim work task');
+    if (String(task.targetRole ?? '') !== slot.role) throw new Error('Task target role does not match AgentSlot role');
+    if (String(task.project ?? '') !== project.name) throw new Error('Task project does not match ProjectCell name');
+    const existing = this.workspaces.find(project.id, taskId);
+    if (existing) return existing;
+    const materialized = this.workspaces.materialize({ projectId: project.id, projectRoot: project.rootPath, slotId: slot.id, role: slot.role, taskId });
+    const resourceId = `task-workspace:${project.id}:${taskId}`;
+    let resource: ResourceRecord;
+    try { resource = this.requireResource(resourceId); }
+    catch { resource = this.declareResource({ id: resourceId, projectId: project.id, kind: 'workspace', label: `${slot.role}:${taskId}`, metadata: { path: materialized.path, branch: materialized.branch, baseSha: materialized.baseSha, taskId, slotId } }, now); }
+    const active = this.listLeases(resource.id).find((item) => item.status === 'active');
+    let lease: ResourceLease;
+    if (active) {
+      if (active.holderId !== slot.id || active.taskId !== taskId || active.mode !== 'exclusive') throw new Error('Task workspace resource already has an incompatible active lease');
+      lease = active;
+    } else lease = this.acquireLease({ resourceId: resource.id, projectId: project.id, holderId: slot.id, taskId, mode: 'exclusive' }, now);
+    const capability = this.issueCapability({ subject: slot.id, projectId: project.id, agentSlotId: slot.id, taskId, leaseEpoch: lease.epoch, scopes: ['claim:submit','artifact:register','claim:read','claim:verify'], resourceIds: [resource.id], ttlMs: 7 * 24 * 60 * 60 * 1000 }, now);
+    const workspace = this.workspaces.record({ ...materialized, projectId: project.id, taskId, slotId: slot.id, resourceId: resource.id, leaseId: lease.id, leaseEpoch: lease.epoch, capabilityId: capability.id, capabilityToken: capability.token }, now);
+    this.event(project.id, 'TASK_WORKSPACE_PROVISIONED', workspace.id, { taskId, slotId: slot.id, branch: workspace.branch, path: workspace.path, resourceId: resource.id, leaseId: lease.id }, now);
+    return workspace;
+  }
+
+  releaseTaskWorkspace(workspaceId: string, now = Date.now()) {
+    const workspace = this.workspaces.get(workspaceId);
+    const released = workspace.status === 'released' ? workspace : this.workspaces.release(workspaceId, now);
+    const lease = this.getLease(workspace.leaseId);
+    if (lease.status === 'active') this.releaseLease(lease.id, lease.epoch, now);
+    this.revokeCapability(workspace.capabilityId, now);
+    this.workspaces.removeCapabilityToken(workspace.id);
+    this.event(workspace.projectId, 'TASK_WORKSPACE_RELEASED', workspace.id, { taskId: workspace.taskId, slotId: workspace.slotId, branch: workspace.branch }, now);
+    return released;
+  }
+
+  verifyClaimAndCompleteTask(claimId: string, now = Date.now()) {
+    const claim = this.evidence.getClaim(claimId);
+    const verification = this.evidence.verifyClaim(claimId, now);
+    if (verification.status === 'passed' && this.work.taskCompletionPolicy(claim.taskId) === 'verified-claim') {
+      const workspace = this.workspaces.find(claim.projectId, claim.taskId);
+      const task = this.work.getTask(claim.taskId);
+      const completion = task?.machineCompletion as VerifiedTaskCompletion | undefined;
+      if (completion) {
+        if (completion.kind !== 'verified-claim' || completion.claimId !== claim.id || completion.verificationId !== verification.id || completion.commitSha !== claim.commitSha) {
+          throw new Error('Verified-claim task already has a different machine completion');
+        }
+        if (workspace) this.releaseTaskWorkspace(workspace.id, now);
+        return verification;
+      }
+      if (!workspace || workspace.status !== 'active') throw new Error('Verified-claim task has no active durable TaskWorkspace');
+      if (!claim.commitSha || workspace.resourceId !== claim.resourceId || workspace.leaseId !== claim.leaseId || workspace.leaseEpoch !== claim.leaseEpoch || workspace.slotId !== claim.subject) {
+        throw new Error('Verified claim does not match the task workspace authority');
+      }
+      this.work.completeVerifiedClaim({ taskId: claim.taskId, claimId: claim.id, verificationId: verification.id, commitSha: claim.commitSha }, verification.completedAt);
+      this.releaseTaskWorkspace(workspace.id, now);
+    }
+    return verification;
   }
 
   private event(projectId: string | undefined, type: string, subject: string, payload: Record<string, unknown>, now: number): void {

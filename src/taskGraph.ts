@@ -34,8 +34,10 @@ function evaluateAttempt(task: AgentTask, attempt: SendAttemptRecord | undefined
   reviewResult?: ReviewResult;
   reviewError?: string;
 } {
+  if (task.completionPolicy === 'verified-claim' && task.machineCompletion) return { status: 'completed' };
   switch (attempt?.state) {
     case 'reply-observed': {
+      if (task.completionPolicy === 'verified-claim') return { status: 'running' };
       if (task.kind !== 'review') return { status: 'completed' };
       const parsed = parseReviewResult(attempt.replyTextTail ?? '');
       if (!parsed.ok) return { status: 'attention', reviewError: parsed.error };

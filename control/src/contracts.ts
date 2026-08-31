@@ -66,6 +66,13 @@ export interface AgentConversationRecord { id: string; projectId: string; slotId
 export interface WorkerCheckpoint { id: string; projectId: string; slotId: string; reason: string; handoffText: string; state: Record<string, unknown>; createdAt: number; }
 export interface AgentConversationRollover { id: string; projectId: string; slotId: string; fromConversationKey: string; toConversationKey?: string; fromGeneration: number; toGeneration: number; checkpointId: string; status: ConversationRolloverStatus; reason: string; bootstrapAttemptId?: string; error?: string; requestedAt: number; updatedAt: number; completedAt?: number; }
 
+export type TaskWorkspaceStatus = 'active' | 'released';
+export interface TaskWorkspace {
+  id: string; projectId: string; taskId: string; slotId: string; repoPath: string; path: string; branch: string; baseSha: string;
+  resourceId: string; leaseId: string; leaseEpoch: number; capabilityId: string; capabilityTokenPath: string; status: TaskWorkspaceStatus;
+  createdAt: number; updatedAt: number;
+}
+
 export interface ResourceRecord {
   id: string;
   projectId?: string;
@@ -148,6 +155,7 @@ export interface IssueCapabilityInput {
 export type ClaimStatus = 'submitted' | 'verified' | 'rejected';
 export type ArtifactKind = 'file' | 'test-log' | 'report' | 'git-bundle' | 'other';
 export type VerificationStatus = 'passed' | 'failed';
+export interface VerifiedTaskCompletion { kind: 'verified-claim'; claimId: string; verificationId: string; completedAt: number; commitSha?: string; }
 
 export interface WorkClaim {
   id: string;

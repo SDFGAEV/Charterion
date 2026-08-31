@@ -41,6 +41,9 @@ $runtime = [ordered]@{
 $wrapper = Join-Path $GamHome 'GAM.cmd'
 $wrapperText = "@echo off`r`nset `"GAM_HOME=$GamHome`"`r`nset `"GAM_PIPE_NAME=$PipeName`"`r`ncall `"$Repo\GAM.cmd`" %*`r`n"
 [IO.File]::WriteAllText($wrapper, $wrapperText, [Text.Encoding]::ASCII)
+$controlWrapper = Join-Path $GamHome 'GAMCTL.cmd'
+$controlWrapperText = "@echo off`r`nset `"GAM_HOME=$GamHome`"`r`nset `"GAM_PIPE_NAME=$PipeName`"`r`ncall `"$Repo\GAMCTL.cmd`" %*`r`n"
+[IO.File]::WriteAllText($controlWrapper, $controlWrapperText, [Text.Encoding]::ASCII)
 Write-Host "Stable extension id: $ExtensionId"
 Write-Host "GAM instance id: $InstanceId"
 Write-Host "GAM pipe: $PipeName"

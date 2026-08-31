@@ -113,3 +113,21 @@ describe('task status derivation', () => {
   });
 
 });
+describe('verified claim completion', () => {
+  it('does not let a browser reply complete a verified-claim task', () => {
+    const verified = { ...task('machine', [], ['attempt-machine']), completionPolicy: 'verified-claim' as const };
+    const reply = { ...attempt('attempt-machine', 'reply-observed'), replyTextTail: 'DONE' };
+    expect(deriveManagedTasks([verified], [reply])[0]?.status).toBe('running');
+  });
+
+  it('completes only from Kernel machine evidence and releases dependents', () => {
+    const verified = {
+      ...task('machine', [], ['attempt-machine']),
+      completionPolicy: 'verified-claim' as const,
+      machineCompletion: { kind: 'verified-claim' as const, claimId: 'claim-1', verificationId: 'verify-1', completedAt: 20, commitSha: 'a'.repeat(40) },
+    };
+    const downstream = task('after', ['machine']);
+    const reply = { ...attempt('attempt-machine', 'reply-observed'), replyTextTail: 'SUP' };
+    expect(deriveManagedTasks([verified, downstream], [reply]).map((item) => item.status)).toEqual(['completed', 'ready']);
+  });
+});

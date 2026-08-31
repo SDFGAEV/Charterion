@@ -2,7 +2,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-export const CONTROL_SCHEMA_VERSION = 13;
+export const CONTROL_SCHEMA_VERSION = 14;
 
 export class ControlDatabase {
   readonly db: DatabaseSync;
@@ -81,6 +81,7 @@ export class ControlDatabase {
     if (version < 11) this.migrateV11();
     if (version < 12) this.migrateV12();
     if (version < 13) this.migrateV13();
+    if (version < 14) this.migrateV14();
     this.db.prepare(`
       INSERT INTO schema_meta(key, value) VALUES('schema_version', ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value
@@ -284,6 +285,22 @@ export class ControlDatabase {
       this.createConversationContinuityTables();
       this.db.exec("UPDATE agent_slots SET conversation_generation=1 WHERE conversation_key IS NOT NULL AND conversation_generation=0;");
       this.db.exec("INSERT OR IGNORE INTO agent_conversations(id,project_id,slot_id,generation,conversation_key,status,predecessor_conversation_key,started_at,ended_at,close_reason) SELECT 'legacy:'||id,project_id,id,conversation_generation,conversation_key,'active',NULL,updated_at,NULL,NULL FROM agent_slots WHERE conversation_key IS NOT NULL;");
+    });
+  }
+
+  private migrateV14(): void {
+    this.transaction(() => {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS task_workspaces (
+          id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, task_id TEXT NOT NULL,
+          slot_id TEXT NOT NULL REFERENCES agent_slots(id) ON DELETE CASCADE, repo_path TEXT NOT NULL, path TEXT NOT NULL, branch TEXT NOT NULL, base_sha TEXT NOT NULL,
+          resource_id TEXT NOT NULL REFERENCES resources(id) ON DELETE CASCADE, lease_id TEXT NOT NULL REFERENCES leases(id) ON DELETE CASCADE, lease_epoch INTEGER NOT NULL CHECK(lease_epoch > 0),
+          capability_id TEXT NOT NULL REFERENCES capabilities(id) ON DELETE CASCADE, capability_token_path TEXT NOT NULL,
+          status TEXT NOT NULL CHECK(status IN ('active','released')), created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+          UNIQUE(project_id,task_id), UNIQUE(path)
+        ) STRICT;
+        CREATE INDEX IF NOT EXISTS idx_task_workspaces_slot_status ON task_workspaces(slot_id,status,created_at);
+      `);
     });
   }
 

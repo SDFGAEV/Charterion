@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { ControlDatabase } from './database';
+import type { VerifiedTaskCompletion } from './contracts';
 
 type WorkDocument = Record<string, unknown>;
 type WorkKind = 'task' | 'attempt' | 'message';
@@ -108,6 +109,48 @@ export class WorkAuthority {
     };
   }
 
+  getTask(taskId: string): WorkDocument | undefined {
+    const row = this.database.db.prepare('SELECT document_json FROM manager_tasks WHERE id=?').get(taskId.trim()) as { document_json?: string } | undefined;
+    return row?.document_json ? document(JSON.parse(row.document_json), `task ${taskId}`) : undefined;
+  }
+
+  taskCompletionPolicy(taskId: string): string | undefined {
+    const row = this.database.db.prepare('SELECT document_json FROM manager_tasks WHERE id=?').get(taskId.trim()) as { document_json?: string } | undefined;
+    if (!row?.document_json) return undefined;
+    const task = JSON.parse(row.document_json) as WorkDocument;
+    return typeof task.completionPolicy === 'string' ? task.completionPolicy : undefined;
+  }
+
+  completeVerifiedClaim(input: { taskId: string; claimId: string; verificationId: string; commitSha?: string }, now = Date.now()): KernelWorkSnapshot {
+    const taskId = input.taskId.trim();
+    const claimId = input.claimId.trim();
+    const verificationId = input.verificationId.trim();
+    if (!taskId || !claimId || !verificationId) throw new Error('Verified task completion identity is required');
+    return this.database.transaction(() => {
+      const row = this.database.db.prepare('SELECT document_json FROM manager_tasks WHERE id=?').get(taskId) as { document_json?: string } | undefined;
+      if (!row?.document_json) throw new Error(`Task ${taskId} does not exist in Kernel work state`);
+      const task = JSON.parse(row.document_json) as WorkDocument;
+      if (task.completionPolicy !== 'verified-claim') throw new Error(`Task ${taskId} does not accept verified-claim completion`);
+      const existing = task.machineCompletion as VerifiedTaskCompletion | undefined;
+      const commitSha = input.commitSha?.trim() || undefined;
+      if (existing) {
+        if (existing.kind !== 'verified-claim' || existing.claimId !== claimId || existing.verificationId !== verificationId || existing.commitSha !== commitSha) {
+          throw new Error(`Task ${taskId} already has a different machine completion`);
+        }
+        return this.snapshot();
+      }
+      const completion: VerifiedTaskCompletion = { kind: 'verified-claim', claimId, verificationId, completedAt: now, ...(commitSha ? { commitSha } : {}) };
+      task.machineCompletion = completion;
+      task.updatedAt = now;
+      this.database.db.prepare('UPDATE manager_tasks SET document_json=?,updated_at=? WHERE id=?').run(JSON.stringify(task), now, taskId);
+      const current = this.database.db.prepare('SELECT revision FROM manager_work_meta WHERE singleton=1').get() as { revision: number };
+      const revision = Number(current.revision) + 1;
+      this.database.db.prepare('UPDATE manager_work_meta SET revision=?,updated_at=? WHERE singleton=1').run(revision, now);
+      this.database.db.prepare(`INSERT INTO events(project_id,type,subject,payload_json,created_at) VALUES(NULL,'WORK_TASK_MACHINE_COMPLETED',?,?,?)`)
+        .run(taskId, JSON.stringify(completion), now);
+      return this.snapshot();
+    });
+  }
   replace(input: ReplaceKernelWorkInput, now = Date.now()): KernelWorkSnapshot {
     const state = validateState(input);
     return this.database.transaction(() => {

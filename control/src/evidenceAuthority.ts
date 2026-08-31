@@ -195,6 +195,26 @@ function hashFile(path: string): { sha256: string; sizeBytes: number } {
     return { name: 'git.commit', passed, detail };
   }
 
+  private checkWorkspaceCommit(claim: WorkClaim, projectRoot: string): VerificationCheck | undefined {
+    const workspace = this.database.db.prepare(
+      'SELECT project_id,task_id,slot_id,path,branch,base_sha,lease_id,lease_epoch,status FROM task_workspaces WHERE resource_id=?',
+    ).get(claim.resourceId) as Row | undefined;
+    if (!workspace) return undefined;
+    if (!claim.commitSha) return { name: 'workspace.commit', passed: false, detail: 'Managed task workspace claims require a commit SHA' };
+    const identityMatches = String(workspace.project_id) === claim.projectId && String(workspace.task_id) === claim.taskId &&
+      String(workspace.slot_id) === claim.subject && String(workspace.lease_id) === claim.leaseId &&
+      Number(workspace.lease_epoch) === claim.leaseEpoch && String(workspace.status) === 'active';
+    if (!identityMatches) return { name: 'workspace.commit', passed: false, detail: 'TaskWorkspace authority does not match claim identity' };
+    const path = String(workspace.path); const branch = String(workspace.branch); const baseSha = String(workspace.base_sha);
+    const branchHead = spawnSync(this.gitPath, ['-C', projectRoot, 'rev-parse', '--verify', `refs/heads/${branch}`], { encoding: 'utf8', windowsHide: true, timeout: 5000, shell: false });
+    const ancestry = spawnSync(this.gitPath, ['-C', projectRoot, 'merge-base', '--is-ancestor', baseSha, claim.commitSha], { encoding: 'utf8', windowsHide: true, timeout: 5000, shell: false });
+    const workspaceHead = spawnSync(this.gitPath, ['-C', path, 'rev-parse', '--verify', 'HEAD'], { encoding: 'utf8', windowsHide: true, timeout: 5000, shell: false });
+    const dirty = spawnSync(this.gitPath, ['-C', path, 'status', '--porcelain=v1', '--untracked-files=all'], { encoding: 'utf8', windowsHide: true, timeout: 5000, shell: false });
+    const passed = claim.commitSha !== baseSha && branchHead.status === 0 && String(branchHead.stdout).trim() === claim.commitSha &&
+      ancestry.status === 0 && workspaceHead.status === 0 && String(workspaceHead.stdout).trim() === claim.commitSha && dirty.status === 0 && !String(dirty.stdout).trim();
+    return { name: 'workspace.commit', passed, detail: passed ? `commit ${claim.commitSha} is the clean assigned TaskWorkspace HEAD and descends from its base` : 'Claim commit is not the clean assigned TaskWorkspace HEAD or does not descend from its base' };
+  }
+
   private artifactChecks(claim: WorkClaim, projectRoot: string): VerificationCheck[] {
     return this.listArtifacts(claim.id).map((artifact) => {
       try {
@@ -208,13 +228,22 @@ function hashFile(path: string): { sha256: string; sizeBytes: number } {
     });
   }  verifyClaim(claimId: string, now = Date.now()): VerificationRecord {
     const claim = this.getClaim(claimId);
-    if (claim.status !== 'submitted') throw new Error(`Claim ${claim.id} is already terminal`);
+    if (claim.status !== 'submitted') {
+      const row = this.database.db.prepare('SELECT * FROM verifications WHERE claim_id=? ORDER BY completed_at DESC,id DESC LIMIT 1').get(claim.id) as Row | undefined;
+      if (!row) throw new Error(`Claim ${claim.id} is terminal without verification evidence`);
+      const existing = verificationFrom(row);
+      const expected = claim.status === 'verified' ? 'passed' : 'failed';
+      if (existing.status !== expected) throw new Error(`Claim ${claim.id} terminal status disagrees with verification evidence`);
+      return existing;
+    }
     const project = this.projectRow(claim.projectId);
     const projectRoot = String(project.root_path);
     const artifacts = this.listArtifacts(claim.id);
     const checks: VerificationCheck[] = [this.checkLeaseIdentity(claim)];
     const git = this.checkGitCommit(claim, projectRoot);
     if (git) checks.push(git);
+    const workspace = this.checkWorkspaceCommit(claim, projectRoot);
+    if (workspace) checks.push(workspace);
     checks.push(...this.artifactChecks(claim, projectRoot));
     checks.push({
       name: 'evidence.present',

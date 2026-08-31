@@ -48,7 +48,7 @@ function zipName(path) {
 
 const inputPaths = [
   resolve(root, 'manifest.json'), resolve(root, 'LICENSE'), resolve(root, 'README.md'),
-  resolve(root, 'GAM.cmd'), resolve(root, 'SETUP.cmd'),
+  resolve(root, 'GAM.cmd'), resolve(root, 'GAMCTL.cmd'), resolve(root, 'SETUP.cmd'),
   ...await walk(resolve(root, 'dist')), ...await walk(resolve(root, 'dist-control')),
   resolve(root, 'dist-native-host', 'GamNativeHost.exe'),
   ...await walk(resolve(root, 'native-host', 'scripts')),

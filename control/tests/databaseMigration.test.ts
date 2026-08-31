@@ -46,7 +46,7 @@ describe('control database migrations', () => {
     expect(slot).toMatchObject({ conversation_key: 'conversation:legacy', conversation_generation: 1, rollover_state: 'idle', active_rollover_id: null });
     expect(lineage).toHaveLength(1);
     expect(lineage[0]).toMatchObject({ id: 'legacy:slot-1', generation: 1, conversation_key: 'conversation:legacy', status: 'active' });
-    expect(Number(version.value)).toBe(13);
+    expect(Number(version.value)).toBe(14);
     database.close(); rmSync(dir, { recursive: true, force: true });
   });
 });
