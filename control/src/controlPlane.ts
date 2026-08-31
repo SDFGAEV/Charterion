@@ -9,6 +9,8 @@ import { BrowserAuthority } from './browserAuthority';
 import { ConversationAuthority } from './conversationAuthority';
 import { WorkspaceAuthority } from './workspaceAuthority';
 import { PromotionAuthority } from './promotionAuthority';
+import { OrganizationAuthority } from './organizationAuthority';
+import { WorkIngressAuthority } from './workIngressAuthority';
 import { planElasticFleet, type ElasticFleetDecision } from './elasticFleet';
 import type {
   AcquireLeaseInput,
@@ -165,6 +167,8 @@ export class ControlPlane {
   readonly conversations: ConversationAuthority;
   readonly workspaces: WorkspaceAuthority;
   readonly promotions: PromotionAuthority;
+  readonly organization: OrganizationAuthority;
+  readonly ingress: WorkIngressAuthority;
   constructor(readonly database: ControlDatabase, gitPath = 'git') {
     this.evidence = new EvidenceAuthority(database, gitPath);
     this.changes = new ChangeRequestAuthority(database, gitPath);
@@ -174,6 +178,8 @@ export class ControlPlane {
     this.conversations = new ConversationAuthority(database);
     this.workspaces = new WorkspaceAuthority(database, gitPath);
     this.promotions = new PromotionAuthority(database, gitPath);
+    this.organization = new OrganizationAuthority(database);
+    this.ingress = new WorkIngressAuthority(database);
   }
 
   provisionTaskWorkspace(projectId: string, slotId: string, taskId: string, now = Date.now()) {
@@ -473,6 +479,14 @@ export class ControlPlane {
     if (!Number.isInteger(now) || now <= 0) throw new Error('Agent browser observedAt is invalid');
     return this.database.transaction(() => {
       const slot = this.getAgentSlot(input.slotId);
+      const organizationAgent = this.database.db.prepare('SELECT id FROM organization_agents WHERE runtime_slot_id=?').get(slot.id) as { id?: string } | undefined;
+      if (organizationAgent?.id) {
+        const workspace = this.organization.activeAgentWorkspace(organizationAgent.id);
+        if (!workspace || workspace.status !== 'ready') throw new Error('Organization Agent runtime has no ready dedicated workspace');
+        if (!workspace.browserProfileId || workspace.browserProfileId !== profileId) {
+          throw new Error('Browser profile does not match the Organization Agent workspace');
+        }
+      }
       if (slot.browserObservedAt !== undefined && now < slot.browserObservedAt) throw new Error('Stale agent browser observation');
       if (['opening','open'].includes(input.browserState) && slot.desiredState !== 'active') throw new Error('Browser cannot open a non-active agent slot');
       let conversationKey = slot.conversationKey;
