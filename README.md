@@ -340,3 +340,9 @@ Worker capabilities can be bound to an exact `agentSlotId`. A suspend/retire req
 Workers may instead raise durable requests to the Supervisor with types including `suggestion`, `blocker`, `question`, `resource-request`, `scope-change`, `dependency-request`, `cross-system-request`, `review-request`, and `risk-alert`. A request is advisory: submitting it never changes fleet or project state. The Supervisor explicitly accepts or rejects it, performs any authorized action, and then resolves it. Open requests are visible in the Local Control Plane panel and, when exactly one active AgentSlot uses the reserved `SUPERVISOR` role, are deterministically mirrored into that Supervisor conversation through the existing duplicate-fenced Semantic Message Bus.
 
 This preserves the core rule: **maximize worker autonomy while minimizing worker authority**. Workers can identify problems and propose organizational changes; the Supervisor decides; the Kernel enforces the resulting transition.
+
+### Exact single-task dispatch planning
+
+`planExactTaskDispatch` is a pure, fail-closed selector for callers that already hold an exact task id and project boundary. It returns at most that one task: missing or duplicate ids, project mismatch, human work, cancellation, terminal evidence, and every non-`ready` state are rejected rather than falling through to another ready task or project.
+
+The success plan carries the original `ManagedTask` and its completion policy unchanged, including `verified-claim` authority metadata. A plan is **not** permission to write to ChatGPT: it is marked `prompt-governor-required` and must be handed to the existing standard dispatch path, where the persistent prompt dispatch governor acquires capacity before any physical send or attempt is created.
