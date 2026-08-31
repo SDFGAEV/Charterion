@@ -33,13 +33,14 @@
     "smoke:native": "npm run build:control && npm run publish:native && node scripts/smoke-native-host.mjs",
     "smoke:runtime-install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-runtime-install.ps1",
     "smoke:launcher": "npm run build:control && node scripts/smoke-launcher.mjs",
-    "verify:full": "npm run verify && npm run publish:native && npm run smoke:control && npm run smoke:evidence && npm run smoke:change-request && npm run smoke:fleet && npm run smoke:native && npm run smoke:runtime-install && npm run smoke:launcher",
+    "verify:full": "npm run verify && npm run publish:native && npm run smoke:control && npm run smoke:evidence && npm run smoke:self-hosting && npm run smoke:change-request && npm run smoke:fleet && npm run smoke:native && npm run smoke:runtime-install && npm run smoke:launcher",
     "package:runtime": "node scripts/package-runtime.mjs",
     "readme:i18n:sync": "node scripts/readme-i18n.mjs sync-navigation",
     "readme:i18n:status": "node scripts/readme-i18n.mjs status",
     "check:readme-i18n": "node scripts/check-readme-i18n.mjs",
     "check:readme-i18n:release": "node scripts/check-readme-i18n.mjs --release",
-    "third-party-notices": "node scripts/generate_third_party_notices.mjs"
+    "third-party-notices": "node scripts/generate_third_party_notices.mjs",
+    "smoke:self-hosting": "npm run build:control && node scripts/smoke-self-hosting.mjs"
   },
   "devDependencies": {
     "@types/chrome": "^0.1.4",
