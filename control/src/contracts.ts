@@ -3,6 +3,8 @@ export type IsolationTier = 'c0-host' | 'c1-container' | 'c2-hypervisor' | 'c3-e
 export type AgentSlotStatus = 'idle' | 'assigned' | 'suspended' | 'retired';
 export type AgentDesiredState = 'active' | 'suspended' | 'retired';
 export type AgentBrowserState = 'absent' | 'opening' | 'open' | 'closing' | 'error';
+export type AgentRolloverState = 'idle' | 'requested' | 'opening' | 'bootstrapping';
+export type AgentPageStatus = 'idle' | 'generating' | 'blocked' | 'unauthorized' | 'error' | 'unknown' | 'unavailable';
 export type ResourceKind =
   | 'workspace'
   | 'repo'
@@ -38,13 +40,37 @@ export interface AgentSlot {
   desiredState: AgentDesiredState;
   browserState: AgentBrowserState;
   conversationKey?: string;
+  conversationGeneration: number;
+  rolloverState: AgentRolloverState;
+  activeRolloverId?: string;
   browserProfileId?: string;
   browserTabId?: number;
   browserError?: string;
   browserObservedAt?: number;
+  browserLeaseId?: string;
+  browserLeaseEpoch?: number;
+  browserContentEpoch?: string;
+  browserObservationRevision?: number;
+  browserPageStatus?: AgentPageStatus;
+  browserRuntimeObservedAt?: number;
+  browserQuarantined: boolean;
+  browserQuarantineReason?: string;
   leaseEpoch: number;
   createdAt: number;
   updatedAt: number;
+}
+
+export type ConversationLifecycleStatus = 'active' | 'closed';
+export type ConversationRolloverStatus = 'requested' | 'opening' | 'bootstrapping' | 'completed' | 'failed';
+export interface AgentConversationRecord { id: string; projectId: string; slotId: string; generation: number; conversationKey: string; status: ConversationLifecycleStatus; predecessorConversationKey?: string; startedAt: number; endedAt?: number; closeReason?: string; }
+export interface WorkerCheckpoint { id: string; projectId: string; slotId: string; reason: string; handoffText: string; state: Record<string, unknown>; createdAt: number; }
+export interface AgentConversationRollover { id: string; projectId: string; slotId: string; fromConversationKey: string; toConversationKey?: string; fromGeneration: number; toGeneration: number; checkpointId: string; status: ConversationRolloverStatus; reason: string; bootstrapAttemptId?: string; error?: string; requestedAt: number; updatedAt: number; completedAt?: number; }
+
+export type TaskWorkspaceStatus = 'active' | 'released';
+export interface TaskWorkspace {
+  id: string; projectId: string; taskId: string; slotId: string; repoPath: string; path: string; branch: string; baseSha: string;
+  resourceId: string; leaseId: string; leaseEpoch: number; capabilityId: string; capabilityTokenPath: string; status: TaskWorkspaceStatus;
+  createdAt: number; updatedAt: number;
 }
 
 export interface ResourceRecord {
@@ -129,6 +155,7 @@ export interface IssueCapabilityInput {
 export type ClaimStatus = 'submitted' | 'verified' | 'rejected';
 export type ArtifactKind = 'file' | 'test-log' | 'report' | 'git-bundle' | 'other';
 export type VerificationStatus = 'passed' | 'failed';
+export interface VerifiedTaskCompletion { kind: 'verified-claim'; claimId: string; verificationId: string; completedAt: number; commitSha?: string; }
 
 export interface WorkClaim {
   id: string;
@@ -191,6 +218,19 @@ export interface RegisterArtifactInput {
   kind: ArtifactKind;
   metadata?: Record<string, unknown>;
 }
+export type SelfHostingPromotionStatus = 'pending' | 'approved' | 'rejected' | 'promoted';
+export interface SelfHostingPromotion {
+  id: string; projectId: string; idempotencyKey: string; claimId: string; candidateSubject: string; candidateSha: string;
+  targetRef: string; expectedParentSha: string; requestedBy: string; status: SelfHostingPromotionStatus;
+  decisionBy?: string; decisionReason?: string; decisionAt?: number; promotedAt?: number; createdAt: number; updatedAt: number;
+}
+export interface RequestSelfHostingPromotionInput {
+  projectId: string; idempotencyKey: string; claimId: string; candidateSha: string; targetRef: string; expectedParentSha: string; requestedBy: string;
+}
+export interface DecideSelfHostingPromotionInput {
+  promotionId: string; authoritySubject: string; decision: 'approve' | 'reject'; reason: string;
+}
+export interface ApplySelfHostingPromotionInput { promotionId: string; authoritySubject: string; }
 export type ChangeRequestStatus = 'open' | 'changes-requested' | 'approved' | 'queued' | 'integrated' | 'closed';
 export type SupervisorReviewVerdict = 'approve' | 'request-changes';
 export type MergeQueueStatus = 'queued' | 'validating' | 'integrated' | 'failed' | 'cancelled';
@@ -226,6 +266,7 @@ export interface SubmitSupervisorReviewInput {
 export interface RpcRequest {
   id: string;
   method: string;
+  instanceId?: string;
   params?: Record<string, unknown>;
   auth?: { adminToken?: string; browserToken?: string; capabilityToken?: string };
 }
@@ -246,6 +287,7 @@ export type RpcResponse = RpcSuccess | RpcFailure;
 
 export interface DaemonConfig {
   homeDir: string;
+  instanceId: string;
   databasePath: string;
   adminTokenPath: string;
   browserTokenPath: string;
@@ -254,10 +296,12 @@ export interface DaemonConfig {
 }
 
 export type BrowserAuthStatus = 'unknown' | 'authenticated' | 'authentication-required';
+export type BrowserPageHealth = 'unknown' | 'ready' | 'generating' | 'blocked' | 'error' | 'unavailable';
 
 export interface BrowserRuntimeStatus {
   profileId: string;
   authStatus: BrowserAuthStatus;
+  pageHealth: BrowserPageHealth;
   openTabs: number;
   extensionVersion: string;
   observedAt: number;
@@ -266,6 +310,7 @@ export interface BrowserRuntimeStatus {
 export interface ReportBrowserRuntimeInput {
   profileId: string;
   authStatus: BrowserAuthStatus;
+  pageHealth: BrowserPageHealth;
   openTabs: number;
   extensionVersion: string;
   observedAt?: number;
@@ -275,6 +320,24 @@ export interface ReportAgentBrowserInput {
   slotId: string; profileId: string; browserState: AgentBrowserState;
   tabId?: number; conversationKey?: string; error?: string; observedAt?: number;
 }
+
+export interface ReportAgentRuntimeInput {
+  slotId: string; profileId: string; tabId: number; contentEpoch: string; revision: number;
+  pageStatus: AgentPageStatus; semanticSignature: string; observedAt: number;
+}
+
+export type BrowserOperationState = 'planned' | 'dispatched' | 'settled';
+export type BrowserOperationOutcome = 'acknowledged' | 'reply-observed' | 'failed' | 'uncertain';
+export interface BrowserOperationRecord {
+  id: string; idempotencyKey: string; operation: string; projectId?: string; slotId?: string; conversationKey?: string;
+  tabId?: number; contentEpoch?: string; preconditionsHash: string; state: BrowserOperationState; outcome?: BrowserOperationOutcome;
+  evidence: Record<string, unknown>; plannedAt: number; dispatchedAt?: number; settledAt?: number; updatedAt: number;
+}
+export interface PlanBrowserOperationInput {
+  id: string; idempotencyKey: string; operation: string; projectId?: string; slotId?: string; conversationKey?: string;
+  tabId?: number; contentEpoch?: string; preconditionsHash: string; plannedAt?: number;
+}
+export interface RuntimeIncident { id: string; scope: string; severity: 'warning'|'error'|'critical'; code: string; subject: string; detail: Record<string, unknown>; createdAt: number; resolvedAt?: number; }
 
 export type WorkerRequestType =
   | 'suggestion' | 'blocker' | 'question' | 'resource-request' | 'scope-change'

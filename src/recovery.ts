@@ -7,6 +7,7 @@ import type {
 export interface AttemptRecoveryObservation {
   tabId: number;
   state: ContentRecoveryState;
+  authoritativeConversationKey?: string;
 }
 
 export interface AttemptRecoveryDecision {
@@ -18,8 +19,11 @@ export interface AttemptRecoveryDecision {
 const SEND_STALE_MS = 2 * 60 * 1000;
 
 function sameConversation(record: SendAttemptRecord, observation: AttemptRecoveryObservation): boolean {
-  return record.tabId === observation.tabId &&
-    record.conversationKey === observation.state.snapshot.conversationKey;
+  if (record.tabId !== observation.tabId || record.contentEpoch !== observation.state.observation.contentEpoch) return false;
+  const observedKey = observation.state.snapshot.conversationKey;
+  if (record.conversationKey === observedKey) return true;
+  return record.conversationKey === 'url:https://chatgpt.com/' &&
+    observedKey.startsWith('conversation:') && observation.authoritativeConversationKey === observedKey;
 }
 
 export function recoverAttempt(

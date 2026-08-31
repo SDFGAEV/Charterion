@@ -8,6 +8,7 @@ function attempt(tabId: number, conversationKey: string): SendAttemptRecord {
     batchId: 'b',
     tabId,
     conversationKey,
+    contentEpoch: 'content-epoch',
     state: 'acknowledged',
     textLength: 1,
     baselineAssistantMessageCount: 0,

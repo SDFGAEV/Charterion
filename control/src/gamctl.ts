@@ -1,8 +1,8 @@
-import { readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { resolveDaemonConfig } from './config';
 import { sendRpc } from './ipc';
-import type { RpcRequest } from './contracts';
+import type { DaemonConfig, RpcRequest, RpcResponse } from './contracts';
 
 interface CliOptions {
   method: string;
@@ -51,12 +51,30 @@ function parseArgs(argv: string[]): CliOptions {
   if (capabilityToken !== undefined) result.capabilityToken = capabilityToken;
   return result;
 }
+
+function healthInstance(response: RpcResponse): string | undefined {
+  if (!response.ok || !response.result || typeof response.result !== 'object') return undefined;
+  const value = (response.result as Record<string, unknown>).instanceId;
+  return typeof value === 'string' ? value : undefined;
+}
+
+async function assertExpectedDaemon(config: DaemonConfig): Promise<void> {
+  const response = await sendRpc(config.pipeName, { id: randomUUID(), method: 'health' }, 1500);
+  if (!response.ok) throw new Error(`GAM daemon health check failed: ${response.error.code}`);
+  const observed = healthInstance(response);
+  if (observed !== config.instanceId) {
+    throw new Error(`GAM instance mismatch: expected ${config.instanceId}, observed ${observed ?? 'legacy-or-unknown'} on ${config.pipeName}`);
+  }
+}
+
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
   const config = resolveDaemonConfig();
+  await assertExpectedDaemon(config);
   const request: RpcRequest = {
     id: randomUUID(),
     method: options.method,
+    instanceId: config.instanceId,
     params: options.params,
   };
   if (options.capabilityToken) request.auth = { capabilityToken: options.capabilityToken };

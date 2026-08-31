@@ -6,12 +6,14 @@ export const MAX_REVIEW_ROUNDS = 10;
 export function defaultCompletionPolicy(kind: TaskKind): TaskCompletionPolicy {
   if (kind === 'review') return 'review-pass';
   if (kind === 'human') return 'human-approval';
-  return 'reply';
+  return 'structured-result';
 }
 
 export function validateTaskPolicy(task: AgentTask): void {
   const expected = defaultCompletionPolicy(task.kind);
-  if (task.completionPolicy !== expected) {
+  if (task.kind === 'work') {
+    if (!['reply', 'structured-result', 'verified-claim'].includes(task.completionPolicy)) throw new Error(`Work task ${task.id} completion policy is invalid`);
+  } else if (task.completionPolicy !== expected) {
     throw new Error(`Task ${task.id} kind ${task.kind} requires completion policy ${expected}`);
   }
 

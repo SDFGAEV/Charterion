@@ -1,12 +1,15 @@
 param(
   [Parameter(Mandatory = $true)][string]$ExtensionId,
+  [Parameter(Mandatory = $true)][string]$PipeName,
+  [Parameter(Mandatory = $true)][string]$InstanceId,
   [string]$GamHome = (Join-Path $env:USERPROFILE '.gpt-agent-manager'),
-  [string]$PipeName = '\\.\pipe\gpt-agent-manager-v1',
   [string]$PublishDir = (Join-Path (Split-Path $PSScriptRoot -Parent | Split-Path -Parent) 'dist-native-host')
 )
 $ErrorActionPreference = 'Stop'
 $HostName = 'com.gpt_agent_manager.control'
 if ($ExtensionId -notmatch '^[a-p]{32}$') { throw 'ExtensionId must be a 32-character Chromium extension id.' }
+if ($InstanceId -notmatch '^[0-9a-f]{16}$') { throw 'InstanceId must be a 16-character lowercase hex id.' }
+if ([string]::IsNullOrWhiteSpace($PipeName)) { throw 'PipeName is required.' }
 $sourceExe = Join-Path $PublishDir 'GamNativeHost.exe'
 if (-not (Test-Path $sourceExe)) { throw "Native host executable not found at $sourceExe. Run npm run publish:native first." }
 $installDir = Join-Path $GamHome 'native-host'
@@ -23,7 +26,12 @@ $installedExe = Join-Path $installDir 'GamNativeHost.exe'
 Copy-Item -Force $sourceExe $installedExe
 $allowedOrigin = "chrome-extension://$ExtensionId/"
 $configPath = Join-Path $installDir 'gam-native-host.json'
-$config = [ordered]@{ pipeName = $PipeName; browserTokenPath = $browserTokenPath; allowedOrigin = $allowedOrigin }
+$config = [ordered]@{
+  pipeName = $PipeName
+  instanceId = $InstanceId
+  browserTokenPath = $browserTokenPath
+  allowedOrigin = $allowedOrigin
+}
 [IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json -Depth 4), [Text.UTF8Encoding]::new($false))
 $manifestPath = Join-Path $installDir "$HostName.json"
 $manifest = [ordered]@{
@@ -45,3 +53,5 @@ foreach ($registryPath in $registryPaths) {
 Write-Host "Registered $HostName for Chrome and Edge: $allowedOrigin"
 Write-Host "Manifest: $manifestPath"
 Write-Host "Control home: $GamHome"
+Write-Host "Instance id: $InstanceId"
+Write-Host "Pipe: $PipeName"

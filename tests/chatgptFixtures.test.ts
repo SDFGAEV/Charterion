@@ -32,6 +32,21 @@ describe('captured ChatGPT DOM fixtures', () => {
     expect(findSendButton(doc)).not.toBeNull();
   });
 
+  it('recognizes the current mobile composer DOM as a ready ChatGPT page', () => {
+    const doc = fixture('mobile-composer.html');
+    const snapshot = snapshotFromDocument(doc, 'https://chatgpt.com/');
+    expect(snapshot.status).toBe('idle');
+    expect(snapshot.signals).toContain('composer-ready');
+    expect(findSendButton(doc)).not.toBeNull();
+  });
+
+  it('treats a visible login surface as authentication-required even when a composer exists', () => {
+    const doc = fixture('logged-out-mobile.html');
+    const snapshot = snapshotFromDocument(doc, 'https://chatgpt.com/');
+    expect(snapshot.status).toBe('unauthorized');
+    expect(snapshot.signals).toContain('login-ui');
+  });
+
   it('classifies the login route as unauthorized without trusting page text', () => {
     const snapshot = snapshotFromDocument(fixture('idle.html'), 'https://chatgpt.com/auth/login');
     expect(snapshot.status).toBe('unauthorized');

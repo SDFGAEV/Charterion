@@ -6,12 +6,14 @@ import type { RpcRouter } from './rpc';
 const MAX_LINE_BYTES = 1024 * 1024;
 
 function writeResponse(socket: Socket, response: RpcResponse): void {
+  if (socket.destroyed || !socket.writable) return;
   socket.write(`${JSON.stringify(response)}\n`, 'utf8');
 }
 
 export function startIpcServer(pipeName: string, router: RpcRouter): Promise<Server> {
   if (process.platform !== 'win32' && existsSync(pipeName)) unlinkSync(pipeName);
   const server = createServer((socket) => {
+    socket.on('error', () => { /* connection-scoped transport failures must not terminate gamd */ });
     socket.setEncoding('utf8');
     let buffer = '';
     socket.on('data', (chunk: string) => {

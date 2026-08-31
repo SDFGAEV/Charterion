@@ -4,6 +4,12 @@ import { ControlDatabase } from './database';
 import { EvidenceAuthority } from './evidenceAuthority';
 import { ChangeRequestAuthority } from './changeRequestAuthority';
 import { RequestAuthority } from './requestAuthority';
+import { WorkAuthority } from './workAuthority';
+import { BrowserAuthority } from './browserAuthority';
+import { ConversationAuthority } from './conversationAuthority';
+import { WorkspaceAuthority } from './workspaceAuthority';
+import { PromotionAuthority } from './promotionAuthority';
+import { planElasticFleet, type ElasticFleetDecision } from './elasticFleet';
 import type {
   AcquireLeaseInput,
   AgentSlot,
@@ -22,6 +28,8 @@ import type {
   AgentDesiredState,
   AgentBrowserState,
   ReportAgentBrowserInput,
+  ReportAgentRuntimeInput,
+  VerifiedTaskCompletion,
 } from './contracts';
 
 type Row = Record<string, string | number | null>;
@@ -30,6 +38,15 @@ function nonEmpty(value: string, label: string): string {
   const trimmed = value.trim();
   if (!trimmed) throw new Error(`${label} is required`);
   return trimmed;
+}
+
+
+function canonicalConversationKey(value: string): string {
+  const key = nonEmpty(value, 'Conversation key');
+  if (!key.startsWith('conversation:')) throw new Error('Only durable ChatGPT conversation identities may bind an agent slot');
+  const id = key.slice('conversation:'.length);
+  if (!id || id === 'new' || /^WEB:/i.test(id)) throw new Error('Conversation key must be a canonical durable ChatGPT identity');
+  return key;
 }
 
 function positiveInt(value: number, label: string, allowZero = false): number {
@@ -63,15 +80,26 @@ function agentFrom(row: Row): AgentSlot {
     status: String(row.status) as AgentSlot['status'],
     desiredState: String(row.desired_state) as AgentSlot['desiredState'],
     browserState: String(row.browser_state) as AgentSlot['browserState'],
+    conversationGeneration: Number(row.conversation_generation ?? 0),
+    rolloverState: String(row.rollover_state ?? 'idle') as AgentSlot['rolloverState'],
+    browserQuarantined: Number(row.browser_quarantined ?? 0) === 1,
     leaseEpoch: Number(row.lease_epoch),
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
   };
   if (row.conversation_key !== null) value.conversationKey = String(row.conversation_key);
+  if (row.active_rollover_id !== null && row.active_rollover_id !== undefined) value.activeRolloverId = String(row.active_rollover_id);
   if (row.browser_profile_id !== null) value.browserProfileId = String(row.browser_profile_id);
   if (row.browser_tab_id !== null) value.browserTabId = Number(row.browser_tab_id);
   if (row.browser_error !== null) value.browserError = String(row.browser_error);
   if (row.browser_observed_at !== null) value.browserObservedAt = Number(row.browser_observed_at);
+  if (row.browser_lease_id !== null && row.browser_lease_id !== undefined) value.browserLeaseId = String(row.browser_lease_id);
+  if (row.browser_lease_epoch !== null && row.browser_lease_epoch !== undefined) value.browserLeaseEpoch = Number(row.browser_lease_epoch);
+  if (row.browser_content_epoch !== null && row.browser_content_epoch !== undefined) value.browserContentEpoch = String(row.browser_content_epoch);
+  if (row.browser_observation_revision !== null && row.browser_observation_revision !== undefined) value.browserObservationRevision = Number(row.browser_observation_revision);
+  if (row.browser_page_status !== null && row.browser_page_status !== undefined) value.browserPageStatus = String(row.browser_page_status) as NonNullable<AgentSlot['browserPageStatus']>;
+  if (row.browser_runtime_observed_at !== null && row.browser_runtime_observed_at !== undefined) value.browserRuntimeObservedAt = Number(row.browser_runtime_observed_at);
+  if (row.browser_quarantine_reason !== null && row.browser_quarantine_reason !== undefined) value.browserQuarantineReason = String(row.browser_quarantine_reason);
   return value;
 }
 
@@ -132,10 +160,103 @@ export class ControlPlane {
   readonly evidence: EvidenceAuthority;
   readonly changes: ChangeRequestAuthority;
   readonly requests: RequestAuthority;
+  readonly work: WorkAuthority;
+  readonly browser: BrowserAuthority;
+  readonly conversations: ConversationAuthority;
+  readonly workspaces: WorkspaceAuthority;
+  readonly promotions: PromotionAuthority;
   constructor(readonly database: ControlDatabase, gitPath = 'git') {
     this.evidence = new EvidenceAuthority(database, gitPath);
     this.changes = new ChangeRequestAuthority(database, gitPath);
     this.requests = new RequestAuthority(database);
+    this.work = new WorkAuthority(database);
+    this.browser = new BrowserAuthority(database);
+    this.conversations = new ConversationAuthority(database);
+    this.workspaces = new WorkspaceAuthority(database, gitPath);
+    this.promotions = new PromotionAuthority(database, gitPath);
+  }
+
+  provisionTaskWorkspace(projectId: string, slotId: string, taskId: string, now = Date.now()) {
+    const project = this.requireProject(projectId);
+    if (project.status !== 'active') throw new Error('Task workspace requires an active project');
+    const slot = this.getAgentSlot(slotId);
+    if (slot.projectId !== project.id || slot.desiredState !== 'active' || slot.status === 'retired') throw new Error('Task workspace AgentSlot is not active in this project');
+    const task = this.work.getTask(taskId);
+    if (!task) throw new Error(`Task ${taskId} does not exist in Kernel work state`);
+    if (task.kind !== 'work' || task.completionPolicy !== 'verified-claim') throw new Error('Automatic workspaces require a verified-claim work task');
+    if (String(task.targetRole ?? '') !== slot.role) throw new Error('Task target role does not match AgentSlot role');
+    if (String(task.project ?? '') !== project.name) throw new Error('Task project does not match ProjectCell name');
+    const existing = this.workspaces.find(project.id, taskId);
+    if (existing) return existing;
+    const materialized = this.workspaces.materialize({ projectId: project.id, projectRoot: project.rootPath, slotId: slot.id, role: slot.role, taskId });
+    const resourceId = `task-workspace:${project.id}:${taskId}`;
+    let resource: ResourceRecord;
+    try { resource = this.requireResource(resourceId); }
+    catch { resource = this.declareResource({ id: resourceId, projectId: project.id, kind: 'workspace', label: `${slot.role}:${taskId}`, metadata: { path: materialized.path, branch: materialized.branch, baseSha: materialized.baseSha, taskId, slotId } }, now); }
+    const active = this.listLeases(resource.id).find((item) => item.status === 'active');
+    let lease: ResourceLease;
+    if (active) {
+      if (active.holderId !== slot.id || active.taskId !== taskId || active.mode !== 'exclusive') throw new Error('Task workspace resource already has an incompatible active lease');
+      lease = active;
+    } else lease = this.acquireLease({ resourceId: resource.id, projectId: project.id, holderId: slot.id, taskId, mode: 'exclusive' }, now);
+    const capability = this.issueCapability({ subject: slot.id, projectId: project.id, agentSlotId: slot.id, taskId, leaseEpoch: lease.epoch, scopes: ['claim:submit','artifact:register','claim:read','claim:verify'], resourceIds: [resource.id], ttlMs: 7 * 24 * 60 * 60 * 1000 }, now);
+    const workspace = this.workspaces.record({ ...materialized, projectId: project.id, taskId, slotId: slot.id, resourceId: resource.id, leaseId: lease.id, leaseEpoch: lease.epoch, capabilityId: capability.id, capabilityToken: capability.token }, now);
+    this.event(project.id, 'TASK_WORKSPACE_PROVISIONED', workspace.id, { taskId, slotId: slot.id, branch: workspace.branch, path: workspace.path, resourceId: resource.id, leaseId: lease.id }, now);
+    return workspace;
+  }
+
+  releaseTaskWorkspace(workspaceId: string, now = Date.now()) {
+    const workspace = this.workspaces.get(workspaceId);
+    const released = workspace.status === 'released' ? workspace : this.workspaces.release(workspaceId, now);
+    const lease = this.getLease(workspace.leaseId);
+    if (lease.status === 'active') this.releaseLease(lease.id, lease.epoch, now);
+    this.revokeCapability(workspace.capabilityId, now);
+    this.workspaces.removeCapabilityToken(workspace.id);
+    this.event(workspace.projectId, 'TASK_WORKSPACE_RELEASED', workspace.id, { taskId: workspace.taskId, slotId: workspace.slotId, branch: workspace.branch }, now);
+    return released;
+  }
+
+  private finalizeVerifiedTaskWorkspace(workspaceId: string, now: number): void {
+    const workspace = this.workspaces.get(workspaceId);
+    const lease = this.getLease(workspace.leaseId);
+    if (lease.status === 'active') this.releaseLease(lease.id, lease.epoch, now);
+    this.revokeCapability(workspace.capabilityId, now);
+    this.workspaces.removeCapabilityToken(workspace.id);
+    if (workspace.status === 'released') return;
+    try {
+      const finalized = this.workspaces.finalizeVerified(workspace.id, now, { attempts: 1, timeoutMs: 1_000 });
+      const type = finalized.cleanup === 'orphan-preserved' ? 'TASK_WORKSPACE_ORPHAN_PRESERVED' : 'TASK_WORKSPACE_RELEASED';
+      this.event(workspace.projectId, type, workspace.id, { taskId: workspace.taskId, slotId: workspace.slotId, branch: workspace.branch, cleanup: finalized.cleanup }, now);
+    } catch (error) {
+      this.event(workspace.projectId, 'TASK_WORKSPACE_RELEASE_DEFERRED', workspace.id, {
+        taskId: workspace.taskId, slotId: workspace.slotId, branch: workspace.branch,
+        error: error instanceof Error ? error.message : String(error),
+      }, now);
+    }
+  }
+
+  verifyClaimAndCompleteTask(claimId: string, now = Date.now()) {
+    const claim = this.evidence.getClaim(claimId);
+    const verification = this.evidence.verifyClaim(claimId, now);
+    if (verification.status === 'passed' && this.work.taskCompletionPolicy(claim.taskId) === 'verified-claim') {
+      const workspace = this.workspaces.find(claim.projectId, claim.taskId);
+      const task = this.work.getTask(claim.taskId);
+      const completion = task?.machineCompletion as VerifiedTaskCompletion | undefined;
+      if (completion) {
+        if (completion.kind !== 'verified-claim' || completion.claimId !== claim.id || completion.verificationId !== verification.id || completion.commitSha !== claim.commitSha) {
+          throw new Error('Verified-claim task already has a different machine completion');
+        }
+        if (workspace) this.finalizeVerifiedTaskWorkspace(workspace.id, now);
+        return verification;
+      }
+      if (!workspace || workspace.status !== 'active') throw new Error('Verified-claim task has no active durable TaskWorkspace');
+      if (!claim.commitSha || workspace.resourceId !== claim.resourceId || workspace.leaseId !== claim.leaseId || workspace.leaseEpoch !== claim.leaseEpoch || workspace.slotId !== claim.subject) {
+        throw new Error('Verified claim does not match the task workspace authority');
+      }
+      this.work.completeVerifiedClaim({ taskId: claim.taskId, claimId: claim.id, verificationId: verification.id, commitSha: claim.commitSha }, verification.completedAt);
+      this.finalizeVerifiedTaskWorkspace(workspace.id, now);
+    }
+    return verification;
   }
 
   private event(projectId: string | undefined, type: string, subject: string, payload: Record<string, unknown>, now: number): void {
@@ -218,23 +339,49 @@ export class ControlPlane {
     return rows.map(agentFrom);
   }
   bindAgentConversation(slotId: string, conversationKey: string, now = Date.now()): AgentSlot {
-    const key = nonEmpty(conversationKey, 'Conversation key');
+    const key = canonicalConversationKey(conversationKey);
     return this.database.transaction(() => {
       const slot = this.getAgentSlot(slotId);
       const project = this.requireProject(slot.projectId);
       if (project.status === 'archived') throw new Error('Cannot bind an agent in an archived project');
       if (slot.desiredState !== 'active') throw new Error('Cannot bind a non-active agent slot');
-      const conflict = this.database.db.prepare(`
-        SELECT id FROM agent_slots WHERE project_id = ? AND conversation_key = ? AND id <> ?
-      `).get(slot.projectId, key, slotId) as { id?: string } | undefined;
+      if (slot.rolloverState !== 'idle') throw new Error('Cannot bind a conversation while rollover is active');
+      if (slot.conversationKey === key) return slot;
+      if (slot.conversationKey) throw new Error('Replacing a durable conversation requires an AgentSlot rollover');
+      const conflict = this.database.db.prepare('SELECT id FROM agent_slots WHERE project_id=? AND conversation_key=? AND id<>?').get(slot.projectId, key, slotId) as { id?: string } | undefined;
       if (conflict?.id) throw new Error(`Conversation ${key} is already bound inside project ${slot.projectId}`);
+      const generation = this.conversations.recordCanonical(slot, key, now);
       const nextEpoch = slot.leaseEpoch + 1;
-      this.database.db.prepare(`
-        UPDATE agent_slots SET conversation_key = ?, status = 'assigned', lease_epoch = ?, updated_at = ? WHERE id = ?
-      `).run(key, nextEpoch, now, slotId);
-      this.event(slot.projectId, 'AGENT_CONVERSATION_BOUND', slotId, { conversationKey: key, epoch: nextEpoch }, now);
+      this.database.db.prepare("UPDATE agent_slots SET conversation_key=?,conversation_generation=?,status='assigned',lease_epoch=?,updated_at=? WHERE id=?")
+        .run(key, generation, nextEpoch, now, slotId);
+      this.event(slot.projectId, 'AGENT_CONVERSATION_BOUND', slotId, { conversationKey: key, generation, epoch: nextEpoch }, now);
       return this.getAgentSlot(slotId);
     });
+  }
+
+  requestAgentConversationRollover(slotId: string, reason: string, handoffText: string, state: Record<string, unknown>, now = Date.now()) {
+    const slot = this.getAgentSlot(slotId); const project = this.requireProject(slot.projectId);
+    if (project.status !== 'active' || slot.desiredState !== 'active') throw new Error('Conversation rollover requires an active project and AgentSlot');
+    return this.conversations.request(slot, reason, handoffText, state, now);
+  }
+
+  beginAgentConversationRollover(slotId: string, rolloverId: string, now = Date.now()) {
+    const slot = this.getAgentSlot(slotId);
+    if (slot.desiredState !== 'active') throw new Error('Conversation rollover requires an active AgentSlot');
+    if (slot.browserPageStatus === 'generating') throw new Error('Cannot roll over a generating ChatGPT page');
+    return this.conversations.begin(slot, rolloverId, now);
+  }
+
+  markAgentRolloverBootstrap(slotId: string, rolloverId: string, attemptId: string, now = Date.now()) {
+    return this.conversations.markBootstrap(this.getAgentSlot(slotId), rolloverId, attemptId, now);
+  }
+
+  completeAgentConversationRollover(slotId: string, attemptId: string, now = Date.now()) {
+    return this.conversations.complete(this.getAgentSlot(slotId), attemptId, now);
+  }
+
+  failAgentConversationRollover(slotId: string, error: string, now = Date.now()) {
+    return this.conversations.fail(this.getAgentSlot(slotId), error, now);
   }
 
   private fenceAgentAuthority(slotId: string, projectId: string, now: number): void {
@@ -260,6 +407,26 @@ export class ControlPlane {
       }
       return this.getAgentSlot(slotId);
     });
+  }
+
+  reconcileElasticFleet(now = Date.now(), idleGraceMs?: number): ElasticFleetDecision[] {
+    const work = this.work.snapshot();
+    const agents = this.listAgentSlots();
+    const activeLeaseRows = this.database.db.prepare("SELECT DISTINCT holder_id FROM leases l JOIN resources r ON r.id=l.resource_id WHERE l.status='active' AND r.kind<>'browser-capacity'").all() as { holder_id: string }[];
+    const unsettledRows = this.database.db.prepare("SELECT DISTINCT slot_id FROM browser_operations WHERE slot_id IS NOT NULL AND state<>'settled'").all() as { slot_id: string }[];
+    const activeLeaseHolderIds = new Set(activeLeaseRows.map((row) => String(row.holder_id)));
+    const unsettledBrowserSlotIds = new Set(unsettledRows.map((row) => String(row.slot_id)));
+    const decisions: ElasticFleetDecision[] = [];
+    for (const project of this.listProjects()) {
+      const planned = planElasticFleet({ project, agents, work, activeLeaseHolderIds, unsettledBrowserSlotIds, now, ...(idleGraceMs === undefined ? {} : { idleGraceMs }) });
+      for (const decision of planned) {
+        if (decision.kind === 'suspend') this.suspendAgentSlot(decision.slotId, now);
+        else this.resumeAgentSlot(decision.slotId, now);
+        this.event(project.id, decision.kind === 'suspend' ? 'ELASTIC_FLEET_SUSPEND_REQUESTED' : 'ELASTIC_FLEET_RESUME_REQUESTED', decision.slotId, { reason: decision.reason }, now);
+        decisions.push(decision);
+      }
+    }
+    return decisions;
   }
 
   resumeAgentSlot(slotId: string, now = Date.now()): AgentSlot {
@@ -306,36 +473,62 @@ export class ControlPlane {
     if (!Number.isInteger(now) || now <= 0) throw new Error('Agent browser observedAt is invalid');
     return this.database.transaction(() => {
       const slot = this.getAgentSlot(input.slotId);
+      if (slot.browserObservedAt !== undefined && now < slot.browserObservedAt) throw new Error('Stale agent browser observation');
       if (['opening','open'].includes(input.browserState) && slot.desiredState !== 'active') throw new Error('Browser cannot open a non-active agent slot');
       let conversationKey = slot.conversationKey;
+      let conversationGeneration = slot.conversationGeneration;
       let nextEpoch = slot.leaseEpoch;
       if (input.conversationKey) {
-        const key = nonEmpty(input.conversationKey, 'Conversation key');
-        if (!key.startsWith('conversation:')) throw new Error('Only durable ChatGPT conversation identities may bind an agent slot');
+        const key = canonicalConversationKey(input.conversationKey);
         if (conversationKey && conversationKey !== key) throw new Error('Browser cannot rebind an agent slot to a different durable conversation');
         const conflict = this.database.db.prepare('SELECT id FROM agent_slots WHERE project_id=? AND conversation_key=? AND id<>?').get(slot.projectId, key, slot.id) as { id?: string } | undefined;
         if (conflict?.id) throw new Error(`Conversation ${key} is already bound inside project ${slot.projectId}`);
-        if (!conversationKey) { conversationKey = key; nextEpoch += 1; }
+        if (!conversationKey) {
+          const accepted = this.conversations.acceptCanonical(slot, key, now);
+          conversationKey = key; conversationGeneration = accepted.generation; nextEpoch += 1;
+        }
       }
       let status = slot.desiredState === 'active' ? (conversationKey ? 'assigned' : 'idle') : slot.status;
       const finalizingStop = input.browserState === 'absent' && slot.desiredState !== 'active' && slot.status !== slot.desiredState;
+      const tabId = input.browserState === 'absent' ? null : input.tabId ?? slot.browserTabId ?? null;
+      if (['opening','open'].includes(input.browserState) && tabId === null) throw new Error('Opening/open browser state requires tabId');
+
+      let browserLeaseId = slot.browserLeaseId ?? null;
+      let browserLeaseEpoch = slot.browserLeaseEpoch ?? null;
+      const addressChanged = tabId !== null && slot.browserTabId !== undefined && slot.browserTabId !== tabId;
+      if (slot.browserLeaseId && (input.browserState === 'absent' || addressChanged)) {
+        this.browser.releaseOccupancy(slot, now); browserLeaseId = null; browserLeaseEpoch = null;
+      }
+      if (tabId !== null && input.browserState !== 'absent') {
+        const occupancy = this.browser.ensureOccupancy(slot, profileId, tabId, now);
+        browserLeaseId = occupancy.id; browserLeaseEpoch = occupancy.epoch;
+      }
+      if (input.browserState === 'absent') this.browser.settleUnfinishedForSlot(slot.id, 'browser-tab-absent', now);
       if (finalizingStop) {
         this.fenceAgentAuthority(slot.id, slot.projectId, now);
-        nextEpoch += 1;
-        status = slot.desiredState === 'retired' ? 'retired' : 'suspended';
+        nextEpoch += 1; status = slot.desiredState === 'retired' ? 'retired' : 'suspended';
       }
-      const tabId = input.browserState === 'absent' ? null : input.tabId ?? slot.browserTabId ?? null;
       const error = input.browserState === 'error' ? nonEmpty(input.error ?? 'Browser runtime reported an error', 'Browser error') : null;
-      this.database.db.prepare(`UPDATE agent_slots SET conversation_key=?,status=?,browser_state=?,browser_profile_id=?,browser_tab_id=?,browser_error=?,browser_observed_at=?,lease_epoch=?,updated_at=? WHERE id=?`)
-        .run(conversationKey ?? null, status, input.browserState, profileId, tabId, error, now, nextEpoch, now, slot.id);
+      const clearRuntime = input.browserState === 'absent';
+      this.database.db.prepare(`UPDATE agent_slots SET conversation_key=?,conversation_generation=?,status=?,browser_state=?,browser_profile_id=?,browser_tab_id=?,browser_error=?,browser_observed_at=?,
+        browser_lease_id=?,browser_lease_epoch=?,browser_content_epoch=?,browser_observation_revision=?,browser_page_status=?,browser_runtime_observed_at=?,browser_quarantined=?,browser_quarantine_reason=?,lease_epoch=?,updated_at=? WHERE id=?`)
+        .run(conversationKey ?? null, conversationGeneration, status, input.browserState, profileId, tabId, error, now, browserLeaseId, browserLeaseEpoch,
+          clearRuntime ? null : slot.browserContentEpoch ?? null, clearRuntime ? null : slot.browserObservationRevision ?? null, clearRuntime ? null : slot.browserPageStatus ?? null,
+          clearRuntime ? null : slot.browserRuntimeObservedAt ?? null, clearRuntime ? 0 : slot.browserQuarantined ? 1 : 0, clearRuntime ? null : slot.browserQuarantineReason ?? null, nextEpoch, now, slot.id);
       const next = this.getAgentSlot(slot.id);
-      if (finalizingStop) {
-        this.event(slot.projectId, slot.desiredState === 'retired' ? 'AGENT_SLOT_RETIRED' : 'AGENT_SLOT_SUSPENDED', slot.id, { conversationKey: next.conversationKey ?? null, finalized: true }, now);
-      }
-      if (slot.browserState !== next.browserState || slot.browserTabId !== next.browserTabId || slot.conversationKey !== next.conversationKey) {
-        this.event(slot.projectId, 'AGENT_BROWSER_OBSERVED', slot.id, { browserState: next.browserState, tabId: next.browserTabId ?? null, conversationKey: next.conversationKey ?? null }, now);
+      if (finalizingStop) this.event(slot.projectId, slot.desiredState === 'retired' ? 'AGENT_SLOT_RETIRED' : 'AGENT_SLOT_SUSPENDED', slot.id, { conversationKey: next.conversationKey ?? null, finalized: true }, now);
+      if (slot.browserState !== next.browserState || slot.browserTabId !== next.browserTabId || slot.conversationKey !== next.conversationKey || slot.browserLeaseId !== next.browserLeaseId) {
+        this.event(slot.projectId, 'AGENT_BROWSER_OBSERVED', slot.id, { browserState: next.browserState, tabId: next.browserTabId ?? null, conversationKey: next.conversationKey ?? null, browserLeaseId: next.browserLeaseId ?? null, browserLeaseEpoch: next.browserLeaseEpoch ?? null }, now);
       }
       return next;
+    });
+  }
+
+  reportAgentRuntime(input: ReportAgentRuntimeInput): AgentSlot {
+    return this.database.transaction(() => {
+      const slot = this.getAgentSlot(input.slotId);
+      this.browser.reportRuntime(slot, input);
+      return this.getAgentSlot(slot.id);
     });
   }
 
@@ -548,22 +741,26 @@ export class ControlPlane {
   reportBrowserRuntime(input: ReportBrowserRuntimeInput, now = input.observedAt ?? Date.now()): BrowserRuntimeStatus {
     const profileId = nonEmpty(input.profileId, 'Browser profile id');
     if (!['unknown', 'authenticated', 'authentication-required'].includes(input.authStatus)) throw new Error('Browser auth status is invalid');
+    if (!['unknown','ready','generating','blocked','error','unavailable'].includes(input.pageHealth)) throw new Error('Browser page health is invalid');
     if (!Number.isInteger(input.openTabs) || input.openTabs < 0) throw new Error('Browser openTabs is invalid');
     const extensionVersion = nonEmpty(input.extensionVersion, 'Extension version');
     if (!Number.isInteger(now) || now <= 0) throw new Error('Browser observedAt is invalid');
+    const current = this.database.db.prepare('SELECT observed_at FROM browser_runtime WHERE profile_id=?').get(profileId) as { observed_at?: number } | undefined;
+    if (current?.observed_at !== undefined && now < Number(current.observed_at)) throw new Error('Stale browser runtime observation');
     this.database.db.prepare(`
-      INSERT INTO browser_runtime(profile_id,auth_status,open_tabs,extension_version,observed_at)
-      VALUES(?,?,?,?,?)
-      ON CONFLICT(profile_id) DO UPDATE SET auth_status=excluded.auth_status,open_tabs=excluded.open_tabs,
+      INSERT INTO browser_runtime(profile_id,auth_status,page_health,open_tabs,extension_version,observed_at)
+      VALUES(?,?,?,?,?,?)
+      ON CONFLICT(profile_id) DO UPDATE SET auth_status=excluded.auth_status,page_health=excluded.page_health,open_tabs=excluded.open_tabs,
         extension_version=excluded.extension_version,observed_at=excluded.observed_at
-    `).run(profileId, input.authStatus, input.openTabs, extensionVersion, now);
-    return { profileId, authStatus: input.authStatus, openTabs: input.openTabs, extensionVersion, observedAt: now };
+    `).run(profileId, input.authStatus, input.pageHealth, input.openTabs, extensionVersion, now);
+    return { profileId, authStatus: input.authStatus, pageHealth: input.pageHealth, openTabs: input.openTabs, extensionVersion, observedAt: now };
   }
 
   listBrowserRuntime(): BrowserRuntimeStatus[] {
     const rows = this.database.db.prepare('SELECT * FROM browser_runtime ORDER BY profile_id').all() as Row[];
     return rows.map((row) => ({
       profileId: String(row.profile_id), authStatus: String(row.auth_status) as BrowserRuntimeStatus['authStatus'],
+      pageHealth: String(row.page_health) as BrowserRuntimeStatus['pageHealth'],
       openTabs: Number(row.open_tabs), extensionVersion: String(row.extension_version), observedAt: Number(row.observed_at),
     }));
   }

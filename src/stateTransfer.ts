@@ -7,6 +7,7 @@ import type {
   AgentTask,
   PortableManagerState,
   RoleBinding,
+  PortableSendAttemptRecord,
   SendAttemptRecord,
 } from './contracts';
 
@@ -33,6 +34,7 @@ function numberValue(value: unknown, label: string): number {
 
 function bindingValue(value: unknown, label: string): RoleBinding {
   const item = record(value);
+  if (item.agentSlotId !== undefined) throw new Error(`${label}.agentSlotId is Kernel-local and not portable`);
   return {
     role: stringValue(item.role, `${label}.role`, 500),
     project: stringValue(item.project, `${label}.project`, 1000),
@@ -56,8 +58,9 @@ function taskValue(value: unknown, index: number): AgentTask {
   return normalizeTask(item as unknown as AgentTask);
 }
 
-function attemptValue(value: unknown, index: number): SendAttemptRecord {
+function attemptValue(value: unknown, index: number): PortableSendAttemptRecord {
   const item = record(value);
+  if (item.contentEpoch !== undefined) throw new Error(`attempts[${index}].contentEpoch is runtime-local and not portable`);
   for (const key of ['attemptId', 'batchId', 'conversationKey', 'state'] as const) {
     stringValue(item[key], `attempts[${index}].${key}`, 2000);
   }
@@ -66,7 +69,8 @@ function attemptValue(value: unknown, index: number): SendAttemptRecord {
   }
   const states = new Set(['prepared', 'dispatched', 'acknowledged', 'reply-observed', 'failed', 'uncertain']);
   if (!states.has(item.state as string)) throw new Error(`attempts[${index}].state is invalid`);
-  return item as unknown as SendAttemptRecord;
+  if (item.retryOfAttemptId !== undefined) stringValue(item.retryOfAttemptId, `attempts[${index}].retryOfAttemptId`, 2000);
+  return item as unknown as PortableSendAttemptRecord;
 }
 
 const MESSAGE_TYPES = new Set<AgentMessageType>([
@@ -115,11 +119,14 @@ export function createPortableManagerState(
   now = Date.now(),
 ): PortableManagerState {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     exportedAt: now,
-    bindings: structuredClone(bindings),
+    bindings: Object.fromEntries(Object.entries(bindings).map(([key, binding]) => [key, { role: binding.role, project: binding.project, notes: binding.notes }])),
     tasks: structuredClone([...tasks]),
-    attempts: structuredClone([...attempts]),
+    attempts: attempts.map((attempt) => {
+      const { contentEpoch: _runtimeEpoch, ...portable } = structuredClone(attempt);
+      return portable;
+    }),
     messages: structuredClone([...messages]),
     supervisorEnabled,
   };
@@ -130,7 +137,7 @@ export function parsePortableManagerState(document: string): PortableManagerStat
   let parsed: unknown;
   try { parsed = JSON.parse(document); } catch { throw new Error('State document is not valid JSON'); }
   const root = record(parsed);
-  if (root.schemaVersion !== 1 && root.schemaVersion !== 2) throw new Error('Unsupported state schemaVersion');
+  if (root.schemaVersion !== 3) throw new Error('Unsupported state schemaVersion');
   const exportedAt = numberValue(root.exportedAt, 'exportedAt');
   if (typeof root.supervisorEnabled !== 'boolean') throw new Error('supervisorEnabled must be boolean');
   const rawBindings = record(root.bindings);
@@ -140,7 +147,7 @@ export function parsePortableManagerState(document: string): PortableManagerStat
   for (const [key, value] of bindingEntries) bindings[key] = bindingValue(value, `bindings.${key}`);
   if (!Array.isArray(root.tasks) || root.tasks.length > MAX_TASKS) throw new Error(`tasks must contain <= ${MAX_TASKS} items`);
   if (!Array.isArray(root.attempts) || root.attempts.length > MAX_ATTEMPTS) throw new Error(`attempts must contain <= ${MAX_ATTEMPTS} items`);
-  const rawMessages = root.schemaVersion === 1 ? [] : root.messages;
+  const rawMessages = root.messages;
   if (!Array.isArray(rawMessages) || rawMessages.length > MAX_MESSAGES) throw new Error(`messages must contain <= ${MAX_MESSAGES} items`);
   const tasks = root.tasks.map(taskValue);
   const attempts = root.attempts.map(attemptValue);
@@ -153,6 +160,16 @@ export function parsePortableManagerState(document: string): PortableManagerStat
     attemptIds.add(attempt.attemptId);
   }
   const attemptsById = new Map(attempts.map((attempt) => [attempt.attemptId, attempt]));
+  for (const attempt of attempts) {
+    if (!attempt.retryOfAttemptId) continue;
+    const source = attemptsById.get(attempt.retryOfAttemptId);
+    if (!source) throw new Error(`Attempt ${attempt.attemptId} retries missing attempt ${attempt.retryOfAttemptId}`);
+    if (source.attemptId === attempt.attemptId) throw new Error(`Attempt ${attempt.attemptId} cannot retry itself`);
+    if (source.taskId !== attempt.taskId || source.messageId !== attempt.messageId) {
+      throw new Error(`Attempt ${attempt.attemptId} retry lineage crosses ownership`);
+    }
+    if (source.createdAt > attempt.createdAt) throw new Error(`Attempt ${attempt.attemptId} retry lineage points forward in time`);
+  }
   const taskIds = new Set(tasks.map((task) => task.id));
   for (const task of tasks) {
     for (const attemptId of task.attemptIds) {
@@ -193,7 +210,7 @@ export function parsePortableManagerState(document: string): PortableManagerStat
     }
   }
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     exportedAt,
     bindings,
     tasks,
@@ -201,6 +218,23 @@ export function parsePortableManagerState(document: string): PortableManagerStat
     messages,
     supervisorEnabled: root.supervisorEnabled,
   };
+}
+
+export function restorePortableAttempts(attempts: readonly PortableSendAttemptRecord[]): SendAttemptRecord[] {
+  return attempts.map((attempt) => {
+    const restored: SendAttemptRecord = {
+      ...structuredClone(attempt),
+      contentEpoch: `portable-detached:${attempt.attemptId}`,
+    };
+    if (attempt.state === 'prepared') {
+      restored.state = 'failed';
+      restored.error = 'Portable state detached before browser dispatch; prompt was not sent';
+    } else if (attempt.state === 'dispatched' || attempt.state === 'acknowledged') {
+      restored.state = 'uncertain';
+      restored.error = 'Portable state omitted browser runtime identity; prior delivery cannot be reconstructed safely';
+    }
+    return restored;
+  });
 }
 
 export function stringifyPortableManagerState(state: PortableManagerState): string {

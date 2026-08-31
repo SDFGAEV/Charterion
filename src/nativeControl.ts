@@ -9,6 +9,7 @@ const CHANGE_STATUSES = new Set(['open','changes-requested','approved','queued',
 const REVIEW_VERDICTS = new Set(['approve','request-changes']);
 const QUEUE_STATUSES = new Set(['queued','validating','integrated','failed','cancelled']);
 const BROWSER_AUTH_STATUSES = new Set(['unknown','authenticated','authentication-required']);
+const BROWSER_PAGE_HEALTHS = new Set(['unknown','ready','generating','blocked','error','unavailable']);
 const WORKER_REQUEST_TYPES = new Set(['suggestion','blocker','question','resource-request','scope-change','dependency-request','cross-system-request','review-request','risk-alert','worker-request']);
 const WORKER_REQUEST_STATUSES = new Set(['open','accepted','rejected','resolved']);
 
@@ -31,10 +32,21 @@ export interface ControlAgentView {
   desiredState: 'active' | 'suspended' | 'retired';
   browserState: 'absent' | 'opening' | 'open' | 'closing' | 'error';
   conversationKey?: string;
+  conversationGeneration: number;
+  rolloverState: 'idle'|'requested'|'opening'|'bootstrapping';
+  activeRolloverId?: string;
   browserProfileId?: string;
   browserTabId?: number;
   browserError?: string;
   browserObservedAt?: number;
+  browserLeaseId?: string;
+  browserLeaseEpoch?: number;
+  browserContentEpoch?: string;
+  browserObservationRevision?: number;
+  browserPageStatus?: import('./contracts').AgentStatus;
+  browserRuntimeObservedAt?: number;
+  browserQuarantined: boolean;
+  browserQuarantineReason?: string;
   leaseEpoch: number;
 }
 
@@ -83,6 +95,7 @@ export interface ControlMergeQueueView {
 export interface ControlBrowserRuntimeView {
   profileId: string;
   authStatus: 'unknown' | 'authenticated' | 'authentication-required';
+  pageHealth: 'unknown' | 'ready' | 'generating' | 'blocked' | 'error' | 'unavailable';
   openTabs: number;
   extensionVersion: string;
   observedAt: number;
@@ -91,6 +104,7 @@ export interface ControlBrowserRuntimeView {
 export interface BrowserRuntimeReportInput {
   profileId: string;
   authStatus: ControlBrowserRuntimeView['authStatus'];
+  pageHealth: ControlBrowserRuntimeView['pageHealth'];
   openTabs: number;
   extensionVersion: string;
   observedAt: number;
@@ -103,7 +117,7 @@ export interface ControlWorkerRequestView {
 }
 
 export interface NativeControlSnapshot {
-  protocolVersion: 1;
+  protocolVersion: 2;
   projects: ControlProjectView[];
   agents: ControlAgentView[];
   resources: ControlResourceView[];
@@ -151,7 +165,7 @@ function arrayField(value: unknown, label: string): unknown[] {
 
 export function parseNativeControlSnapshot(value: unknown): NativeControlSnapshot {
   const root = record(value, 'control snapshot');
-  if (root.protocolVersion !== 1) throw new Error('Unsupported control protocol version');
+  if (root.protocolVersion !== 2) throw new Error('Unsupported control protocol version');
   const projects = arrayField(root.projects, 'projects').map((entry, index) => {
     const item = record(entry, `projects[${index}]`);
     return {
@@ -168,13 +182,24 @@ export function parseNativeControlSnapshot(value: unknown): NativeControlSnapsho
       role: stringField(item.role, 'agent.role'), status: enumField(item.status, 'agent.status', AGENT_STATUSES) as ControlAgentView['status'],
       desiredState: enumField(item.desiredState, 'agent.desiredState', AGENT_DESIRED_STATES) as ControlAgentView['desiredState'],
       browserState: enumField(item.browserState, 'agent.browserState', AGENT_BROWSER_STATES) as ControlAgentView['browserState'],
+      conversationGeneration: numberField(item.conversationGeneration, 'agent.conversationGeneration'),
+      rolloverState: stringField(item.rolloverState, 'agent.rolloverState') as ControlAgentView['rolloverState'],
+      browserQuarantined: item.browserQuarantined === true,
       leaseEpoch: numberField(item.leaseEpoch, 'agent.leaseEpoch'),
     };
     if (item.conversationKey !== undefined) agent.conversationKey = stringField(item.conversationKey, 'agent.conversationKey');
+    if (item.activeRolloverId !== undefined) agent.activeRolloverId = stringField(item.activeRolloverId, 'agent.activeRolloverId');
     if (item.browserProfileId !== undefined) agent.browserProfileId = stringField(item.browserProfileId, 'agent.browserProfileId');
     if (item.browserTabId !== undefined) agent.browserTabId = numberField(item.browserTabId, 'agent.browserTabId');
     if (item.browserError !== undefined) agent.browserError = stringField(item.browserError, 'agent.browserError');
     if (item.browserObservedAt !== undefined) agent.browserObservedAt = numberField(item.browserObservedAt, 'agent.browserObservedAt');
+    if (item.browserLeaseId !== undefined) agent.browserLeaseId = stringField(item.browserLeaseId, 'agent.browserLeaseId');
+    if (item.browserLeaseEpoch !== undefined) agent.browserLeaseEpoch = numberField(item.browserLeaseEpoch, 'agent.browserLeaseEpoch');
+    if (item.browserContentEpoch !== undefined) agent.browserContentEpoch = stringField(item.browserContentEpoch, 'agent.browserContentEpoch');
+    if (item.browserObservationRevision !== undefined) agent.browserObservationRevision = numberField(item.browserObservationRevision, 'agent.browserObservationRevision');
+    if (item.browserPageStatus !== undefined) agent.browserPageStatus = stringField(item.browserPageStatus, 'agent.browserPageStatus') as NonNullable<ControlAgentView['browserPageStatus']>;
+    if (item.browserRuntimeObservedAt !== undefined) agent.browserRuntimeObservedAt = numberField(item.browserRuntimeObservedAt, 'agent.browserRuntimeObservedAt');
+    if (item.browserQuarantineReason !== undefined) agent.browserQuarantineReason = stringField(item.browserQuarantineReason, 'agent.browserQuarantineReason');
     return agent;
   });
   const resources = arrayField(root.resources, 'resources').map((entry, index) => {
@@ -241,6 +266,7 @@ export function parseNativeControlSnapshot(value: unknown): NativeControlSnapsho
     return {
       profileId: stringField(item.profileId, 'browser.profileId'),
       authStatus: enumField(item.authStatus, 'browser.authStatus', BROWSER_AUTH_STATUSES) as ControlBrowserRuntimeView['authStatus'],
+      pageHealth: enumField(item.pageHealth, 'browser.pageHealth', BROWSER_PAGE_HEALTHS) as ControlBrowserRuntimeView['pageHealth'],
       openTabs: numberField(item.openTabs, 'browser.openTabs'),
       extensionVersion: stringField(item.extensionVersion, 'browser.extensionVersion'),
       observedAt: numberField(item.observedAt, 'browser.observedAt'),
@@ -255,7 +281,7 @@ export function parseNativeControlSnapshot(value: unknown): NativeControlSnapsho
     if (item.projectId !== undefined) event.projectId = stringField(item.projectId, 'event.projectId');
     return event;
   });
-  return { protocolVersion: 1, projects, agents, resources, leases, changeRequests, reviews, mergeQueue, workerRequests, browserRuntime, events };
+  return { protocolVersion: 2, projects, agents, resources, leases, changeRequests, reviews, mergeQueue, workerRequests, browserRuntime, events };
 }
 
 export async function readNativeControlSnapshot(): Promise<NativeControlSnapshot> {
@@ -297,4 +323,136 @@ export async function reportNativeAgentBrowser(input: AgentBrowserReportInput): 
   try { response = await chrome.runtime.sendNativeMessage(NATIVE_CONTROL_HOST, request) as NativeRpcResponse; }
   catch (error) { throw new Error(`Native control plane is unavailable: ${error instanceof Error ? error.message : String(error)}`); }
   if (!response?.ok) throw new Error(response?.error?.message ?? 'Native control host rejected agent browser report');
+}
+
+export interface NativeRolloverStatus { rollover: { id: string; slotId: string; status: 'requested'|'opening'|'bootstrapping'; checkpointId: string; fromConversationKey: string; toConversationKey?: string; bootstrapAttemptId?: string; reason: string; }; checkpoint: { id: string; handoffText: string; reason: string; state: Record<string, unknown>; }; }
+
+export async function requestNativeAgentRollover(input: { slotId: string; reason: string; handoffText: string; state: Record<string, unknown> }): Promise<void> { await sendNativeMutation('agent.rollover-request', input as unknown as Record<string, unknown>); }
+export async function beginNativeAgentRollover(slotId: string, rolloverId: string): Promise<void> { await sendNativeMutation('agent.rollover-begin', { slotId, rolloverId }); }
+export async function markNativeAgentRolloverBootstrap(slotId: string, rolloverId: string, attemptId: string): Promise<void> { await sendNativeMutation('agent.rollover-bootstrap', { slotId, rolloverId, attemptId }); }
+export async function completeNativeAgentRollover(slotId: string, attemptId: string): Promise<void> { await sendNativeMutation('agent.rollover-complete', { slotId, attemptId }); }
+export async function failNativeAgentRollover(slotId: string, error: string): Promise<void> { await sendNativeMutation('agent.rollover-fail', { slotId, error }); }
+export async function readNativeAgentRolloverStatus(slotId: string): Promise<NativeRolloverStatus | null> { return await sendNativeMutation('agent.rollover-status', { slotId }) as NativeRolloverStatus | null; }
+
+export interface NativeWorkSnapshot {
+  revision: number;
+  tasks: import('./contracts').AgentTask[];
+  attempts: import('./contracts').SendAttemptRecord[];
+  messages: import('./contracts').AgentMessage[];
+}
+
+function parseNativeWorkSnapshot(value: unknown): NativeWorkSnapshot {
+  const root = record(value, 'work snapshot');
+  const parseDocuments = <T>(key: string, idField: 'id' | 'attemptId'): T[] => arrayField(root[key], key).map((entry, index) => {
+    const item = record(entry, `${key}[${index}]`);
+    stringField(item[idField], `${key}[${index}].${idField}`);
+    return item as T;
+  });
+  return {
+    revision: numberField(root.revision, 'work.revision'),
+    tasks: parseDocuments<import('./contracts').AgentTask>('tasks', 'id'),
+    attempts: parseDocuments<import('./contracts').SendAttemptRecord>('attempts', 'attemptId'),
+    messages: parseDocuments<import('./contracts').AgentMessage>('messages', 'id'),
+  };
+}
+
+export async function readNativeWorkSnapshot(): Promise<NativeWorkSnapshot> {
+  const request = { id: crypto.randomUUID(), method: 'work.snapshot', params: {} };
+  let response: NativeRpcResponse;
+  try { response = await chrome.runtime.sendNativeMessage(NATIVE_CONTROL_HOST, request) as NativeRpcResponse; }
+  catch (error) { throw new Error(`Native control plane is unavailable: ${error instanceof Error ? error.message : String(error)}`); }
+  if (!response?.ok) throw new Error(response?.error?.message ?? 'Native control host rejected work snapshot');
+  return parseNativeWorkSnapshot(response.result);
+}
+
+const WORK_TRANSPORT_KEY = 'nativeWorkTransport.v1';
+
+async function workTransportGeneration(): Promise<string> {
+  const stored = await chrome.storage.session.get(WORK_TRANSPORT_KEY);
+  const current = stored[WORK_TRANSPORT_KEY];
+  if (typeof current === 'string' && current) return current;
+  const generation = crypto.randomUUID();
+  await chrome.storage.session.set({ [WORK_TRANSPORT_KEY]: generation });
+  return generation;
+}
+
+async function workPayloadHash(input: NativeWorkSnapshot): Promise<string> {
+  const bytes = new TextEncoder().encode(JSON.stringify({ revision: input.revision, tasks: input.tasks, attempts: input.attempts, messages: input.messages }));
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+export async function replaceNativeWorkState(input: NativeWorkSnapshot): Promise<NativeWorkSnapshot> {
+  const generation = await workTransportGeneration();
+  const sequence = input.revision + 1;
+  const payloadHash = await workPayloadHash(input);
+  const transportMessageId = `work:${generation}:${sequence}:${payloadHash}`;
+  const request = {
+    id: crypto.randomUUID(), method: 'work.replace',
+    params: { expectedRevision: input.revision, transportGeneration: generation, transportSequence: sequence, transportMessageId, tasks: input.tasks, attempts: input.attempts, messages: input.messages },
+  };
+  let response: NativeRpcResponse | undefined;
+  let transportError: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try { response = await chrome.runtime.sendNativeMessage(NATIVE_CONTROL_HOST, request) as NativeRpcResponse; transportError = undefined; break; }
+    catch (error) { transportError = error; }
+  }
+  if (transportError || !response) throw new Error(`Native control plane is unavailable: ${transportError instanceof Error ? transportError.message : String(transportError)}`);
+  if (!response.ok) throw new Error(response.error?.message ?? 'Native control host rejected work replacement');
+  return parseNativeWorkSnapshot(response.result);
+}
+
+export interface NativeTaskWorkspace {
+  id: string; projectId: string; taskId: string; slotId: string; repoPath: string; path: string; branch: string; baseSha: string;
+  resourceId: string; leaseId: string; leaseEpoch: number; capabilityId: string; capabilityTokenPath: string; controlCliPath: string; status: 'active'|'released';
+}
+
+function parseNativeTaskWorkspace(value: unknown): NativeTaskWorkspace {
+  const item = record(value, 'task workspace');
+  return {
+    id: stringField(item.id,'workspace.id'), projectId: stringField(item.projectId,'workspace.projectId'), taskId: stringField(item.taskId,'workspace.taskId'),
+    slotId: stringField(item.slotId,'workspace.slotId'), repoPath: stringField(item.repoPath,'workspace.repoPath'), path: stringField(item.path,'workspace.path'),
+    branch: stringField(item.branch,'workspace.branch'), baseSha: stringField(item.baseSha,'workspace.baseSha'), resourceId: stringField(item.resourceId,'workspace.resourceId'),
+    leaseId: stringField(item.leaseId,'workspace.leaseId'), leaseEpoch: numberField(item.leaseEpoch,'workspace.leaseEpoch'), capabilityId: stringField(item.capabilityId,'workspace.capabilityId'),
+    capabilityTokenPath: stringField(item.capabilityTokenPath,'workspace.capabilityTokenPath'), controlCliPath: stringField(item.controlCliPath,'workspace.controlCliPath'), status: stringField(item.status,'workspace.status') as NativeTaskWorkspace['status'],
+  };
+}
+
+export async function provisionNativeTaskWorkspace(input: { projectId: string; slotId: string; taskId: string }): Promise<NativeTaskWorkspace> {
+  return parseNativeTaskWorkspace(await sendNativeMutation('workspace.provision', input));
+}
+
+export interface AgentRuntimeReportInput {
+  slotId: string; profileId: string; tabId: number; contentEpoch: string; revision: number;
+  pageStatus: import('./contracts').AgentStatus; semanticSignature: string; observedAt: number;
+}
+
+async function sendNativeMutation(method: string, params: Record<string, unknown>): Promise<unknown> {
+  const request = { id: crypto.randomUUID(), method, params };
+  let response: NativeRpcResponse;
+  try { response = await chrome.runtime.sendNativeMessage(NATIVE_CONTROL_HOST, request) as NativeRpcResponse; }
+  catch (error) { throw new Error(`Native control plane is unavailable: ${error instanceof Error ? error.message : String(error)}`); }
+  if (!response?.ok) throw new Error(response?.error?.message ?? `Native control host rejected ${method}`);
+  return response.result;
+}
+
+export async function reconcileNativeElasticFleet(): Promise<unknown> {
+  return await sendNativeMutation('fleet.reconcile', {});
+}
+
+export async function reportNativeAgentRuntime(input: AgentRuntimeReportInput): Promise<void> {
+  await sendNativeMutation('agent.runtime-report', input as unknown as Record<string, unknown>);
+}
+
+export async function planNativeBrowserOperation(input: { id: string; idempotencyKey: string; operation: string; projectId?: string; slotId?: string; conversationKey?: string; tabId?: number; contentEpoch?: string; preconditionsHash: string; plannedAt: number }): Promise<void> {
+  await sendNativeMutation('browser.operation-plan', input as unknown as Record<string, unknown>);
+}
+export async function dispatchNativeBrowserOperation(id: string, dispatchedAt = Date.now()): Promise<void> {
+  await sendNativeMutation('browser.operation-dispatch', { id, dispatchedAt });
+}
+export async function settleNativeBrowserOperation(id: string, outcome: 'acknowledged'|'reply-observed'|'failed'|'uncertain', evidence: Record<string, unknown>, settledAt = Date.now()): Promise<void> {
+  await sendNativeMutation('browser.operation-settle', { id, outcome, evidence, settledAt });
+}
+export async function reportNativeIncident(input: { scope: string; severity: 'warning'|'error'|'critical'; code: string; subject: string; detail?: Record<string, unknown> }): Promise<void> {
+  await sendNativeMutation('incident.report', input as unknown as Record<string, unknown>);
 }

@@ -1,19 +1,37 @@
+import { createHash, randomBytes } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { join, resolve, win32 } from 'node:path';
 import type { DaemonConfig } from './contracts';
 
+function canonicalHomeIdentity(homeDir: string, platform = process.platform): string {
+  const absolute = platform === 'win32' ? win32.resolve(homeDir) : resolve(homeDir);
+  const normalized = absolute.replace(/\\/g, '/');
+  return platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
+
+export function deriveInstanceId(homeDir: string, platform = process.platform): string {
+  return createHash('sha256').update(canonicalHomeIdentity(homeDir, platform)).digest('hex').slice(0, 16);
+}
+
+export function derivePipeName(homeDir: string, platform = process.platform): string {
+  const instanceId = deriveInstanceId(homeDir, platform);
+  return platform === 'win32'
+    ? `\\\\.\\pipe\\gpt-agent-manager-${instanceId}`
+    : join(resolve(homeDir), `gamd-${instanceId}.sock`);
+}
+
 export function resolveDaemonConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
-  const homeDir = env.GAM_HOME?.trim() || join(homedir(), '.gpt-agent-manager');
-  const defaultPipe = process.platform === 'win32' ? '\\\\.\\pipe\\gpt-agent-manager-v1' : join(homeDir, 'gamd.sock');
+  const homeDir = resolve(env.GAM_HOME?.trim() || join(homedir(), '.gpt-agent-manager'));
+  const instanceId = deriveInstanceId(homeDir);
   return {
     homeDir,
+    instanceId,
     databasePath: join(homeDir, 'global.db'),
     adminTokenPath: join(homeDir, 'admin.token'),
     browserTokenPath: join(homeDir, 'browser.token'),
     gitPath: env.GAM_GIT_PATH?.trim() || 'git',
-    pipeName: env.GAM_PIPE_NAME?.trim() || defaultPipe,
+    pipeName: env.GAM_PIPE_NAME?.trim() || derivePipeName(homeDir),
   };
 }
 

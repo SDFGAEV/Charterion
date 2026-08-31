@@ -1,6 +1,7 @@
 import { build } from 'esbuild';
 import { copyFile, mkdir, rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { writeDistFingerprint } from './dist-fingerprint.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const dist = resolve(root, 'dist');
@@ -21,4 +22,5 @@ for (const entry of ['background', 'content', 'sidepanel']) {
 
 await copyFile(resolve(root, 'src', 'sidepanel.html'), resolve(dist, 'sidepanel.html'));
 await copyFile(resolve(root, 'src', 'sidepanel.css'), resolve(dist, 'sidepanel.css'));
-console.log('Built extension assets in dist/.');
+const meta = await writeDistFingerprint(root, dist);
+console.log(`Built extension assets in dist/ (source ${meta.sourceFingerprint.slice(0, 16)}).`);

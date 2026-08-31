@@ -67,3 +67,37 @@ describe('Supervisor fleet authority', () => {
     expect(h.router.handle({ id: 'r', method: 'agent.resume', auth, params: { slotId: slot.id } }).ok).toBe(false);
   });
 });
+
+
+describe('Elastic fleet reconciliation authority', () => {
+  it('lets only Browser trigger Kernel decisions and blocks cleanup while a browser effect is unsettled', () => {
+    const h = harness();
+    const project = h.plane.createProject({ name: 'Elastic', rootPath: 'E:/elastic', minSlots: 0, maxSlots: 2 });
+    const supervisor = h.plane.issueCapability({ subject: 'supervisor', projectId: project.id, scopes: ['agent:fleet'], ttlMs: 60_000 });
+    const spawned = h.router.handle({ id: 'spawn', method: 'agent.spawn', auth: { capabilityToken: supervisor.token }, params: { projectId: project.id, role: 'WORKER' } });
+    expect(spawned.ok).toBe(true); if (!spawned.ok) return;
+    const slot = spawned.result as { id: string };
+    const observedAt = Date.now() - 300_000;
+    expect(h.router.handle({ id: 'open', method: 'agent.browser-report', auth: { browserToken: 'browser' }, params: { slotId: slot.id, profileId: 'gam-default', browserState: 'open', tabId: 77, observedAt } }).ok).toBe(true);
+    expect(h.router.handle({ id: 'runtime', method: 'agent.runtime-report', auth: { browserToken: 'browser' }, params: { slotId: slot.id, profileId: 'gam-default', tabId: 77, contentEpoch: 'epoch-1', revision: 1, pageStatus: 'idle', semanticSignature: 'idle', observedAt: observedAt + 1 } }).ok).toBe(true);
+
+    h.plane.browser.planOperation({ id: 'op1', idempotencyKey: 'op1', operation: 'prompt.send', projectId: project.id, slotId: slot.id, tabId: 77, contentEpoch: 'epoch-1', preconditionsHash: 'abc', plannedAt: observedAt + 2 });
+    const held = h.router.handle({ id: 'held', method: 'fleet.reconcile', auth: { browserToken: 'browser' }, params: {} });
+    expect(held).toMatchObject({ ok: true, result: [] });
+    expect(h.plane.getAgentSlot(slot.id).desiredState).toBe('active');
+
+    h.plane.browser.settleOperation('op1', 'failed', { reason: 'test' }, Date.now());
+    const cleaned = h.router.handle({ id: 'clean', method: 'fleet.reconcile', auth: { browserToken: 'browser' }, params: {} });
+    expect(cleaned).toMatchObject({ ok: true, result: [{ kind: 'suspend', slotId: slot.id }] });
+    expect(h.plane.getAgentSlot(slot.id).desiredState).toBe('suspended');
+  });
+
+  it('rejects unauthenticated and capability callers for the browser-only reconcile trigger', () => {
+    const h = harness();
+    const project = h.plane.createProject({ name: 'Elastic Auth', rootPath: 'E:/elastic-auth', minSlots: 0, maxSlots: 1 });
+    const supervisor = h.plane.issueCapability({ subject: 'supervisor', projectId: project.id, scopes: ['agent:fleet'], ttlMs: 60_000 });
+    expect(h.router.handle({ id: 'none', method: 'fleet.reconcile', params: {} }).ok).toBe(false);
+    expect(h.router.handle({ id: 'cap', method: 'fleet.reconcile', auth: { capabilityToken: supervisor.token }, params: {} }).ok).toBe(false);
+    expect(h.router.handle({ id: 'browser', method: 'fleet.reconcile', auth: { browserToken: 'browser' }, params: {} }).ok).toBe(true);
+  });
+});

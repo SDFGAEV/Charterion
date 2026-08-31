@@ -7,6 +7,7 @@ import {
   observePageStatus,
   findSendButton,
   readComposerText,
+  sendPrompt,
   setComposerText,
   snapshotFromDocument,
   snapshotSemanticKey,
@@ -18,6 +19,9 @@ describe('ChatGPT adapter identity', () => {
     expect(extractConversationId('https://chatgpt.com/g/g-123-helper/c/custom-1')).toBe('custom-1');
     expect(extractConversationId('https://chatgpt.com/')).toBeUndefined();
     expect(conversationKey('https://chatgpt.com/c/a%20b')).toBe('conversation:a b');
+    expect(extractConversationId('https://chatgpt.com/c/WEB:temporary-1')).toBeUndefined();
+    expect(extractConversationId('https://chatgpt.com/c/WEB%3Atemporary-2')).toBeUndefined();
+    expect(conversationKey('https://chatgpt.com/c/WEB:temporary-1')).toBe('url:https://chatgpt.com/c/WEB:temporary-1');
   });
 
   it('normalizes the browser page title without inventing a role', () => {
@@ -45,6 +49,33 @@ describe('ChatGPT page observation', () => {
     const dom = new JSDOM(`<!doctype html><title>ChatGPT</title>
       <textarea id="prompt-textarea"></textarea><button data-testid="stop-button"></button>`);
     expect(observePageStatus(dom.window.document, 'https://chatgpt.com/c/live').status).toBe('generating');
+  });
+
+  it('detects conversation exhaustion only on direct error surfaces', () => {
+    const exhausted = new JSDOM('<!doctype html><title>ChatGPT</title><div role="alert">This conversation has reached the maximum length. Start a new chat to continue.</div><textarea id="prompt-textarea"></textarea>');
+    const observed = observePageStatus(exhausted.window.document, 'https://chatgpt.com/c/full');
+    expect(observed).toMatchObject({ status: 'error', confidence: 'direct' });
+    expect(observed.signals).toContain('conversation-limit');
+
+    const ordinaryText = new JSDOM('<!doctype html><title>ChatGPT</title><main>This conversation has reached the maximum length.</main><textarea id="prompt-textarea"></textarea>');
+    const ordinary = observePageStatus(ordinaryText.window.document, 'https://chatgpt.com/c/not-full');
+    expect(ordinary.status).toBe('idle');
+    expect(ordinary.signals).not.toContain('conversation-limit');
+  });
+
+  it('detects message-rate limits only on direct error surfaces', () => {
+    const limited = new JSDOM('<!doctype html><title>ChatGPT</title><div role="alert">Too many messages. Please try again later.</div><textarea id="prompt-textarea"></textarea>');
+    const observed = observePageStatus(limited.window.document, 'https://chatgpt.com/c/rate');
+    expect(observed).toMatchObject({ status: 'error', confidence: 'direct' });
+    expect(observed.signals).toContain('message-rate-limit');
+
+    const chinese = new JSDOM('<!doctype html><title>ChatGPT</title><div role="alert">消息过多，请稍后再试。</div><textarea id="prompt-textarea"></textarea>');
+    expect(observePageStatus(chinese.window.document, 'https://chatgpt.com/c/rate-cn').signals).toContain('message-rate-limit');
+
+    const ordinaryText = new JSDOM('<!doctype html><title>ChatGPT</title><main>We should avoid too many messages.</main><textarea id="prompt-textarea"></textarea>');
+    const ordinary = observePageStatus(ordinaryText.window.document, 'https://chatgpt.com/c/ordinary');
+    expect(ordinary.status).toBe('idle');
+    expect(ordinary.signals).not.toContain('message-rate-limit');
   });
 
   it('classifies access, login, and explicit error surfaces before readiness', () => {
@@ -92,5 +123,16 @@ describe('ChatGPT page observation', () => {
       <button aria-label="发送消息"></button>`);
     expect(observePageStatus(dom.window.document, 'https://chatgpt.com/c/x').status).toBe('idle');
     expect(findSendButton(dom.window.document)).not.toBeNull();
+  });
+
+  it('requires observable submission evidence before acknowledging a prompt', async () => {
+    const accepted = new JSDOM(`<!doctype html><form><textarea id="prompt-textarea"></textarea><button type="submit" data-composer-submit></button></form>`, { url: 'https://chatgpt.com/' });
+    const acceptedComposer = accepted.window.document.querySelector<HTMLTextAreaElement>('#prompt-textarea')!;
+    accepted.window.document.querySelector('button')!.addEventListener('click', (event) => { event.preventDefault(); acceptedComposer.value = ''; });
+    await expect(sendPrompt(accepted.window.document, 'hello', 100)).resolves.toBeUndefined();
+
+    const rejected = new JSDOM(`<!doctype html><form><textarea id="prompt-textarea"></textarea><button type="submit" data-composer-submit></button></form>`, { url: 'https://chatgpt.com/' });
+    rejected.window.document.querySelector('button')!.addEventListener('click', (event) => event.preventDefault());
+    await expect(sendPrompt(rejected.window.document, 'hello', 80)).rejects.toThrow(/did not confirm prompt submission/i);
   });
 });

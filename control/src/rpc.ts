@@ -21,6 +21,9 @@ import type {
   RpcResponse,
   SubmitWorkerRequestInput,
   WorkerRequestType,
+  RequestSelfHostingPromotionInput,
+  DecideSelfHostingPromotionInput,
+  ApplySelfHostingPromotionInput,
 } from './contracts';
 
 const ISOLATION_TIERS = ['c0-host', 'c1-container', 'c2-hypervisor', 'c3-ephemeral-vm'] as const;
@@ -30,6 +33,10 @@ const LEASE_MODES = ['shared', 'exclusive'] as const;
 const ARTIFACT_KINDS = ['file','test-log','report','git-bundle','other'] as const;
 const REVIEW_VERDICTS = ['approve','request-changes'] as const;
 const BROWSER_AUTH_STATUSES = ['unknown','authenticated','authentication-required'] as const;
+const BROWSER_PAGE_HEALTHS = ['unknown','ready','generating','blocked','error','unavailable'] as const;
+const AGENT_PAGE_STATUSES = ['idle','generating','blocked','unauthorized','error','unknown','unavailable'] as const;
+const BROWSER_OPERATION_OUTCOMES = ['acknowledged','reply-observed','failed','uncertain'] as const;
+const INCIDENT_SEVERITIES = ['warning','error','critical'] as const;
 const WORKER_REQUEST_TYPES = ['suggestion','blocker','question','resource-request','scope-change','dependency-request','cross-system-request','review-request','risk-alert','worker-request'] as const;
 
 function record(value: unknown, label = 'params'): Record<string, unknown> {
@@ -50,6 +57,16 @@ function numberParam(params: Record<string, unknown>, key: string, optional = fa
   return value;
 }
 
+function objectParam(params: Record<string, unknown>, key: string, optional = false): Record<string, unknown> | undefined {
+  const value = params[key]; if (value === undefined && optional) return undefined; return record(value, key);
+}
+
+function objectArrayParam(params: Record<string, unknown>, key: string): Record<string, unknown>[] {
+  const value = params[key];
+  if (!Array.isArray(value)) throw new Error(`${key} must be an array`);
+  return value.map((item, index) => record(item, `${key}[${index}]`));
+}
+
 function enumParam<T extends string>(params: Record<string, unknown>, key: string, allowed: readonly T[], optional = false): T | undefined {
   const value = stringParam(params, key, optional);
   if (value === undefined) return undefined;
@@ -68,14 +85,24 @@ function failure(id: string, code: string, message: string): RpcFailure {
 }
 
 export class RpcRouter {
-  constructor(private readonly plane: ControlPlane, private readonly adminToken: string, private readonly browserToken: string) {}
+  constructor(
+    private readonly plane: ControlPlane,
+    private readonly adminToken: string,
+    private readonly browserToken: string,
+    private readonly instanceId?: string,
+  ) {}
 
   handle(request: RpcRequest): RpcResponse {
     const id = typeof request?.id === 'string' && request.id ? request.id : 'unknown';
     try {
       if (!request || typeof request !== 'object') return failure(id, 'INVALID_REQUEST', 'Request must be an object');
       if (typeof request.method !== 'string' || !request.method.trim()) return failure(id, 'INVALID_REQUEST', 'method is required');
-      if (request.method === 'health') return { id, ok: true, result: { status: 'ok', protocolVersion: 1 } };
+      if (request.method === 'health') {
+        return { id, ok: true, result: { status: 'ok', protocolVersion: 2, instanceId: this.instanceId ?? null } };
+      }
+      if (this.instanceId && request.instanceId !== this.instanceId) {
+        return failure(id, 'INSTANCE_MISMATCH', `RPC instance mismatch: expected ${this.instanceId}`);
+      }
       return { id, ok: true, result: this.dispatch(request) };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -122,7 +149,7 @@ export class RpcRouter {
     switch (request.method) {
       case 'control.snapshot':
         this.requireBrowserOrAdmin(request);
-        const changeRequests = this.plane.changes.listChangeRequests().slice(-200); return { protocolVersion: 1, projects: this.plane.listProjects(), agents: this.plane.listAgentSlots(), resources: this.plane.listResources(), leases: this.plane.listLeases(), claims: this.plane.evidence.listClaims().slice(-200), artifacts: this.plane.evidence.listArtifacts().slice(-200), verifications: this.plane.evidence.listVerifications().slice(-200), changeRequests, reviews: changeRequests.flatMap((item) => this.plane.changes.listReviews(item.id)).slice(-200), mergeQueue: this.plane.changes.listQueue().slice(-200), workerRequests: this.plane.requests.list().slice(-200), browserRuntime: this.plane.listBrowserRuntime(), events: this.plane.listEvents(undefined, 0, 200) };
+        const changeRequests = this.plane.changes.listChangeRequests().slice(-200); return { protocolVersion: 2, projects: this.plane.listProjects(), agents: this.plane.listAgentSlots(), resources: this.plane.listResources(), leases: this.plane.listLeases(), claims: this.plane.evidence.listClaims().slice(-200), artifacts: this.plane.evidence.listArtifacts().slice(-200), verifications: this.plane.evidence.listVerifications().slice(-200), changeRequests, reviews: changeRequests.flatMap((item) => this.plane.changes.listReviews(item.id)).slice(-200), mergeQueue: this.plane.changes.listQueue().slice(-200), workerRequests: this.plane.requests.list().slice(-200), promotions: this.plane.promotions.list().slice(-200), browserRuntime: this.plane.listBrowserRuntime(), events: this.plane.listEvents(undefined, 0, 200) };
       case 'browser.report': return this.browserReport(request, params);
       case 'browser.status': this.requireBrowserOrAdmin(request); return this.plane.listBrowserRuntime();
       case 'project.create': return this.projectCreate(request, params);
@@ -136,6 +163,23 @@ export class RpcRouter {
       case 'agent.resume': return this.agentResume(request, params);
       case 'agent.retire': return this.agentRetire(request, params);
       case 'agent.browser-report': return this.agentBrowserReport(request, params);
+      case 'agent.rollover-request': return this.agentRolloverRequest(request, params);
+      case 'agent.rollover-begin': return this.agentRolloverBegin(request, params);
+      case 'agent.rollover-bootstrap': return this.agentRolloverBootstrap(request, params);
+      case 'agent.rollover-complete': return this.agentRolloverComplete(request, params);
+      case 'agent.rollover-fail': return this.agentRolloverFail(request, params);
+      case 'agent.rollover-status': return this.agentRolloverStatus(request, params);
+      case 'agent.conversation-list': return this.agentConversationList(request, params);
+      case 'agent.checkpoint-list': return this.agentCheckpointList(request, params);
+      case 'agent.rollover-list': return this.agentRolloverList(request, params);
+      case 'agent.runtime-report': return this.agentRuntimeReport(request, params);
+      case 'browser.operation-plan': return this.browserOperationPlan(request, params);
+      case 'browser.operation-dispatch': return this.browserOperationDispatch(request, params);
+      case 'browser.operation-settle': return this.browserOperationSettle(request, params);
+      case 'browser.operation-list': return this.browserOperationList(request, params);
+      case 'incident.report': return this.incidentReport(request, params);
+      case 'incident.list': return this.incidentList(request, params);
+      case 'incident.resolve': return this.incidentResolve(request, params);
       default: return this.dispatchResources(request, params);
     }
   }
@@ -145,6 +189,7 @@ export class RpcRouter {
     return this.plane.reportBrowserRuntime({
       profileId: stringParam(params, 'profileId')!,
       authStatus: enumParam(params, 'authStatus', BROWSER_AUTH_STATUSES)!,
+      pageHealth: enumParam(params, 'pageHealth', BROWSER_PAGE_HEALTHS)!,
       openTabs: numberParam(params, 'openTabs')!,
       extensionVersion: stringParam(params, 'extensionVersion')!,
       ...(observedAt !== undefined ? { observedAt } : {}),
@@ -220,6 +265,19 @@ export class RpcRouter {
     return this.plane.reportAgentBrowser({ slotId: stringParam(params, 'slotId')!, profileId: stringParam(params, 'profileId')!, browserState: enumParam(params, 'browserState', ['absent','opening','open','closing','error'] as const)!, ...(tabId !== undefined ? { tabId } : {}), ...(conversationKey !== undefined ? { conversationKey } : {}), ...(error !== undefined ? { error } : {}), ...(observedAt !== undefined ? { observedAt } : {}) });
   }
 
+  private agentRolloverRequest(request: RpcRequest, params: Record<string, unknown>): unknown {
+    this.requireBrowserOrAdmin(request);
+    return this.plane.requestAgentConversationRollover(stringParam(params,'slotId')!, stringParam(params,'reason')!, stringParam(params,'handoffText')!, objectParam(params,'state',true) ?? {});
+  }
+  private agentRolloverBegin(request: RpcRequest, params: Record<string, unknown>): unknown { this.requireBrowserOrAdmin(request); return this.plane.beginAgentConversationRollover(stringParam(params,'slotId')!, stringParam(params,'rolloverId')!); }
+  private agentRolloverBootstrap(request: RpcRequest, params: Record<string, unknown>): unknown { this.requireBrowserOrAdmin(request); return this.plane.markAgentRolloverBootstrap(stringParam(params,'slotId')!, stringParam(params,'rolloverId')!, stringParam(params,'attemptId')!); }
+  private agentRolloverComplete(request: RpcRequest, params: Record<string, unknown>): unknown { this.requireBrowserOrAdmin(request); return this.plane.completeAgentConversationRollover(stringParam(params,'slotId')!, stringParam(params,'attemptId')!); }
+  private agentRolloverFail(request: RpcRequest, params: Record<string, unknown>): unknown { this.requireBrowserOrAdmin(request); return this.plane.failAgentConversationRollover(stringParam(params,'slotId')!, stringParam(params,'error')!); }
+  private agentRolloverStatus(request: RpcRequest, params: Record<string, unknown>): unknown { this.requireBrowserOrAdmin(request); const slotId=stringParam(params,'slotId')!; const rollover=this.plane.conversations.activeRollover(slotId); return rollover ? { rollover, checkpoint: this.plane.conversations.checkpoint(rollover.checkpointId) } : null; }
+  private agentConversationList(request: RpcRequest, params: Record<string, unknown>): unknown { this.requireBrowserOrAdmin(request); return this.plane.conversations.listConversations(stringParam(params,'slotId',true)); }
+  private agentCheckpointList(request: RpcRequest, params: Record<string, unknown>): unknown { this.requireBrowserOrAdmin(request); return this.plane.conversations.listCheckpoints(stringParam(params,'slotId',true)); }
+  private agentRolloverList(request: RpcRequest, params: Record<string, unknown>): unknown { this.requireBrowserOrAdmin(request); return this.plane.conversations.listRollovers(stringParam(params,'slotId',true)); }
+
   private dispatchResources(request: RpcRequest, params: Record<string, unknown>): unknown {
     switch (request.method) {
       case 'resource.declare': return this.resourceDeclare(request, params);
@@ -246,14 +304,96 @@ export class RpcRouter {
       case 'merge.queue-list': return this.mergeQueueList(request, params);
       case 'merge.prepare': return this.mergePrepare(request, params);
       case 'merge.observe': return this.mergeObserve(request, params);
+      case 'promotion.request': return this.promotionRequest(request, params);
+      case 'promotion.decide': return this.promotionDecide(request, params);
+      case 'promotion.apply': return this.promotionApply(request, params);
+      case 'promotion.list': return this.promotionList(request, params);
       case 'request.submit': return this.requestSubmit(request, params);
       case 'request.list': return this.requestList(request, params);
       case 'request.decide': return this.requestDecide(request, params);
       case 'request.resolve': return this.requestResolve(request, params);
       case 'events.list': return this.eventsList(request, params);
+      case 'work.snapshot': return this.workSnapshot(request);
+      case 'work.replace': return this.workReplace(request, params);
+      case 'fleet.reconcile': return this.fleetReconcile(request, params);
+      case 'workspace.provision': return this.workspaceProvision(request, params);
+      case 'workspace.list': return this.workspaceList(request, params);
+      case 'workspace.release': return this.workspaceRelease(request, params);
       default: throw new Error(`Unknown RPC method ${request.method}`);
     }
   }
+  private fleetReconcile(request: RpcRequest, params: Record<string, unknown>): unknown {
+    this.requireBrowser(request);
+    void params;
+    return this.plane.reconcileElasticFleet();
+  }
+
+  private agentRuntimeReport(request: RpcRequest, params: Record<string, unknown>): unknown {
+    this.requireBrowser(request);
+    return this.plane.reportAgentRuntime({
+      slotId: stringParam(params, 'slotId')!, profileId: stringParam(params, 'profileId')!, tabId: numberParam(params, 'tabId')!,
+      contentEpoch: stringParam(params, 'contentEpoch')!, revision: numberParam(params, 'revision')!,
+      pageStatus: enumParam(params, 'pageStatus', AGENT_PAGE_STATUSES)!, semanticSignature: stringParam(params, 'semanticSignature')!,
+      observedAt: numberParam(params, 'observedAt')!,
+    });
+  }
+
+  private browserOperationPlan(request: RpcRequest, params: Record<string, unknown>): unknown {
+    this.requireBrowser(request);
+    const projectId = stringParam(params, 'projectId', true); const slotId = stringParam(params, 'slotId', true);
+    const conversationKey = stringParam(params, 'conversationKey', true); const tabId = numberParam(params, 'tabId', true);
+    const contentEpoch = stringParam(params, 'contentEpoch', true); const plannedAt = numberParam(params, 'plannedAt', true);
+    return this.plane.browser.planOperation({
+      id: stringParam(params, 'id')!, idempotencyKey: stringParam(params, 'idempotencyKey')!, operation: stringParam(params, 'operation')!,
+      preconditionsHash: stringParam(params, 'preconditionsHash')!,
+      ...(projectId !== undefined ? { projectId } : {}), ...(slotId !== undefined ? { slotId } : {}),
+      ...(conversationKey !== undefined ? { conversationKey } : {}), ...(tabId !== undefined ? { tabId } : {}),
+      ...(contentEpoch !== undefined ? { contentEpoch } : {}), ...(plannedAt !== undefined ? { plannedAt } : {}),
+    });
+  }
+
+  private browserOperationDispatch(request: RpcRequest, params: Record<string, unknown>): unknown {
+    this.requireBrowser(request); return this.plane.browser.dispatchOperation(stringParam(params, 'id')!, numberParam(params, 'dispatchedAt', true) ?? Date.now());
+  }
+
+  private browserOperationSettle(request: RpcRequest, params: Record<string, unknown>): unknown {
+    this.requireBrowser(request);
+    return this.plane.browser.settleOperation(stringParam(params, 'id')!, enumParam(params, 'outcome', BROWSER_OPERATION_OUTCOMES)!, record(params.evidence ?? {}, 'evidence'), numberParam(params, 'settledAt', true) ?? Date.now());
+  }
+
+  private browserOperationList(request: RpcRequest, params: Record<string, unknown>): unknown {
+    this.requireBrowserOrAdmin(request); return this.plane.browser.listOperations(stringParam(params, 'slotId', true));
+  }
+
+  private incidentReport(request: RpcRequest, params: Record<string, unknown>): unknown {
+    this.requireBrowser(request);
+    return this.plane.browser.reportIncident({ scope: stringParam(params, 'scope')!, severity: enumParam(params, 'severity', INCIDENT_SEVERITIES)!, code: stringParam(params, 'code')!, subject: stringParam(params, 'subject')!, detail: record(params.detail ?? {}, 'detail') });
+  }
+
+  private incidentList(request: RpcRequest, params: Record<string, unknown>): unknown {
+    this.requireBrowserOrAdmin(request); return this.plane.browser.listIncidents(params.openOnly === true);
+  }
+
+  private incidentResolve(request: RpcRequest, params: Record<string, unknown>): unknown {
+    this.requireAdmin(request); return this.plane.browser.resolveIncident(stringParam(params, 'id')!);
+  }
+
+  private workspaceProvision(request: RpcRequest, params: Record<string, unknown>): unknown {
+    this.requireBrowserOrAdmin(request);
+    const workspace = this.plane.provisionTaskWorkspace(stringParam(params, 'projectId')!, stringParam(params, 'slotId')!, stringParam(params, 'taskId')!);
+    return { ...workspace, controlCliPath: this.plane.workspaces.controlCliPath };
+  }
+
+  private workspaceList(request: RpcRequest, params: Record<string, unknown>): unknown {
+    this.requireBrowserOrAdmin(request);
+    return this.plane.workspaces.list(stringParam(params, 'projectId', true));
+  }
+
+  private workspaceRelease(request: RpcRequest, params: Record<string, unknown>): unknown {
+    this.requireAdmin(request);
+    return this.plane.releaseTaskWorkspace(stringParam(params, 'workspaceId')!);
+  }
+
   private resourceDeclare(request: RpcRequest, params: Record<string, unknown>): unknown {
     this.requireAdmin(request);
     const input: {
@@ -397,8 +537,14 @@ export class RpcRouter {
     return this.plane.evidence.listArtifacts(claimId);
   }
   private claimVerify(request: RpcRequest, params: Record<string, unknown>): unknown {
-    this.requireAdmin(request);
-    return this.plane.evidence.verifyClaim(stringParam(params, 'claimId')!);
+    const claimId = stringParam(params, 'claimId')!;
+    const claim = this.plane.evidence.getClaim(claimId);
+    if (request.auth?.adminToken) this.requireAdmin(request);
+    else {
+      const grant = this.requireCapability(request, 'claim:verify', { projectId: claim.projectId, resourceId: claim.resourceId, leaseEpoch: claim.leaseEpoch });
+      if (grant.taskId !== claim.taskId || grant.subject !== claim.subject) throw new Error('Capability does not own this claim task');
+    }
+    return this.plane.verifyClaimAndCompleteTask(claimId);
   }
 
   private verificationList(request: RpcRequest, params: Record<string, unknown>): unknown {
@@ -515,6 +661,50 @@ export class RpcRouter {
     return this.plane.verifyCapability(token, 'status:read', options);
   }
 
+  private promotionRequest(request: RpcRequest, params: Record<string, unknown>): unknown {
+    const input: RequestSelfHostingPromotionInput = {
+      projectId: stringParam(params, 'projectId')!, idempotencyKey: stringParam(params, 'idempotencyKey')!,
+      claimId: stringParam(params, 'claimId')!, candidateSha: stringParam(params, 'candidateSha')!,
+      targetRef: stringParam(params, 'targetRef')!, expectedParentSha: stringParam(params, 'expectedParentSha')!,
+      requestedBy: stringParam(params, 'requestedBy')!,
+    };
+    const grant = this.requireCapability(request, 'promotion:request', { projectId: input.projectId });
+    if (grant.subject !== input.requestedBy) throw new Error('Capability subject does not match promotion requester');
+    return this.plane.promotions.request(input);
+  }
+
+  private promotionDecide(request: RpcRequest, params: Record<string, unknown>): unknown {
+    const promotionId = stringParam(params, 'promotionId')!;
+    const current = this.plane.promotions.get(promotionId);
+    const authoritySubject = stringParam(params, 'authoritySubject')!;
+    const grant = this.requireCapability(request, 'promotion:decide', { projectId: current.projectId });
+    if (grant.subject !== authoritySubject) throw new Error('Capability subject does not match promotion authority');
+    if (grant.taskId !== undefined) throw new Error('Task-bound capability cannot decide Parent/Candidate promotion');
+    const input: DecideSelfHostingPromotionInput = {
+      promotionId, authoritySubject,
+      decision: enumParam(params, 'decision', ['approve', 'reject'] as const)!,
+      reason: stringParam(params, 'reason')!,
+    };
+    return this.plane.promotions.decide(input);
+  }
+
+  private promotionApply(request: RpcRequest, params: Record<string, unknown>): unknown {
+    const promotionId = stringParam(params, 'promotionId')!;
+    const current = this.plane.promotions.get(promotionId);
+    const authoritySubject = stringParam(params, 'authoritySubject')!;
+    const grant = this.requireCapability(request, 'promotion:apply', { projectId: current.projectId });
+    if (grant.subject !== authoritySubject) throw new Error('Capability subject does not match promotion authority');
+    if (grant.taskId !== undefined) throw new Error('Task-bound capability cannot apply Parent/Candidate promotion');
+    const input: ApplySelfHostingPromotionInput = { promotionId, authoritySubject };
+    return this.plane.promotions.apply(input);
+  }
+
+  private promotionList(request: RpcRequest, params: Record<string, unknown>): unknown {
+    const projectId = stringParam(params, 'projectId')!;
+    if (request.auth?.adminToken) this.requireAdmin(request);
+    else this.requireCapability(request, 'promotion:read', { projectId });
+    return this.plane.promotions.list(projectId);
+  }
   private requestSubmit(request: RpcRequest, params: Record<string, unknown>): unknown {
     const input: SubmitWorkerRequestInput = { projectId: stringParam(params, 'projectId')!, fromSubject: stringParam(params, 'fromSubject')!, type: enumParam<WorkerRequestType>(params, 'type', WORKER_REQUEST_TYPES)!, title: stringParam(params, 'title')!, body: stringParam(params, 'body')! };
     const taskId = stringParam(params, 'taskId', true); const suggestedAction = stringParam(params, 'suggestedAction', true);
@@ -543,6 +733,22 @@ export class RpcRouter {
     const current = this.plane.requests.get(stringParam(params, 'requestId')!); const supervisorSubject = stringParam(params, 'supervisorSubject')!;
     if (request.auth?.adminToken) this.requireAdmin(request); else { const grant = this.requireCapability(request, 'request:review', { projectId: current.projectId }); if (grant.subject !== supervisorSubject) throw new Error('Capability subject does not match Supervisor'); }
     return this.plane.requests.resolve(current.id, supervisorSubject, stringParam(params, 'note', true) ?? '');
+  }
+
+  private workSnapshot(request: RpcRequest): unknown {
+    this.requireBrowserOrAdmin(request);
+    return this.plane.work.snapshot();
+  }
+
+  private workReplace(request: RpcRequest, params: Record<string, unknown>): unknown {
+    this.requireBrowser(request);
+    return this.plane.work.replace({
+      expectedRevision: numberParam(params, 'expectedRevision')!,
+      transportGeneration: stringParam(params, 'transportGeneration')!, transportSequence: numberParam(params, 'transportSequence')!, transportMessageId: stringParam(params, 'transportMessageId')!,
+      tasks: objectArrayParam(params, 'tasks'),
+      attempts: objectArrayParam(params, 'attempts'),
+      messages: objectArrayParam(params, 'messages'),
+    });
   }
 
   private eventsList(request: RpcRequest, params: Record<string, unknown>): unknown {

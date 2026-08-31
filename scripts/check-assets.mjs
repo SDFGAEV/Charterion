@@ -30,12 +30,21 @@ if (manifest.manifest_version !== 3) throw new Error('manifest.json must stay on
 if (JSON.stringify(manifest.host_permissions) !== JSON.stringify(['https://chatgpt.com/*'])) {
   throw new Error('host_permissions must remain scoped to https://chatgpt.com/*');
 }
-const expectedPermissions = ['tabs', 'storage', 'sidePanel', 'nativeMessaging'];
+const expectedPermissions = ['tabs', 'storage', 'sidePanel', 'nativeMessaging', 'alarms'];
 if (JSON.stringify(manifest.permissions) !== JSON.stringify(expectedPermissions)) {
   throw new Error(`permissions must remain exactly ${expectedPermissions.join(', ')}`);
 }
 if (manifest.background?.service_worker !== 'dist/background.js') {
   throw new Error('background service worker path changed unexpectedly');
+}
+const backgroundSource = await readFile(resolve(root, 'src/background.ts'), 'utf8');
+if (backgroundSource.includes('setInterval(')) throw new Error('MV3 background must not use setInterval as a persistent scheduler');
+if (!backgroundSource.includes('chrome.alarms.onAlarm')) throw new Error('MV3 background must retain chrome.alarms reconciliation wakeups');
+if (!backgroundSource.includes('await deliverWorkerRequestMessages(snapshot);\n    // Fleet bindings may become usable only after the content event that triggered this reconcile.\n    // Give Auto Supervisor a second scheduling opportunity against the reconciled binding state.\n    kickSupervisor();')) {
+  throw new Error('Fleet reconciliation must re-kick Auto Supervisor after bindings converge');
+}
+if (!backgroundSource.includes("if (!expansionAllowed) {\n          if (agent.browserState !== 'absent')")) {
+  throw new Error('Authentication/health gates must clear stale AgentSlot browser observations before suppressing fleet expansion');
 }
 if (manifest.side_panel?.default_path !== 'dist/sidepanel.html') {
   throw new Error('side panel path changed unexpectedly');

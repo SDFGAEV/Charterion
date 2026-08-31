@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 
 const repo = process.cwd();
 const home = mkdtempSync(join(tmpdir(), 'gam-launcher-smoke-'));
+const foreignHome = mkdtempSync(join(tmpdir(), 'gam-launcher-foreign-'));
 const pipe = process.platform === 'win32'
   ? `\\\\.\\pipe\\gam-launcher-${randomUUID()}`
   : join(home, 'gamd.sock');
@@ -52,11 +53,25 @@ try {
   if (started.status !== 'ready' || started.browser !== 'skipped') throw new Error('launcher start is incorrect');
   const opened = run(gam, ['open', 'Launcher Smoke', '--json', '--no-browser']);
   if (opened.status !== 'ready' || opened.project?.id !== created.result.id) throw new Error('launcher open did not resolve project');
-  const doctor = run(gam, ['doctor', '--json']);
+const doctor = run(gam, ['doctor', '--json']);
   if (doctor.status !== 'ready') throw new Error('launcher doctor failed');
+  const foreignEnv = { ...env, GAM_HOME: foreignHome };
+  const foreignDoctorRaw = spawnSync(process.execPath, [gam, 'doctor', '--json'], { cwd: repo, env: foreignEnv, encoding: 'utf8', timeout: 10_000 });
+  if (foreignDoctorRaw.status !== 0) throw new Error(`foreign doctor failed: ${foreignDoctorRaw.stderr || foreignDoctorRaw.stdout}`);
+  const foreignDoctor = JSON.parse(foreignDoctorRaw.stdout.trim());
+  if (foreignDoctor.details.instanceId === doctor.details.instanceId) throw new Error('different GAM_HOME values produced the same instance id');
+  const foreignStatusRaw = spawnSync(process.execPath, [gam, 'status', '--json'], { cwd: repo, env: foreignEnv, encoding: 'utf8', timeout: 10_000 });
+  if (foreignStatusRaw.status === 0) throw new Error('launcher accepted a daemon belonging to another GAM_HOME');
+  const foreignStatus = JSON.parse(foreignStatusRaw.stdout.trim());
+  if (foreignStatus.code !== 'LAUNCH_FAILED' || !String(foreignStatus.message).includes('belongs to another instance')) {
+    throw new Error(`launcher did not fail closed on foreign instance: ${foreignStatusRaw.stdout}`);
+  }
+  const foreignCtl = spawnSync(process.execPath, [gamctl, 'health'], { cwd: repo, env: foreignEnv, encoding: 'utf8', timeout: 10_000 });
+  if (foreignCtl.status === 0 || !foreignCtl.stderr.includes('GAM instance mismatch')) throw new Error('gamctl accepted a foreign daemon instance');
   console.log(JSON.stringify({ ok: true, projectId: created.result.id, status, started, opened, doctor }, null, 2));
 } finally {
   daemon.kill();
   await new Promise((resolve) => setTimeout(resolve, 100));
   rmSync(home, { recursive: true, force: true });
+  rmSync(foreignHome, { recursive: true, force: true });
 }

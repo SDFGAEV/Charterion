@@ -22,6 +22,7 @@ function message(target: AgentMessage['target'] = { kind: 'role', role: 'reviewe
 function attempt(id: string, conversationKey: string, state: SendAttemptRecord['state']): SendAttemptRecord {
   return {
     attemptId: id, batchId: 'b', tabId: Number(conversationKey.split(':')[1] ?? 1), conversationKey,
+    contentEpoch: 'content-epoch',
     messageId: 'message-1', state, textLength: 4, baselineAssistantMessageCount: 0, createdAt: 1, updatedAt: 1,
   };
 }

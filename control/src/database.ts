@@ -1,13 +1,13 @@
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-export const CONTROL_SCHEMA_VERSION = 9;
+export const CONTROL_SCHEMA_VERSION = 15;
 
 export class ControlDatabase {
   readonly db: DatabaseSync;
 
-  constructor(path: string) {
+  constructor(readonly path: string) {
     mkdirSync(dirname(path), { recursive: true });
     this.db = new DatabaseSync(path);
     this.db.exec('PRAGMA foreign_keys = ON;');
@@ -18,6 +18,31 @@ export class ControlDatabase {
 
   close(): void {
     this.db.close();
+  }
+
+  health(): { ok: boolean; quickCheck: string[]; foreignKeyViolations: number } {
+    const quickCheck = (this.db.prepare('PRAGMA quick_check').all() as Record<string, unknown>[]).flatMap((row) => Object.values(row).map(String));
+    const foreignKeys = this.db.prepare('PRAGMA foreign_key_check').all() as Record<string, unknown>[];
+    return { ok: quickCheck.length === 1 && quickCheck[0] === 'ok' && foreignKeys.length === 0, quickCheck, foreignKeyViolations: foreignKeys.length };
+  }
+
+  checkpoint(mode: 'PASSIVE'|'FULL'|'RESTART'|'TRUNCATE' = 'FULL'): Record<string, number> {
+    const row = this.db.prepare(`PRAGMA wal_checkpoint(${mode})`).get() as Record<string, number> | undefined;
+    return row ?? {};
+  }
+
+  backupTo(destination: string): { path: string; health: { ok: boolean; quickCheck: string[]; foreignKeyViolations: number } } {
+    if (existsSync(destination)) throw new Error('Database backup destination already exists');
+    mkdirSync(dirname(destination), { recursive: true });
+    this.checkpoint('FULL');
+    const escaped = destination.replaceAll("'", "''");
+    this.db.exec(`VACUUM INTO '${escaped}'`);
+    const backup = new ControlDatabase(destination);
+    try {
+      const health = backup.health();
+      if (!health.ok) throw new Error('Database backup verification failed');
+      return { path: destination, health };
+    } finally { backup.close(); }
   }
 
   transaction<T>(operation: () => T): T {
@@ -52,6 +77,12 @@ export class ControlDatabase {
     if (version < 7) this.migrateV7();
     if (version < 8) this.migrateV8();
     if (version < 9) this.migrateV9();
+    if (version < 10) this.migrateV10();
+    if (version < 11) this.migrateV11();
+    if (version < 12) this.migrateV12();
+    if (version < 13) this.migrateV13();
+    if (version < 14) this.migrateV14();
+    if (version < 15) this.migrateV15();
     this.db.prepare(`
       INSERT INTO schema_meta(key, value) VALUES('schema_version', ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value
@@ -177,6 +208,7 @@ export class ControlDatabase {
         CREATE TABLE IF NOT EXISTS browser_runtime (
           profile_id TEXT PRIMARY KEY,
           auth_status TEXT NOT NULL CHECK(auth_status IN ('unknown','authenticated','authentication-required')),
+          page_health TEXT NOT NULL DEFAULT 'unknown' CHECK(page_health IN ('unknown','ready','generating','blocked','error','unavailable')),
           open_tabs INTEGER NOT NULL CHECK(open_tabs >= 0),
           extension_version TEXT NOT NULL,
           observed_at INTEGER NOT NULL
@@ -216,6 +248,155 @@ export class ControlDatabase {
       this.db.exec('CREATE INDEX IF NOT EXISTS idx_capabilities_agent_slot ON capabilities(agent_slot_id, expires_at);');
     });
   }
+  private migrateV10(): void {
+    this.transaction(() => {
+      const columns = this.db.prepare('PRAGMA table_info(browser_runtime)').all();
+      if (!columns.some((row) => row.name === 'page_health')) {
+        this.db.exec("ALTER TABLE browser_runtime ADD COLUMN page_health TEXT NOT NULL DEFAULT 'unknown' CHECK(page_health IN ('unknown','ready','generating','blocked','error','unavailable'));");
+      }
+    });
+  }
+  private migrateV11(): void {
+    this.transaction(() => this.createManagerWorkTables());
+  }
+
+  private migrateV12(): void {
+    this.transaction(() => {
+      const columns = this.db.prepare('PRAGMA table_info(agent_slots)').all();
+      const add = (name: string, sql: string): void => { if (!columns.some((row) => row.name === name)) this.db.exec(sql); };
+      add('browser_lease_id', 'ALTER TABLE agent_slots ADD COLUMN browser_lease_id TEXT;');
+      add('browser_lease_epoch', 'ALTER TABLE agent_slots ADD COLUMN browser_lease_epoch INTEGER;');
+      add('browser_content_epoch', 'ALTER TABLE agent_slots ADD COLUMN browser_content_epoch TEXT;');
+      add('browser_observation_revision', 'ALTER TABLE agent_slots ADD COLUMN browser_observation_revision INTEGER;');
+      add('browser_page_status', 'ALTER TABLE agent_slots ADD COLUMN browser_page_status TEXT;');
+      add('browser_runtime_observed_at', 'ALTER TABLE agent_slots ADD COLUMN browser_runtime_observed_at INTEGER;');
+      add('browser_quarantined', 'ALTER TABLE agent_slots ADD COLUMN browser_quarantined INTEGER NOT NULL DEFAULT 0 CHECK(browser_quarantined IN (0,1));');
+      add('browser_quarantine_reason', 'ALTER TABLE agent_slots ADD COLUMN browser_quarantine_reason TEXT;');
+      this.createBrowserAuthorityTables();
+    });
+  }
+
+  private migrateV13(): void {
+    this.transaction(() => {
+      const columns = this.db.prepare('PRAGMA table_info(agent_slots)').all();
+      const add = (name: string, sql: string): void => { if (!columns.some((row) => row.name === name)) this.db.exec(sql); };
+      add('conversation_generation', 'ALTER TABLE agent_slots ADD COLUMN conversation_generation INTEGER NOT NULL DEFAULT 0 CHECK(conversation_generation >= 0);');
+      add('rollover_state', "ALTER TABLE agent_slots ADD COLUMN rollover_state TEXT NOT NULL DEFAULT 'idle' CHECK(rollover_state IN ('idle','requested','opening','bootstrapping'));");
+      add('active_rollover_id', 'ALTER TABLE agent_slots ADD COLUMN active_rollover_id TEXT;');
+      this.createConversationContinuityTables();
+      this.db.exec("UPDATE agent_slots SET conversation_generation=1 WHERE conversation_key IS NOT NULL AND conversation_generation=0;");
+      this.db.exec("INSERT OR IGNORE INTO agent_conversations(id,project_id,slot_id,generation,conversation_key,status,predecessor_conversation_key,started_at,ended_at,close_reason) SELECT 'legacy:'||id,project_id,id,conversation_generation,conversation_key,'active',NULL,updated_at,NULL,NULL FROM agent_slots WHERE conversation_key IS NOT NULL;");
+    });
+  }
+
+  private migrateV14(): void {
+    this.transaction(() => {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS task_workspaces (
+          id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, task_id TEXT NOT NULL,
+          slot_id TEXT NOT NULL REFERENCES agent_slots(id) ON DELETE CASCADE, repo_path TEXT NOT NULL, path TEXT NOT NULL, branch TEXT NOT NULL, base_sha TEXT NOT NULL,
+          resource_id TEXT NOT NULL REFERENCES resources(id) ON DELETE CASCADE, lease_id TEXT NOT NULL REFERENCES leases(id) ON DELETE CASCADE, lease_epoch INTEGER NOT NULL CHECK(lease_epoch > 0),
+          capability_id TEXT NOT NULL REFERENCES capabilities(id) ON DELETE CASCADE, capability_token_path TEXT NOT NULL,
+          status TEXT NOT NULL CHECK(status IN ('active','released')), created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+          UNIQUE(project_id,task_id), UNIQUE(path)
+        ) STRICT;
+        CREATE INDEX IF NOT EXISTS idx_task_workspaces_slot_status ON task_workspaces(slot_id,status,created_at);
+      `);
+    });
+  }
+
+  private migrateV15(): void {
+    this.transaction(() => {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS self_hosting_promotions (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          idempotency_key TEXT NOT NULL,
+          claim_id TEXT NOT NULL REFERENCES claims(id) ON DELETE RESTRICT,
+          candidate_subject TEXT NOT NULL,
+          candidate_sha TEXT NOT NULL,
+          target_ref TEXT NOT NULL,
+          expected_parent_sha TEXT NOT NULL,
+          requested_by TEXT NOT NULL,
+          status TEXT NOT NULL CHECK(status IN ('pending','approved','rejected','promoted')),
+          decision_by TEXT,
+          decision_reason TEXT,
+          decision_at INTEGER,
+          promoted_at INTEGER,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          UNIQUE(project_id,idempotency_key)
+        ) STRICT;
+        CREATE INDEX IF NOT EXISTS idx_self_hosting_promotions_project_status
+          ON self_hosting_promotions(project_id,status,created_at);
+      `);
+    });
+  }
+  private createConversationContinuityTables(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS agent_conversations (
+        id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, slot_id TEXT NOT NULL REFERENCES agent_slots(id) ON DELETE CASCADE,
+        generation INTEGER NOT NULL CHECK(generation > 0), conversation_key TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('active','closed')),
+        predecessor_conversation_key TEXT, started_at INTEGER NOT NULL, ended_at INTEGER, close_reason TEXT,
+        UNIQUE(slot_id,generation), UNIQUE(project_id,conversation_key)
+      ) STRICT;
+      CREATE INDEX IF NOT EXISTS idx_agent_conversations_slot ON agent_conversations(slot_id,generation);
+      CREATE TABLE IF NOT EXISTS worker_checkpoints (
+        id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, slot_id TEXT NOT NULL REFERENCES agent_slots(id) ON DELETE CASCADE,
+        reason TEXT NOT NULL, handoff_text TEXT NOT NULL, state_json TEXT NOT NULL, created_at INTEGER NOT NULL
+      ) STRICT;
+      CREATE INDEX IF NOT EXISTS idx_worker_checkpoints_slot ON worker_checkpoints(slot_id,created_at);
+      CREATE TABLE IF NOT EXISTS agent_rollovers (
+        id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, slot_id TEXT NOT NULL REFERENCES agent_slots(id) ON DELETE CASCADE,
+        from_conversation_key TEXT NOT NULL, to_conversation_key TEXT, from_generation INTEGER NOT NULL CHECK(from_generation > 0), to_generation INTEGER NOT NULL CHECK(to_generation > from_generation),
+        checkpoint_id TEXT NOT NULL REFERENCES worker_checkpoints(id) ON DELETE RESTRICT, status TEXT NOT NULL CHECK(status IN ('requested','opening','bootstrapping','completed','failed')),
+        reason TEXT NOT NULL, bootstrap_attempt_id TEXT, error TEXT, requested_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, completed_at INTEGER
+      ) STRICT;
+      CREATE INDEX IF NOT EXISTS idx_agent_rollovers_slot ON agent_rollovers(slot_id,requested_at);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_rollovers_active ON agent_rollovers(slot_id) WHERE status IN ('requested','opening','bootstrapping');
+    `);
+  }
+
+  private createBrowserAuthorityTables(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS browser_operations (
+        id TEXT PRIMARY KEY, idempotency_key TEXT NOT NULL UNIQUE, operation TEXT NOT NULL,
+        project_id TEXT REFERENCES projects(id) ON DELETE CASCADE, slot_id TEXT REFERENCES agent_slots(id) ON DELETE CASCADE,
+        conversation_key TEXT, tab_id INTEGER, content_epoch TEXT, preconditions_hash TEXT NOT NULL,
+        state TEXT NOT NULL CHECK(state IN ('planned','dispatched','settled')),
+        outcome TEXT CHECK(outcome IS NULL OR outcome IN ('acknowledged','reply-observed','failed','uncertain')),
+        evidence_json TEXT NOT NULL DEFAULT '{}', planned_at INTEGER NOT NULL, dispatched_at INTEGER, settled_at INTEGER, updated_at INTEGER NOT NULL
+      ) STRICT;
+      CREATE INDEX IF NOT EXISTS idx_browser_operations_slot_state ON browser_operations(slot_id,state,updated_at);
+      CREATE TABLE IF NOT EXISTS runtime_incidents (
+        id TEXT PRIMARY KEY, scope TEXT NOT NULL, severity TEXT NOT NULL CHECK(severity IN ('warning','error','critical')),
+        code TEXT NOT NULL, subject TEXT NOT NULL, detail_json TEXT NOT NULL, created_at INTEGER NOT NULL, resolved_at INTEGER
+      ) STRICT;
+      CREATE INDEX IF NOT EXISTS idx_runtime_incidents_open ON runtime_incidents(resolved_at,created_at);
+      CREATE TABLE IF NOT EXISTS manager_work_mutations (
+        message_id TEXT PRIMARY KEY, generation TEXT NOT NULL, sequence INTEGER NOT NULL, payload_hash TEXT NOT NULL,
+        result_revision INTEGER NOT NULL, created_at INTEGER NOT NULL, UNIQUE(generation,sequence)
+      ) STRICT;
+    `);
+  }
+
+  private createManagerWorkTables(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS manager_work_meta (
+        singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+        revision INTEGER NOT NULL CHECK(revision >= 0),
+        updated_at INTEGER NOT NULL
+      ) STRICT;
+      INSERT OR IGNORE INTO manager_work_meta(singleton,revision,updated_at) VALUES(1,0,0);
+      CREATE TABLE IF NOT EXISTS manager_tasks (id TEXT PRIMARY KEY, position INTEGER NOT NULL, document_json TEXT NOT NULL, updated_at INTEGER NOT NULL) STRICT;
+      CREATE TABLE IF NOT EXISTS manager_attempts (id TEXT PRIMARY KEY, position INTEGER NOT NULL, document_json TEXT NOT NULL, updated_at INTEGER NOT NULL) STRICT;
+      CREATE TABLE IF NOT EXISTS manager_messages (id TEXT PRIMARY KEY, position INTEGER NOT NULL, document_json TEXT NOT NULL, updated_at INTEGER NOT NULL) STRICT;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_manager_tasks_position ON manager_tasks(position);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_manager_attempts_position ON manager_attempts(position);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_manager_messages_position ON manager_messages(position);
+    `);
+  }
+
   private createCoreTables(): void {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS projects (

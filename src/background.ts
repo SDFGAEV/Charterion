@@ -1,25 +1,32 @@
 import { advanceAttempt } from './attempts';
 import { retainAttemptLedger } from './attemptLedger';
 import { deriveManagedTasks, isRetryableTaskAttempt, validateTaskGraph } from './taskGraph';
-import { planReadyDispatches } from './supervisor';
-import { buildTaskDispatchPrompt } from './taskPrompt';
+import { dispatchReadyManagedTasks } from './taskDispatchRuntime';
 import { attemptBelongsToTab } from './tabAttempt';
 import { applyHumanDecision, applyTaskDisposition } from './taskLifecycle';
 import { applyReviewRemediation } from './reviewLoop';
 import { defaultCompletionPolicy, DEFAULT_MAX_REVIEW_ROUNDS, normalizeTask } from './taskPolicy';
 import { parseReviewResult } from './review';
 import { assertMessageDeliveryAvailable, buildSemanticMessagePrompt, createAgentMessage, planMessageDispatch } from './messageBus';
-import { createPortableManagerState, parsePortableManagerState, stringifyPortableManagerState } from './stateTransfer';
+import { createPortableManagerState, parsePortableManagerState, restorePortableAttempts, stringifyPortableManagerState } from './stateTransfer';
 import { recoverAttempt, type AttemptRecoveryObservation } from './recovery';
-import { readNativeControlSnapshot, reportNativeBrowserRuntime, reportNativeAgentBrowser } from './nativeControl';
-import { filterFleetTaskTabs, planFleetReconciliation, workerRequestMessage } from './fleet';
+import { beginNativeAgentRollover, dispatchNativeBrowserOperation, planNativeBrowserOperation, readNativeControlSnapshot, readNativeWorkSnapshot, replaceNativeWorkState, reportNativeAgentBrowser, reportNativeBrowserRuntime, reconcileNativeElasticFleet, settleNativeBrowserOperation } from './nativeControl';
+import { planFleetReconciliation, workerRequestMessage } from './fleet';
+import { bootstrapPendingConversationRollover, bootstrapReplyAttemptId, completeConversationRolloverForReply, requestAutomaticConversationRollover } from './conversationRollover';
+import { deriveBrowserRuntimeObservation, fleetExpansionAllowed } from './browserRuntime';
+import { CoalescingRunner } from './coalescingRunner';
+import { TabOperationQueue } from './tabOperationQueue';
+import { controlFeedbackMessages } from './controlFeedback';
+import { ContentRuntimeFence } from './contentRuntimeFence';
+import { browserOperationPolicy } from './browserOperationPolicy';
+import { recoveryStateForTab, snapshotForTab } from './contentRuntimeBridge';
+import { reportIncident, reportSlotRuntime, sha256Text } from './browserRuntimeReporting';
+import { PROMPT_DISPATCH_GOVERNOR_KEY, PromptDispatchGovernor } from './promptDispatchGovernor';
 import {
   EMPTY_BINDING,
-  unavailableSnapshot,
   type AgentMessage,
   type AgentTask,
   type ChatSnapshot,
-  type ContentRecoveryState,
   type CreateTaskInput,
   type ManagedTab,
   type ManagerRequest,
@@ -40,7 +47,12 @@ const SUPERVISOR_KEY = 'supervisor.v1';
 const FLEET_TABS_KEY = 'fleetTabs.v1';
 const CONTROL_REQUEST_MESSAGE_PREFIX = 'control-request:';
 let stateMutationTail: Promise<void> = Promise.resolve();
-
+const tabOperations = new TabOperationQueue();
+const contentRuntimeFence = new ContentRuntimeFence();
+const promptDispatchGovernor = new PromptDispatchGovernor({
+  read: async () => (await chrome.storage.local.get(PROMPT_DISPATCH_GOVERNOR_KEY))[PROMPT_DISPATCH_GOVERNOR_KEY],
+  write: async (state) => { await chrome.storage.local.set({ [PROMPT_DISPATCH_GOVERNOR_KEY]: state }); },
+});
 async function localBindings(): Promise<Record<string, RoleBinding>> {
   const stored = await chrome.storage.local.get(BINDINGS_KEY);
   return (stored[BINDINGS_KEY] as Record<string, RoleBinding> | undefined) ?? {};
@@ -67,20 +79,21 @@ async function fleetTabMap(): Promise<Record<string, number>> {
 async function saveFleetTabMap(value: Record<string, number>): Promise<void> {
   await chrome.storage.session.set({ [FLEET_TABS_KEY]: value });
 }
-
 interface WorkState {
+  revision: number;
   attempts: SendAttemptRecord[];
   tasks: AgentTask[];
   messages: AgentMessage[];
 }
 
 async function readWorkState(): Promise<WorkState> {
-  const stored = await chrome.storage.local.get([SEND_ATTEMPTS_KEY, TASKS_KEY, MESSAGES_KEY]);
-  return {
-    attempts: Array.isArray(stored[SEND_ATTEMPTS_KEY]) ? stored[SEND_ATTEMPTS_KEY] as SendAttemptRecord[] : [],
-    tasks: Array.isArray(stored[TASKS_KEY]) ? (stored[TASKS_KEY] as AgentTask[]).map(normalizeTask) : [],
-    messages: Array.isArray(stored[MESSAGES_KEY]) ? stored[MESSAGES_KEY] as AgentMessage[] : [],
-  };
+  const state = await readNativeWorkSnapshot();
+  return { revision: state.revision, attempts: state.attempts, tasks: state.tasks.map(normalizeTask), messages: state.messages };
+}
+
+async function replaceWorkState(current: WorkState, patch: Partial<Pick<WorkState, 'attempts' | 'tasks' | 'messages'>>): Promise<WorkState> {
+  const next = await replaceNativeWorkState({ revision: current.revision, attempts: patch.attempts ?? current.attempts, tasks: patch.tasks ?? current.tasks, messages: patch.messages ?? current.messages });
+  return { revision: next.revision, attempts: next.attempts, tasks: next.tasks.map(normalizeTask), messages: next.messages };
 }
 
 function serializeStateMutation<T>(operation: () => Promise<T>): Promise<T> {
@@ -98,7 +111,7 @@ async function persistAttempt(record: SendAttemptRecord): Promise<void> {
   await serializeStateMutation(async () => {
     const state = await readWorkState();
     const attempts = retainAttemptLedger([...state.attempts.filter((item) => item.attemptId !== record.attemptId), record], state.tasks, state.messages);
-    await chrome.storage.local.set({ [SEND_ATTEMPTS_KEY]: attempts });
+    await replaceWorkState(state, { attempts });
   });
 }
 
@@ -108,42 +121,32 @@ async function transitionAttempt(record: SendAttemptRecord, state: SendAttemptSt
     const current = currentState.attempts.find((item) => item.attemptId === record.attemptId) ?? record;
     const next = advanceAttempt(current, state, Date.now(), error);
     const attempts = retainAttemptLedger([...currentState.attempts.filter((item) => item.attemptId !== next.attemptId), next], currentState.tasks, currentState.messages);
-    await chrome.storage.local.set({ [SEND_ATTEMPTS_KEY]: attempts });
+    await replaceWorkState(currentState, { attempts });
     return next;
   });
 }
 
-async function markReplyObserved(attemptId: string, snapshot: ChatSnapshot, senderTabId?: number): Promise<boolean> {
-  return serializeStateMutation(async () => {
+async function markReplyObserved(attemptId: string, contentEpoch: string, snapshot: ChatSnapshot, senderTabId?: number): Promise<boolean> {
+  const persisted = await serializeStateMutation(async () => {
     const state = await readWorkState();
     const current = state.attempts.find((item) => item.attemptId === attemptId);
-    if (!current || (senderTabId !== undefined && current.tabId !== senderTabId)) return false;
+    if (!current || current.contentEpoch !== contentEpoch || (senderTabId !== undefined && current.tabId !== senderTabId)) return false;
     if (current.state === 'reply-observed') return true;
     const advanced = advanceAttempt(current, 'reply-observed');
     if (advanced.state !== 'reply-observed') return false;
-    const next: SendAttemptRecord = {
-      ...advanced,
-      replyObservedAt: Date.now(),
-      replyTextTail: snapshot.latestAssistantText.slice(-8000),
-    };
+    const next: SendAttemptRecord = { ...advanced, replyObservedAt: Date.now(), replyTextTail: snapshot.latestAssistantText.slice(-8000) };
     if (snapshot.latestAssistantMessageId) next.replyMessageId = snapshot.latestAssistantMessageId;
     const attempts = retainAttemptLedger([...state.attempts.filter((item) => item.attemptId !== next.attemptId), next], state.tasks, state.messages);
-    await chrome.storage.local.set({ [SEND_ATTEMPTS_KEY]: attempts });
+    await replaceWorkState(state, { attempts });
     return true;
   });
-}
-
-async function recoveryStateForTab(tab: chrome.tabs.Tab): Promise<AttemptRecoveryObservation | undefined> {
-  if (tab.id === undefined) return undefined;
-  try {
-    const response = await chrome.tabs.sendMessage(tab.id, { type: 'content:get-recovery-state' });
-    if (!response?.ok || !response.state) return undefined;
-    return { tabId: tab.id, state: response.state as ContentRecoveryState };
-  } catch {
-    return undefined;
+  if (persisted) {
+    await settleNativeBrowserOperation(attemptId, 'reply-observed', {
+      contentEpoch, assistantMessageId: snapshot.latestAssistantMessageId ?? null, assistantMessageCount: snapshot.assistantMessageCount,
+    }).catch(() => reportIncident('browser-operation-reply-settle-failed', attemptId, { contentEpoch }));
   }
+  return persisted;
 }
-
 async function reconcileAfterRestart(): Promise<void> {
   const state = await workState();
   const active = state.attempts.filter((attempt) =>
@@ -155,6 +158,7 @@ async function reconcileAfterRestart(): Promise<void> {
   const observations = (await Promise.all(tabs.map(recoveryStateForTab))).filter(
     (value): value is AttemptRecoveryObservation => value !== undefined,
   );
+  const control = await readNativeControlSnapshot().catch(() => undefined); if (control) for (const observation of observations) { const key = control.agents.find((agent) => agent.browserTabId === observation.tabId)?.conversationKey; if (key) observation.authoritativeConversationKey = key; }
   const byTab = new Map(observations.map((observation) => [observation.tabId, observation]));
 
   await serializeStateMutation(async () => {
@@ -171,20 +175,8 @@ async function reconcileAfterRestart(): Promise<void> {
       attempts = retainAttemptLedger([...attempts.filter((attempt) => attempt.attemptId !== next.attemptId), next], current.tasks, current.messages);
       changed = true;
     }
-    if (changed) await chrome.storage.local.set({ [SEND_ATTEMPTS_KEY]: attempts });
+    if (changed) await replaceWorkState(current, { attempts });
   });
-}
-
-async function snapshotForTab(tab: chrome.tabs.Tab): Promise<ChatSnapshot> {
-  const url = tab.url ?? 'https://chatgpt.com/';
-  if (tab.id === undefined) return unavailableSnapshot(url, tab.title ?? 'ChatGPT');
-  try {
-    const response = await chrome.tabs.sendMessage(tab.id, { type: 'content:get-snapshot' });
-    if (response?.ok && response.snapshot) return response.snapshot as ChatSnapshot;
-  } catch {
-    // Loading/sleeping tabs may not yet have the current content script.
-  }
-  return unavailableSnapshot(url, tab.title ?? 'ChatGPT');
 }
 
 async function bindingFor(tabId: number, snapshot: ChatSnapshot): Promise<RoleBinding> {
@@ -239,6 +231,7 @@ async function updateBinding(tabId: number, conversationKey: string, binding: Ro
 async function prepareAttempt(
   tabId: number,
   snapshot: ChatSnapshot,
+  contentEpoch: string,
   text: string,
   batchId: string,
   taskId?: string,
@@ -250,6 +243,7 @@ async function prepareAttempt(
     batchId,
     tabId,
     conversationKey: snapshot.conversationKey,
+    contentEpoch,
     state: 'prepared',
     textLength: text.length,
     baselineAssistantMessageCount: snapshot.assistantMessageCount,
@@ -263,12 +257,13 @@ async function prepareAttempt(
 
   await serializeStateMutation(async () => {
     const state = await readWorkState();
-    const attempts = retainAttemptLedger([...state.attempts.filter((item) => item.attemptId !== record.attemptId), record], state.tasks, state.messages);
-    const update: Record<string, unknown> = { [SEND_ATTEMPTS_KEY]: attempts };
+    let tasks = state.tasks;
+    let messages = state.messages;
     if (taskId) {
       const task = state.tasks.find((item) => item.id === taskId);
       if (!task) throw new Error(`Task ${taskId} disappeared before dispatch`);
-      update[TASKS_KEY] = state.tasks.map((item) => item.id === taskId
+      if (task.retryAfterAttemptId) record.retryOfAttemptId = task.retryAfterAttemptId;
+      tasks = state.tasks.map((item) => item.id === taskId
         ? { ...item, attemptIds: [...item.attemptIds, record.attemptId], updatedAt: now }
         : item);
     }
@@ -276,48 +271,89 @@ async function prepareAttempt(
       const message = state.messages.find((item) => item.id === messageId);
       if (!message) throw new Error(`Message ${messageId} disappeared before dispatch`);
       assertMessageDeliveryAvailable(message, state.attempts, snapshot.conversationKey);
-      update[MESSAGES_KEY] = state.messages.map((item) => item.id === messageId
+      messages = state.messages.map((item) => item.id === messageId
         ? { ...item, attemptIds: [...item.attemptIds, record.attemptId], updatedAt: now }
         : item);
     }
-    await chrome.storage.local.set(update);
+    const attempts = retainAttemptLedger([...state.attempts.filter((item) => item.attemptId !== record.attemptId), record], tasks, messages);
+    await replaceWorkState(state, { attempts, tasks, messages });
   });
   return record;
 }
 
-async function dispatchToTab(tabId: number, text: string, batchId: string, taskId?: string, messageId?: string): Promise<SendResult> {
+async function dispatchToTabOnce(tabId: number, text: string, batchId: string, taskId?: string, messageId?: string): Promise<SendResult> {
   let record: SendAttemptRecord | undefined;
+  let physicalWriteRequested = false;
   const fallbackAttemptId = crypto.randomUUID();
   try {
     const tab = await chrome.tabs.get(tabId);
-    const snapshot = await snapshotForTab(tab);
-    record = await prepareAttempt(tabId, snapshot, text, batchId, taskId, messageId);
+    const recovery = await recoveryStateForTab(tab);
+    if (!recovery) throw new Error('Content runtime is unavailable; prompt was not dispatched');
+    if (!contentRuntimeFence.observe(tabId, recovery.state.observation, true)) throw new Error('Stale content runtime observation before dispatch');
+    const snapshot = recovery.state.snapshot;
+    const binding = await reportSlotRuntime(tabId, recovery.state.observation, snapshot, bindingFor);
+    if (snapshot.signals.includes('message-rate-limit')) await promptDispatchGovernor.noteRateLimit();
     if (snapshot.status !== 'idle') {
+      record = await prepareAttempt(tabId, snapshot, recovery.state.observation.contentEpoch, text, batchId, taskId, messageId);
       const error = `Refusing send while ChatGPT status is ${snapshot.status}`;
       await transitionAttempt(record, 'failed', error);
       return { tabId, attemptId: record.attemptId, ok: false, error };
     }
+    const control = await readNativeControlSnapshot();
+    const activeGenerations = control.agents.filter((agent) => agent.desiredState === 'active' && agent.browserState === 'open' && agent.browserPageStatus === 'generating').length;
+    const permit = await promptDispatchGovernor.acquire({ project: binding.project, ...(binding.agentSlotId ? { slotId: binding.agentSlotId } : {}), activeGenerations });
+    if (!permit.allowed) return { tabId, attemptId: fallbackAttemptId, ok: false, error: `Prompt dispatch deferred by rate governor: ${permit.reason}; retry after ${permit.retryAfterMs}ms` };
+    record = await prepareAttempt(tabId, snapshot, recovery.state.observation.contentEpoch, text, batchId, taskId, messageId);
+
+    const policy = browserOperationPolicy('prompt.send');
+    const preconditionsHash = await sha256Text(recovery.state.observation.semanticSignature);
+    await planNativeBrowserOperation({
+      id: record.attemptId, idempotencyKey: `prompt.send:${record.attemptId}`, operation: policy.operation,
+      ...(binding.agentSlotId ? { slotId: binding.agentSlotId } : {}), conversationKey: record.conversationKey,
+      tabId, contentEpoch: record.contentEpoch, preconditionsHash, plannedAt: Date.now(),
+    });
     record = await transitionAttempt(record, 'dispatched');
-    let response: { ok?: boolean; duplicate?: boolean; error?: string } | undefined;
+    await dispatchNativeBrowserOperation(record.attemptId);
+
+    let response: { ok?: boolean; duplicate?: boolean; error?: string; outcome?: 'proved-not-started' | 'uncertain'; contentEpoch?: string } | undefined;
     try {
-      response = await chrome.tabs.sendMessage(tabId, { type: 'content:send', text, attemptId: record.attemptId });
+      physicalWriteRequested = true;
+      response = await chrome.tabs.sendMessage(tabId, { type: 'content:send', text, attemptId: record.attemptId, expectedContentEpoch: record.contentEpoch });
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       await transitionAttempt(record, 'uncertain', reason);
+      await settleNativeBrowserOperation(record.attemptId, 'uncertain', { reason: 'content-transport-error', detail: reason }).catch(() => reportIncident('browser-operation-settle-failed', record!.attemptId, { outcome: 'uncertain', reason }));
       return { tabId, attemptId: record.attemptId, ok: false, error: `Delivery outcome is uncertain: ${reason}` };
     }
     if (!response?.ok) {
       const error = response?.error ?? 'ChatGPT page rejected the send';
-      await transitionAttempt(record, 'failed', error);
+      const nextState = response?.outcome === 'proved-not-started' ? 'failed' : 'uncertain';
+      await transitionAttempt(record, nextState, error);
+      await settleNativeBrowserOperation(record.attemptId, nextState === 'failed' ? 'failed' : 'uncertain', { reason: response?.outcome ?? 'unknown', detail: error }).catch(() => reportIncident('browser-operation-settle-failed', record!.attemptId, { outcome: nextState, error }));
+      return { tabId, attemptId: record.attemptId, ok: false, error: nextState === 'uncertain' ? `Delivery outcome is uncertain: ${error}` : error };
+    }
+    if (response.contentEpoch !== record.contentEpoch) {
+      const error = 'Content runtime generation changed while acknowledging the browser effect';
+      await transitionAttempt(record, 'uncertain', error);
+      await settleNativeBrowserOperation(record.attemptId, 'uncertain', { reason: 'ack-generation-mismatch', returnedContentEpoch: response.contentEpoch ?? null }).catch(() => reportIncident('browser-operation-settle-failed', record!.attemptId, { outcome: 'uncertain', error }));
       return { tabId, attemptId: record.attemptId, ok: false, error };
     }
     await transitionAttempt(record, 'acknowledged');
+    await settleNativeBrowserOperation(record.attemptId, 'acknowledged', { duplicate: response.duplicate === true, contentEpoch: response.contentEpoch });
     return { tabId, attemptId: record.attemptId, ok: true, duplicate: response.duplicate === true };
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    if (record) await transitionAttempt(record, record.state === 'dispatched' ? 'uncertain' : 'failed', reason);
-    return { tabId, attemptId: record?.attemptId ?? fallbackAttemptId, ok: false, error: reason };
+    if (record) {
+      const state: SendAttemptState = physicalWriteRequested ? 'uncertain' : 'failed';
+      await transitionAttempt(record, state, reason).catch(() => undefined);
+      await settleNativeBrowserOperation(record.attemptId, state === 'uncertain' ? 'uncertain' : 'failed', { reason: 'dispatch-pipeline-error', detail: reason }).catch(() => reportIncident('browser-operation-settle-failed', record!.attemptId, { outcome: state, reason }));
+    }
+    return { tabId, attemptId: record?.attemptId ?? fallbackAttemptId, ok: false, error: physicalWriteRequested ? `Delivery outcome is uncertain: ${reason}` : reason };
   }
+}
+
+async function dispatchToTab(tabId: number, text: string, batchId: string, taskId?: string, messageId?: string): Promise<SendResult> {
+  return tabOperations.run(tabId, () => dispatchToTabOnce(tabId, text, batchId, taskId, messageId));
 }
 
 async function sendToTabs(tabIds: number[], text: string): Promise<SendResult[]> {
@@ -350,7 +386,7 @@ async function createTask(input: CreateTaskInput): Promise<AgentTask> {
     }
     const tasks = [...state.tasks, task];
     validateTaskGraph(tasks);
-    await chrome.storage.local.set({ [TASKS_KEY]: tasks });
+    await replaceWorkState(state, { tasks });
     return task;
   });
 }
@@ -360,7 +396,7 @@ async function createMessage(input: import('./contracts').CreateAgentMessageInpu
     const state = await readWorkState();
     const message = createAgentMessage(input, crypto.randomUUID());
     const messages = [...state.messages, message];
-    await chrome.storage.local.set({ [MESSAGES_KEY]: messages });
+    await replaceWorkState(state, { messages });
     return message;
   });
 }
@@ -381,7 +417,7 @@ async function freezeMessageRecipients(
       updatedAt: Date.now(),
     };
     const messages = state.messages.map((item) => item.id === messageId ? updated : item);
-    await chrome.storage.local.set({ [MESSAGES_KEY]: messages });
+    await replaceWorkState(state, { messages });
     return updated;
   });
 }
@@ -422,7 +458,7 @@ async function requestTaskRetry(taskId: string): Promise<AgentTask> {
     if (!lastAttemptId) throw new Error('Task has no failed or uncertain attempt to retry');
     const lastAttempt = state.attempts.find((attempt) => attempt.attemptId === lastAttemptId);
     if (!isRetryableTaskAttempt(task, lastAttempt)) {
-      throw new Error('This task does not have a retryable failed, uncertain, or protocol-invalid review attempt');
+      throw new Error('This task does not have a retryable failed, uncertain, or protocol-invalid structured/review attempt');
     }
     if (task.kind === 'review' && lastAttempt?.state === 'reply-observed') {
       const parsed = parseReviewResult(lastAttempt.replyTextTail ?? '');
@@ -432,7 +468,7 @@ async function requestTaskRetry(taskId: string): Promise<AgentTask> {
     }
     const updated: AgentTask = { ...task, retryAfterAttemptId: lastAttemptId, updatedAt: Date.now() };
     const tasks = state.tasks.map((item) => item.id === taskId ? updated : item);
-    await chrome.storage.local.set({ [TASKS_KEY]: tasks });
+    await replaceWorkState(state, { tasks });
     return updated;
   });
 }
@@ -443,7 +479,7 @@ async function setTaskDisposition(taskId: string, action: 'skip' | 'cancel', rea
     if (!managed) throw new Error(`Task ${taskId} does not exist`);
     const updated = applyTaskDisposition(managed.task, managed.status, action, Date.now(), reason);
     const tasks = state.tasks.map((task) => task.id === taskId ? updated : task);
-    await chrome.storage.local.set({ [TASKS_KEY]: tasks });
+    await replaceWorkState(state, { tasks });
     return updated;
   });
 }
@@ -455,7 +491,7 @@ async function decideHumanTask(taskId: string, decision: 'approve' | 'reject', r
     if (!managed) throw new Error(`Task ${taskId} does not exist`);
     const updated = applyHumanDecision(managed.task, managed.status, decision, Date.now(), reason);
     const tasks = state.tasks.map((task) => task.id === taskId ? updated : task);
-    await chrome.storage.local.set({ [TASKS_KEY]: tasks });
+    await replaceWorkState(state, { tasks });
     return updated;
   });
 }
@@ -475,7 +511,7 @@ async function retryReviewLoop(taskId: string): Promise<{ reviewTask: AgentTask;
     const updated = applyReviewRemediation(reviewTask, targetTask, reviewAttempt, targetAttempt);
     const tasks = state.tasks.map((task) => task.id === updated.reviewTask.id ? updated.reviewTask : task.id === updated.targetTask.id ? updated.targetTask : task);
     validateTaskGraph(tasks);
-    await chrome.storage.local.set({ [TASKS_KEY]: tasks });
+    await replaceWorkState(state, { tasks });
     return updated;
   });
 }
@@ -488,16 +524,30 @@ async function exportStateDocument(): Promise<string> {
 async function importStateDocument(document: string): Promise<void> {
   const imported = parsePortableManagerState(document);
   await serializeStateMutation(async () => {
-    await chrome.storage.local.set({
-      [BINDINGS_KEY]: imported.bindings,
-      [TASKS_KEY]: imported.tasks,
-      [SEND_ATTEMPTS_KEY]: imported.attempts,
-      [MESSAGES_KEY]: imported.messages,
-      [SUPERVISOR_KEY]: imported.supervisorEnabled,
+    const current = await readWorkState();
+    await replaceWorkState(current, {
+      tasks: imported.tasks,
+      attempts: restorePortableAttempts(imported.attempts),
+      messages: imported.messages,
     });
+    await chrome.storage.local.set({ [BINDINGS_KEY]: imported.bindings, [SUPERVISOR_KEY]: imported.supervisorEnabled });
+    await chrome.storage.local.remove([TASKS_KEY, SEND_ATTEMPTS_KEY, MESSAGES_KEY]);
     await chrome.storage.session.remove(TAB_BINDINGS_KEY);
   });
 }
+
+async function migrateLegacyWorkStateOnce(): Promise<void> {
+  const kernel = await readNativeWorkSnapshot();
+  const stored = await chrome.storage.local.get([TASKS_KEY, SEND_ATTEMPTS_KEY, MESSAGES_KEY]);
+  const tasks = Array.isArray(stored[TASKS_KEY]) ? (stored[TASKS_KEY] as AgentTask[]).map(normalizeTask) : [];
+  const attempts = Array.isArray(stored[SEND_ATTEMPTS_KEY]) ? restorePortableAttempts(stored[SEND_ATTEMPTS_KEY] as SendAttemptRecord[]) : [];
+  const messages = Array.isArray(stored[MESSAGES_KEY]) ? stored[MESSAGES_KEY] as AgentMessage[] : [];
+  if (kernel.revision === 0 && (tasks.length || attempts.length || messages.length)) {
+    await replaceNativeWorkState({ revision: 0, tasks, attempts, messages });
+  }
+  await chrome.storage.local.remove([TASKS_KEY, SEND_ATTEMPTS_KEY, MESSAGES_KEY]);
+}
+
 async function supervisorEnabled(): Promise<boolean> {
   const stored = await chrome.storage.local.get(SUPERVISOR_KEY);
   return stored[SUPERVISOR_KEY] === true;
@@ -512,46 +562,20 @@ async function runReadyTasks(): Promise<TaskDispatchResult[]> {
   validateTaskGraph(state.tasks);
   const tasks = deriveManagedTasks(state.tasks, state.attempts);
   const tabs = await managedTabs(state.attempts);
-  let dispatchTabs = tabs;
-  try { const [snapshot, mapping] = await Promise.all([readNativeControlSnapshot(), fleetTabMap()]); dispatchTabs = filterFleetTaskTabs(tabs, snapshot.agents, mapping); } catch { /* local control plane is optional for browser-only orchestration */ }
-  const byTaskId = new Map(tasks.map((managed) => [managed.task.id, managed]));
-  const decisions = planReadyDispatches(tasks, dispatchTabs);
-  const results: TaskDispatchResult[] = [];
-  const batchId = crypto.randomUUID();
-
-  for (const decision of decisions) {
-    if (decision.tabId === undefined) {
-      results.push({ taskId: decision.taskId, ok: false, error: decision.error ?? 'Task is not dispatchable' });
-      continue;
-    }
-    const managed = byTaskId.get(decision.taskId);
-    if (!managed) continue;
-    const dependencies = managed.task.dependsOn
-      .map((taskId) => byTaskId.get(taskId))
-      .filter((dependency): dependency is NonNullable<typeof dependency> => dependency !== undefined);
-    const instruction = buildTaskDispatchPrompt(managed.task, dependencies);
-    const sent = await dispatchToTab(decision.tabId, instruction, batchId, managed.task.id);
-    const result: TaskDispatchResult = { taskId: managed.task.id, ok: sent.ok, attemptId: sent.attemptId };
-    if (sent.error) result.error = sent.error;
-    results.push(result);
-  }
-  return results;
+  const [controlSnapshot, mapping] = await Promise.all([readNativeControlSnapshot(), fleetTabMap()]);
+  return dispatchReadyManagedTasks(tasks, tabs, controlSnapshot, mapping, crypto.randomUUID(), dispatchToTab);
 }
 
-let supervisorRun: Promise<void> | undefined;
+const supervisorRunner = new CoalescingRunner(async () => {
+  if (!await supervisorEnabled()) return;
+  await runReadyTasks();
+  await notifyManagerChanged();
+}, (error) => {
+  void reportIncident('supervisor-run-failed', 'auto-supervisor', { error: error instanceof Error ? error.message : String(error) });
+});
 
 function kickSupervisor(): void {
-  if (supervisorRun) return;
-  supervisorRun = (async () => {
-    if (!await supervisorEnabled()) return;
-    await runReadyTasks();
-    await notifyManagerChanged();
-  })().catch(() => {
-    // The UI derives the actionable error from task/tab state; auto mode never
-    // retries by inventing a route or weakening a status gate.
-  }).finally(() => {
-    supervisorRun = undefined;
-  });
+  supervisorRunner.kick();
 }
 async function focusTab(tabId: number): Promise<void> {
   const tab = await chrome.tabs.get(tabId);
@@ -559,16 +583,14 @@ async function focusTab(tabId: number): Promise<void> {
   await chrome.windows.update(tab.windowId, { focused: true });
 }
 
-const AUTHENTICATED_BROWSER_STATES = new Set(['idle', 'generating', 'blocked', 'error']);
 let browserReportTimer: number | undefined;
 
 async function reportBrowserRuntimeFromTabs(tabs: ManagedTab[]): Promise<void> {
-  const hasAuthenticated = tabs.some((tab) => AUTHENTICATED_BROWSER_STATES.has(tab.snapshot.status));
-  const hasUnauthorized = tabs.some((tab) => tab.snapshot.status === 'unauthorized');
-  const authStatus = hasAuthenticated ? 'authenticated' : hasUnauthorized ? 'authentication-required' : 'unknown';
+  const runtime = deriveBrowserRuntimeObservation(tabs.map((tab) => tab.snapshot.status));
   await reportNativeBrowserRuntime({
     profileId: 'gam-default',
-    authStatus,
+    authStatus: runtime.authStatus,
+    pageHealth: runtime.pageHealth,
     openTabs: tabs.length,
     extensionVersion: chrome.runtime.getManifest().version,
     observedAt: Date.now(),
@@ -579,10 +601,10 @@ function scheduleBrowserRuntimeReport(): void {
   if (browserReportTimer !== undefined) clearTimeout(browserReportTimer);
   browserReportTimer = setTimeout(() => {
     browserReportTimer = undefined;
-    void workState().then((state) => managedTabs(state.attempts)).then(reportBrowserRuntimeFromTabs).catch(() => undefined);
+    void workState().then((state) => managedTabs(state.attempts)).then(reportBrowserRuntimeFromTabs)
+      .catch((error) => reportIncident('browser-runtime-report-failed', 'gam-default', { error: error instanceof Error ? error.message : String(error) }));
   }, 250) as unknown as number;
 }
-let fleetReconcileRun: Promise<void> | undefined;
 let fleetReconcileTimer: number | undefined;
 
 async function clearFleetBinding(conversationKey: string | undefined, tabId: number | undefined): Promise<void> {
@@ -615,17 +637,21 @@ async function syncWorkerRequestMessages(snapshot: import('./nativeControl').Nat
       const senderRole = agents.get(request.fromSubject)?.role ?? request.fromSubject;
       created.push(workerRequestMessage(request, project.name, senderRole, supervisor.role));
     }
-    if (created.length) {
-      await chrome.storage.local.set({ [MESSAGES_KEY]: [...state.messages, ...created] });
+    const feedback = controlFeedbackMessages(snapshot, new Set([...existing, ...created.map((message) => message.id)]));
+    if (created.length || feedback.length) {
+      await replaceWorkState(state, { messages: [...state.messages, ...created, ...feedback] });
     }
   });
 }
 
 async function deliverWorkerRequestMessages(snapshot: import('./nativeControl').NativeControlSnapshot): Promise<void> {
   await syncWorkerRequestMessages(snapshot);
-  const openIds = new Set(snapshot.workerRequests
-    .filter((request) => request.status === 'open')
-    .map((request) => CONTROL_REQUEST_MESSAGE_PREFIX + request.id));
+  const openIds = new Set([
+    ...snapshot.workerRequests
+      .filter((request) => request.status === 'open')
+      .map((request) => CONTROL_REQUEST_MESSAGE_PREFIX + request.id),
+    ...controlFeedbackMessages(snapshot).map((message) => message.id),
+  ]);
   const state = await workState();
   for (const message of state.messages) {
     if (!openIds.has(message.id)) continue;
@@ -637,40 +663,58 @@ async function deliverWorkerRequestMessages(snapshot: import('./nativeControl').
   }
 }
 
-async function reconcileAgentFleet(): Promise<void> {
-  if (fleetReconcileRun) return fleetReconcileRun;
-  fleetReconcileRun = (async () => {
+async function reconcileAgentFleetOnce(): Promise<void> {
+    await reconcileNativeElasticFleet();
     const snapshot = await readNativeControlSnapshot();
     const state = await workState();
     const currentTabs = await managedTabs(state.attempts);
     const mapping = await fleetTabMap();
     const actions = planFleetReconciliation(snapshot.agents, currentTabs, mapping);
     const latestRuntime = [...snapshot.browserRuntime].sort((a, b) => b.observedAt - a.observedAt)[0];
-    const authenticationRequired = currentTabs.some((tab) => tab.snapshot.status === 'unauthorized') || latestRuntime?.authStatus === 'authentication-required';
+    const currentRuntime = deriveBrowserRuntimeObservation(currentTabs.map((tab) => tab.snapshot.status));
+    const expansionAllowed = fleetExpansionAllowed(currentRuntime, latestRuntime, Date.now());
     const projects = new Map(snapshot.projects.map((project) => [project.id, project]));
     const agents = new Map(snapshot.agents.map((agent) => [agent.id, agent]));
     for (const action of actions) {
       const agent = agents.get(action.slotId); if (!agent) continue;
       const project = projects.get(agent.projectId); if (!project) continue;
       if (action.kind === 'open') {
-        if (authenticationRequired) continue;
-        const tab = await chrome.tabs.create({ url: action.url, active: false });
+        if (!expansionAllowed) {
+          if (agent.browserState !== 'absent') {
+            delete mapping[agent.id]; await saveFleetTabMap(mapping);
+            await reportNativeAgentBrowser({ slotId: agent.id, profileId: 'gam-default', browserState: 'absent', observedAt: Date.now() });
+          }
+          continue;
+        }
+        const tab = await chrome.tabs.create({ url: 'about:blank', active: false });
         if (tab.id === undefined) throw new Error(`Chrome did not return a tab id for agent slot ${agent.id}`);
         mapping[agent.id] = tab.id; await saveFleetTabMap(mapping);
         const key = agent.conversationKey ?? `url:${action.url}`;
-        await updateBinding(tab.id, key, { role: agent.role, project: project.name, notes: `GAM fleet slot ${agent.id}` });
+        await updateBinding(tab.id, key, { role: agent.role, project: project.name, notes: `GAM fleet slot ${agent.id}`, agentSlotId: agent.id });
         await reportNativeAgentBrowser({ slotId: agent.id, profileId: 'gam-default', browserState: 'opening', tabId: tab.id, observedAt: Date.now() });
+        try { await chrome.tabs.update(tab.id, { url: action.url, active: false }); } catch (error) {
+          await clearFleetBinding(undefined, tab.id); delete mapping[agent.id]; await saveFleetTabMap(mapping);
+          try { await chrome.tabs.remove(tab.id); } catch { /* failed launch tab may already be gone */ }
+          await reportNativeAgentBrowser({ slotId: agent.id, profileId: 'gam-default', browserState: 'absent', observedAt: Date.now() });
+          throw error;
+        }
+      } else if (action.kind === 'rollover-start') {
+        await beginNativeAgentRollover(agent.id, action.rolloverId); scheduleFleetReconcile(0);
+      } else if (action.kind === 'rollover-close') {
+        await tabOperations.run(action.tabId, async () => { await beginNativeAgentRollover(agent.id, action.rolloverId); await reportNativeAgentBrowser({ slotId: agent.id, profileId: 'gam-default', browserState: 'closing', tabId: action.tabId, observedAt: Date.now() }); await clearFleetBinding(agent.conversationKey, action.tabId); try { await chrome.tabs.remove(action.tabId); } catch {} delete mapping[agent.id]; await saveFleetTabMap(mapping); await reportNativeAgentBrowser({ slotId: agent.id, profileId: 'gam-default', browserState: 'absent', observedAt: Date.now() }); });
       } else if (action.kind === 'close') {
+        await tabOperations.run(action.tabId, async () => {
         await reportNativeAgentBrowser({ slotId: agent.id, profileId: 'gam-default', browserState: 'closing', tabId: action.tabId, observedAt: Date.now() });
         await clearFleetBinding(agent.conversationKey, action.tabId);
         try { await chrome.tabs.remove(action.tabId); } catch { /* tab may already be gone */ }
         delete mapping[agent.id]; await saveFleetTabMap(mapping);
         await reportNativeAgentBrowser({ slotId: agent.id, profileId: 'gam-default', browserState: 'absent', observedAt: Date.now() });
+        });
       } else if (action.kind === 'report-open') {
         mapping[agent.id] = action.tabId; await saveFleetTabMap(mapping);
         const tab = currentTabs.find((item) => item.tabId === action.tabId);
-        if (tab && (tab.binding.role !== agent.role || tab.binding.project !== project.name)) {
-          await updateBinding(tab.tabId, action.conversationKey ?? tab.snapshot.conversationKey, { role: agent.role, project: project.name, notes: `GAM fleet slot ${agent.id}` });
+        if (tab && (tab.binding.agentSlotId !== agent.id || tab.binding.role !== agent.role || tab.binding.project !== project.name)) {
+          await updateBinding(tab.tabId, action.conversationKey ?? tab.snapshot.conversationKey, { role: agent.role, project: project.name, notes: `GAM fleet slot ${agent.id}`, agentSlotId: agent.id });
         }
         await reportNativeAgentBrowser({ slotId: agent.id, profileId: 'gam-default', browserState: 'open', tabId: action.tabId, ...(action.conversationKey ? { conversationKey: action.conversationKey } : {}), observedAt: Date.now() });
       } else {
@@ -679,13 +723,18 @@ async function reconcileAgentFleet(): Promise<void> {
       }
     }
     await deliverWorkerRequestMessages(snapshot);
-  })().finally(() => { fleetReconcileRun = undefined; });
-  return fleetReconcileRun;
+    // Fleet bindings may become usable only after the content event that triggered this reconcile.
+    // Give Auto Supervisor a second scheduling opportunity against the reconciled binding state.
+    kickSupervisor();
 }
+
+const fleetReconcileRunner = new CoalescingRunner(reconcileAgentFleetOnce, (error) => {
+  void reportIncident('fleet-reconcile-failed', 'fleet-runtime', { error: error instanceof Error ? error.message : String(error) });
+});
 
 function scheduleFleetReconcile(delayMs = 150): void {
   if (fleetReconcileTimer !== undefined) clearTimeout(fleetReconcileTimer);
-  fleetReconcileTimer = setTimeout(() => { fleetReconcileTimer = undefined; void reconcileAgentFleet().catch(() => undefined); }, delayMs) as unknown as number;
+  fleetReconcileTimer = setTimeout(() => { fleetReconcileTimer = undefined; fleetReconcileRunner.kick(); }, delayMs) as unknown as number;
 }
 
 async function notifyManagerChanged(): Promise<void> {
@@ -695,6 +744,11 @@ async function notifyManagerChanged(): Promise<void> {
 
 chrome.runtime.onMessage.addListener((message: ManagerRequest | RuntimeNotice, sender, sendResponse) => {
   if (message.type === 'content:changed') {
+    const tabId = sender.tab?.id;
+    if (tabId === undefined || !contentRuntimeFence.observe(tabId, message.observation)) return false;
+    void reportSlotRuntime(tabId, message.observation, message.snapshot, bindingFor)
+      .then(async (binding) => { scheduleFleetReconcile(0); await requestAutomaticConversationRollover(tabId, binding, message.snapshot); await bootstrapPendingConversationRollover(tabId, binding, message.snapshot, (id, text) => dispatchToTab(id, text, crypto.randomUUID())); const bootstrapAttempt = await bootstrapReplyAttemptId(binding, message.snapshot); if (bootstrapAttempt) { const persisted = await markReplyObserved(bootstrapAttempt, message.observation.contentEpoch, message.snapshot, tabId); if (persisted) await completeConversationRolloverForReply(binding, bootstrapAttempt); } })
+      .catch((error) => reportIncident('agent-runtime-report-failed', String(tabId), { error: error instanceof Error ? error.message : String(error), contentEpoch: message.observation.contentEpoch }));
     void notifyManagerChanged();
     scheduleBrowserRuntimeReport();
     scheduleFleetReconcile();
@@ -702,7 +756,13 @@ chrome.runtime.onMessage.addListener((message: ManagerRequest | RuntimeNotice, s
     return false;
   }
   if (message.type === 'content:reply-observed') {
-    void markReplyObserved(message.attemptId, message.snapshot, sender.tab?.id)
+    const tabId = sender.tab?.id;
+    if (tabId === undefined || !contentRuntimeFence.observe(tabId, message.observation, true)) {
+      sendResponse({ ok: false, error: 'Stale content runtime observation' });
+      return false;
+    }
+    void reportSlotRuntime(tabId, message.observation, message.snapshot, bindingFor)
+      .then(async (binding) => { const persisted = await markReplyObserved(message.attemptId, message.observation.contentEpoch, message.snapshot, tabId); if (persisted) await completeConversationRolloverForReply(binding, message.attemptId); return persisted; })
       .then(async (persisted) => {
         if (persisted) {
           await notifyManagerChanged();
@@ -726,7 +786,7 @@ chrome.runtime.onMessage.addListener((message: ManagerRequest | RuntimeNotice, s
         message,
         attemptHistory: message.attemptIds.map((id) => attemptsById.get(id)).filter(Boolean),
       }));
-      void reportBrowserRuntimeFromTabs(tabs).catch(() => undefined);
+      void reportBrowserRuntimeFromTabs(tabs).catch((error) => reportIncident('browser-runtime-report-failed', 'gam-default', { error: error instanceof Error ? error.message : String(error) }));
       sendResponse({ ok: true, tabs, tasks, messages, supervisorEnabled: await supervisorEnabled() });
     })().catch((error) => sendResponse({ ok: false, error: String(error) }));
     return true;
@@ -747,7 +807,7 @@ chrome.runtime.onMessage.addListener((message: ManagerRequest | RuntimeNotice, s
   }
   if (message.type === 'manager:create-task') {
     void createTask(message.input)
-      .then(async (task) => { await notifyManagerChanged(); kickSupervisor(); sendResponse({ ok: true, task }); })
+      .then(async (task) => { await notifyManagerChanged(); scheduleFleetReconcile(0); kickSupervisor(); sendResponse({ ok: true, task }); })
       .catch((error) => sendResponse({ ok: false, error: String(error) }));
     return true;
   }
@@ -765,35 +825,35 @@ chrome.runtime.onMessage.addListener((message: ManagerRequest | RuntimeNotice, s
   }
   if (message.type === 'manager:run-ready-tasks') {
     void runReadyTasks()
-      .then(async (results) => { await notifyManagerChanged(); sendResponse({ ok: true, results }); })
+      .then(async (results) => { await notifyManagerChanged(); scheduleFleetReconcile(0); sendResponse({ ok: true, results }); })
       .catch((error) => sendResponse({ ok: false, error: String(error) }));
     return true;
   }  if (message.type === 'manager:retry-task') {
     void requestTaskRetry(message.taskId)
-      .then(async (task) => { await notifyManagerChanged(); kickSupervisor(); sendResponse({ ok: true, task }); })
+      .then(async (task) => { await notifyManagerChanged(); scheduleFleetReconcile(0); kickSupervisor(); sendResponse({ ok: true, task }); })
       .catch((error) => sendResponse({ ok: false, error: String(error) }));
     return true;
   }  if (message.type === 'manager:retry-review-loop') {
     void retryReviewLoop(message.taskId)
-      .then(async (updated) => { await notifyManagerChanged(); kickSupervisor(); sendResponse({ ok: true, ...updated }); })
+      .then(async (updated) => { await notifyManagerChanged(); scheduleFleetReconcile(0); kickSupervisor(); sendResponse({ ok: true, ...updated }); })
       .catch((error) => sendResponse({ ok: false, error: String(error) }));
     return true;
   }
   if (message.type === 'manager:decide-human-task') {
     void decideHumanTask(message.taskId, message.decision, message.reason ?? '')
-      .then(async (task) => { await notifyManagerChanged(); kickSupervisor(); sendResponse({ ok: true, task }); })
+      .then(async (task) => { await notifyManagerChanged(); scheduleFleetReconcile(0); kickSupervisor(); sendResponse({ ok: true, task }); })
       .catch((error) => sendResponse({ ok: false, error: String(error) }));
     return true;
   }
   if (message.type === 'manager:skip-task') {
     void setTaskDisposition(message.taskId, 'skip', message.reason ?? '')
-      .then(async (task) => { await notifyManagerChanged(); kickSupervisor(); sendResponse({ ok: true, task }); })
+      .then(async (task) => { await notifyManagerChanged(); scheduleFleetReconcile(0); kickSupervisor(); sendResponse({ ok: true, task }); })
       .catch((error) => sendResponse({ ok: false, error: String(error) }));
     return true;
   }
   if (message.type === 'manager:cancel-task') {
     void setTaskDisposition(message.taskId, 'cancel', message.reason ?? '')
-      .then(async (task) => { await notifyManagerChanged(); kickSupervisor(); sendResponse({ ok: true, task }); })
+      .then(async (task) => { await notifyManagerChanged(); scheduleFleetReconcile(0); kickSupervisor(); sendResponse({ ok: true, task }); })
       .catch((error) => sendResponse({ ok: false, error: String(error) }));
     return true;
   }
@@ -815,7 +875,7 @@ chrome.runtime.onMessage.addListener((message: ManagerRequest | RuntimeNotice, s
   }
   if (message.type === 'manager:import-state') {
     void importStateDocument(message.document)
-      .then(async () => { await notifyManagerChanged(); if (await supervisorEnabled()) kickSupervisor(); sendResponse({ ok: true }); })
+      .then(async () => { await notifyManagerChanged(); scheduleFleetReconcile(0); if (await supervisorEnabled()) kickSupervisor(); sendResponse({ ok: true }); })
       .catch((error) => sendResponse({ ok: false, error: String(error) }));
     return true;
   }
@@ -842,21 +902,37 @@ chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
   }
 });
 chrome.tabs.onRemoved.addListener((tabId) => {
+  contentRuntimeFence.remove(tabId);
   void (async () => {
-    const bindings = await sessionBindings();
-    if (bindings[String(tabId)] === undefined) return;
-    delete bindings[String(tabId)];
-    await saveSession(bindings);
+    const [bindings, mapping] = await Promise.all([sessionBindings(), fleetTabMap()]);
+    let changed = false;
+    if (bindings[String(tabId)] !== undefined) { delete bindings[String(tabId)]; changed = true; }
+    for (const [slotId, mappedTabId] of Object.entries(mapping)) {
+      if (mappedTabId === tabId) { delete mapping[slotId]; changed = true; }
+    }
+    if (changed) await Promise.all([saveSession(bindings), saveFleetTabMap(mapping)]);
     await notifyManagerChanged();
-    scheduleFleetReconcile();
+    scheduleFleetReconcile(0);
   })();
 });
 
-void reconcileAfterRestart().then(() => {
+void migrateLegacyWorkStateOnce().then(() => reconcileAfterRestart()).then(() => {
   void notifyManagerChanged();
   kickSupervisor();
   scheduleFleetReconcile(0);
-}).catch(() => {
-  // Recovery is fail-closed: unresolved attempts remain non-ready until inspected.
+}).catch((error) => {
+  void reportIncident('restart-reconciliation-failed', 'service-worker', { error: error instanceof Error ? error.message : String(error) }, 'critical');
 });
-setInterval(() => scheduleFleetReconcile(0), 5000);
+const FLEET_RECONCILE_ALARM = 'gam:fleet-reconcile';
+async function ensureFleetReconcileAlarm(): Promise<void> {
+  const existing = await chrome.alarms.get(FLEET_RECONCILE_ALARM);
+  if (!existing) chrome.alarms.create(FLEET_RECONCILE_ALARM, { periodInMinutes: 1 });
+}
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name !== FLEET_RECONCILE_ALARM) return;
+  scheduleBrowserRuntimeReport();
+  scheduleFleetReconcile(0);
+});
+chrome.runtime.onInstalled.addListener(() => { void ensureFleetReconcileAlarm(); scheduleFleetReconcile(0); });
+chrome.runtime.onStartup.addListener(() => { void ensureFleetReconcileAlarm(); scheduleFleetReconcile(0); });
+void ensureFleetReconcileAlarm();

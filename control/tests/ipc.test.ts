@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { createConnection } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ControlDatabase } from '../src/database';
 import { ControlPlane } from '../src/controlPlane';
@@ -50,6 +51,28 @@ describe('RPC authentication', () => {
   });
 });
 describe('named-pipe transport', () => {
+  it('survives clients that disconnect after sending a request', async () => {
+    const { router } = setup();
+    const pipe = process.platform === 'win32'
+      ? `\\\\.\\pipe\\gam-test-${randomUUID()}`
+      : join(tmpdir(), `gam-test-${randomUUID()}.sock`);
+    const server = await startIpcServer(pipe, router);
+    cleanups.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
+    for (let i = 0; i < 20; i += 1) {
+      await new Promise<void>((resolve) => {
+        const socket = createConnection(pipe);
+        socket.once('error', () => resolve());
+        socket.once('connect', () => {
+          socket.write(JSON.stringify({ id: `drop-${i}`, method: 'health' }) + '\n');
+          socket.destroy();
+          resolve();
+        });
+      });
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    await expect(sendRpc(pipe, { id: 'still-alive', method: 'health' })).resolves.toMatchObject({ id: 'still-alive', ok: true });
+  });
+
   it('round-trips one RPC request over the daemon transport', async () => {
     const { router } = setup();
     const pipe = process.platform === 'win32'
@@ -58,7 +81,7 @@ describe('named-pipe transport', () => {
     const server = await startIpcServer(pipe, router);
     cleanups.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
     const response = await sendRpc(pipe, { id: 'health', method: 'health' });
-    expect(response).toEqual({ id: 'health', ok: true, result: { status: 'ok', protocolVersion: 1 } });
+    expect(response).toEqual({ id: 'health', ok: true, result: { status: 'ok', protocolVersion: 2, instanceId: null } });
   });
 });
 
@@ -86,9 +109,9 @@ describe('browser runtime reporting', () => {
   it('allows the browser credential to report auth state without granting control mutations', () => {
     const { plane, router } = setup();
     const reported = router.handle({ id: 'report', method: 'browser.report', auth: { browserToken: 'browser-secret' }, params: {
-      profileId: 'gam-default', authStatus: 'authentication-required', openTabs: 1, extensionVersion: '0.4.0', observedAt: 100,
+      profileId: 'gam-default', authStatus: 'authentication-required', pageHealth: 'unknown', openTabs: 1, extensionVersion: '0.4.0', observedAt: 100,
     }});
-    expect(reported).toMatchObject({ ok: true, result: { authStatus: 'authentication-required', openTabs: 1 } });
+    expect(reported).toMatchObject({ ok: true, result: { authStatus: 'authentication-required', pageHealth: 'unknown', openTabs: 1 } });
     expect(plane.listBrowserRuntime()).toHaveLength(1);
     const denied = router.handle({ id: 'mutate', method: 'project.create', auth: { browserToken: 'browser-secret' }, params: { name: 'No', rootPath: 'E:/no' } });
     expect(denied).toMatchObject({ ok: false, error: { code: 'UNAUTHORIZED' } });
@@ -109,12 +132,52 @@ describe('browser runtime reporting', () => {
   it('rejects invalid browser reports and exposes status only to browser/admin credentials', () => {
     const { router } = setup();
     const bad = router.handle({ id: 'bad', method: 'browser.report', auth: { browserToken: 'browser-secret' }, params: {
-      profileId: 'gam-default', authStatus: 'logged-in', openTabs: 1, extensionVersion: '0.4.0', observedAt: 100,
+      profileId: 'gam-default', authStatus: 'logged-in', pageHealth: 'ready', openTabs: 1, extensionVersion: '0.4.0', observedAt: 100,
     }});
     expect(bad.ok).toBe(false);
     const listed = router.handle({ id: 'status', method: 'browser.status', auth: { browserToken: 'browser-secret' } });
     expect(listed.ok).toBe(true);
     const denied = router.handle({ id: 'status2', method: 'browser.status', auth: { capabilityToken: 'not-a-browser-token' } });
     expect(denied.ok).toBe(false);
+  });
+});
+
+
+describe('conversation rollover RPC', () => {
+  it('requires Kernel reply evidence before completing a browser-driven rollover', () => {
+    const { plane, router } = setup();
+    const project = plane.createProject({ name: 'Rollover', rootPath: 'E:/rollover' });
+    const slot = plane.createAgentSlot(project.id, 'ROLE01');
+    plane.bindAgentConversation(slot.id, 'conversation:old');
+    const auth = { browserToken: 'browser-secret' };
+
+    const requested = router.handle({ id: 'request-roll', method: 'agent.rollover-request', auth, params: {
+      slotId: slot.id, reason: 'manual-test', handoffText: 'resume ROLE01', state: { task: 'T1' },
+    }});
+    expect(requested).toMatchObject({ ok: true, result: { status: 'requested', fromConversationKey: 'conversation:old' } });
+    if (!requested.ok) throw new Error('rollover request failed');
+    const rolloverId = String((requested.result as { id: string }).id);
+    expect(router.handle({ id: 'status-roll', method: 'agent.rollover-status', auth, params: { slotId: slot.id } }))
+      .toMatchObject({ ok: true, result: { rollover: { id: rolloverId }, checkpoint: { handoffText: 'resume ROLE01' } } });
+
+    expect(router.handle({ id: 'begin-roll', method: 'agent.rollover-begin', auth, params: { slotId: slot.id, rolloverId } })).toMatchObject({ ok: true });
+    expect(router.handle({ id: 'opening', method: 'agent.browser-report', auth, params: { slotId: slot.id, profileId: 'gam-default', browserState: 'opening', tabId: 19 } })).toMatchObject({ ok: true });
+    expect(router.handle({ id: 'canonical', method: 'agent.browser-report', auth, params: { slotId: slot.id, profileId: 'gam-default', browserState: 'open', tabId: 19, conversationKey: 'conversation:canonical-b' } }))
+      .toMatchObject({ ok: true, result: { conversationKey: 'conversation:canonical-b', conversationGeneration: 2 } });
+    expect(router.handle({ id: 'bootstrap', method: 'agent.rollover-bootstrap', auth, params: { slotId: slot.id, rolloverId, attemptId: 'boot-1' } })).toMatchObject({ ok: true });
+    expect(router.handle({ id: 'premature', method: 'agent.rollover-complete', auth, params: { slotId: slot.id, attemptId: 'boot-1' } }))
+      .toMatchObject({ ok: false, error: { message: expect.stringMatching(/verified reply evidence/i) } });
+
+    expect(router.handle({ id: 'op-plan', method: 'browser.operation-plan', auth, params: {
+      id: 'boot-1', idempotencyKey: 'rollover:boot-1', operation: 'prompt.send', slotId: slot.id, preconditionsHash: 'semantic-hash',
+    }})).toMatchObject({ ok: true });
+    expect(router.handle({ id: 'op-dispatch', method: 'browser.operation-dispatch', auth, params: { id: 'boot-1' } })).toMatchObject({ ok: true });
+    expect(router.handle({ id: 'op-settle', method: 'browser.operation-settle', auth, params: {
+      id: 'boot-1', outcome: 'reply-observed', evidence: { assistantMessageId: 'm1' },
+    }})).toMatchObject({ ok: true });
+    expect(router.handle({ id: 'complete', method: 'agent.rollover-complete', auth, params: { slotId: slot.id, attemptId: 'boot-1' } }))
+      .toMatchObject({ ok: true, result: { status: 'completed', toConversationKey: 'conversation:canonical-b' } });
+    expect(router.handle({ id: 'history', method: 'agent.conversation-list', auth, params: { slotId: slot.id } }))
+      .toMatchObject({ ok: true, result: [{ generation: 1, conversationKey: 'conversation:old', status: 'closed' }, { generation: 2, conversationKey: 'conversation:canonical-b', status: 'active' }] });
   });
 });

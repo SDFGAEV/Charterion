@@ -30,11 +30,18 @@ try {
   $Doctor = ($DoctorRaw -join "`n") | ConvertFrom-Json
   if ($Doctor.status -ne 'ready') { throw 'Installed GAM doctor did not report ready' }
   $Runtime = Get-Content (Join-Path $GamTestHome 'runtime.json') -Raw | ConvertFrom-Json
+  $NativeConfig = Get-Content (Join-Path $GamTestHome 'native-host\gam-native-host.json') -Raw | ConvertFrom-Json
   $ExpectedExtensionId = (& node (Join-Path $Root 'scripts\extension-id.mjs')).Trim()
   if ($Runtime.extensionId -ne $ExpectedExtensionId) { throw 'Installed extension id does not match manifest key' }
+  if ($Runtime.instanceId -notmatch '^[0-9a-f]{16}$') { throw 'Installed runtime instance id is invalid' }
+  if ($Runtime.instanceId -ne $NativeConfig.instanceId) { throw 'Native Host instance id does not match runtime identity' }
+  if ($Runtime.pipeName -ne $NativeConfig.pipeName) { throw 'Native Host pipe does not match runtime identity' }
+  if ($Doctor.details.instanceId -ne $Runtime.instanceId -or $Doctor.details.pipeName -ne $Runtime.pipeName) { throw 'Launcher doctor identity does not match installed runtime' }
   [pscustomobject]@{
     ok = $true
     extensionId = $Runtime.extensionId
+    instanceId = $Runtime.instanceId
+    pipeName = $Runtime.pipeName
     doctorStatus = $Doctor.status
     chromeAvailable = $Doctor.details.chromeAvailable
     nativeHostBytes = (Get-Item (Join-Path $GamTestHome 'native-host\GamNativeHost.exe')).Length
@@ -48,5 +55,18 @@ try {
       Set-Item -Path $RegistryPath -Value $RegistryBackup[$RegistryPath]
     }
   }
-  if (Test-Path $SmokeRoot) { Remove-Item -Recurse -Force $SmokeRoot }
+  if (Test-Path $SmokeRoot) {
+    $CleanupError = $null
+    for ($Attempt = 1; $Attempt -le 20; $Attempt++) {
+      try {
+        Remove-Item -Recurse -Force -ErrorAction Stop $SmokeRoot
+        $CleanupError = $null
+        break
+      } catch {
+        $CleanupError = $_
+        Start-Sleep -Milliseconds 250
+      }
+    }
+    if (Test-Path $SmokeRoot) { throw $CleanupError }
+  }
 }

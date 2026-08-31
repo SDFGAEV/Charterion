@@ -8,6 +8,7 @@ function record(state: SendAttemptRecord['state']): SendAttemptRecord {
     batchId: 'b1',
     tabId: 1,
     conversationKey: 'conversation:c1',
+    contentEpoch: 'content-epoch',
     state,
     textLength: 10,
     baselineAssistantMessageCount: 3,
@@ -22,6 +23,7 @@ describe('send attempt state machine', () => {
     expect(canAdvanceAttempt('prepared', 'dispatched')).toBe(true);
     expect(canAdvanceAttempt('dispatched', 'acknowledged')).toBe(true);
     expect(canAdvanceAttempt('acknowledged', 'reply-observed')).toBe(true);
+    expect(canAdvanceAttempt('acknowledged', 'failed')).toBe(true);
   });
 
   it('does not downgrade a reply-observed attempt on a late acknowledgement', () => {

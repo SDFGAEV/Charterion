@@ -35,15 +35,51 @@ describe('project cells and agent slots', () => {
     expect(plane.listEvents(project.id).map((event) => event.type)).toContain('PROJECT_STATUS_CHANGED');
   });
 
-  it('rotates the agent epoch whenever a conversation binding is replaced', () => {
+  it('rolls a persistent AgentSlot onto a new conversation without losing lineage', () => {
     const { plane } = harness();
     const project = plane.createProject({ name: 'Alpha', rootPath: 'E:/alpha' }, 1);
     const slot = plane.createAgentSlot(project.id, 'runtime-owner', 2);
     const first = plane.bindAgentConversation(slot.id, 'conversation:a', 3);
-    const second = plane.bindAgentConversation(slot.id, 'conversation:b', 4);
-    expect(first.leaseEpoch).toBe(1);
-    expect(second.leaseEpoch).toBe(2);
-    expect(second.conversationKey).toBe('conversation:b');
+    expect(first).toMatchObject({ conversationKey: 'conversation:a', conversationGeneration: 1, leaseEpoch: 1, rolloverState: 'idle' });
+    expect(() => plane.bindAgentConversation(slot.id, 'conversation:b', 4)).toThrow(/requires an AgentSlot rollover/i);
+
+    const requested = plane.requestAgentConversationRollover(slot.id, 'conversation-limit', 'handoff body', { taskId: 'T1' }, 5);
+    expect(requested).toMatchObject({ fromConversationKey: 'conversation:a', fromGeneration: 1, toGeneration: 2, status: 'requested' });
+    expect(plane.getAgentSlot(slot.id)).toMatchObject({ conversationKey: 'conversation:a', rolloverState: 'requested', activeRolloverId: requested.id });
+    expect(plane.conversations.checkpoint(requested.checkpointId)).toMatchObject({ handoffText: 'handoff body', state: { taskId: 'T1' } });
+
+    plane.beginAgentConversationRollover(slot.id, requested.id, 6);
+    expect(plane.getAgentSlot(slot.id)).toMatchObject({ conversationGeneration: 1, rolloverState: 'opening', leaseEpoch: 2 });
+    expect(plane.getAgentSlot(slot.id).conversationKey).toBeUndefined();
+    plane.reportAgentBrowser({ slotId: slot.id, profileId: 'gam-default', browserState: 'opening', tabId: 9 }, 7);
+    const canonical = plane.reportAgentBrowser({ slotId: slot.id, profileId: 'gam-default', browserState: 'open', tabId: 9, conversationKey: 'conversation:b' }, 8);
+    expect(canonical).toMatchObject({ conversationKey: 'conversation:b', conversationGeneration: 2, rolloverState: 'opening', leaseEpoch: 3 });
+
+    plane.browser.planOperation({ id: 'bootstrap-1', idempotencyKey: 'rollover:bootstrap-1', operation: 'prompt.send', slotId: slot.id, preconditionsHash: 'semantic-hash' }, 9);
+    plane.browser.dispatchOperation('bootstrap-1', 10);
+    plane.markAgentRolloverBootstrap(slot.id, requested.id, 'bootstrap-1', 11);
+    expect(() => plane.completeAgentConversationRollover(slot.id, 'bootstrap-1', 12)).toThrow(/verified reply evidence/i);
+    plane.browser.settleOperation('bootstrap-1', 'reply-observed', { assistantMessageId: 'm1' }, 13);
+    const completed = plane.completeAgentConversationRollover(slot.id, 'bootstrap-1', 14);
+    expect(completed).toMatchObject({ status: 'completed', fromConversationKey: 'conversation:a', toConversationKey: 'conversation:b', toGeneration: 2 });
+    expect(plane.getAgentSlot(slot.id)).toMatchObject({ conversationKey: 'conversation:b', conversationGeneration: 2, rolloverState: 'idle', leaseEpoch: 3 });
+    expect(plane.getAgentSlot(slot.id).activeRolloverId).toBeUndefined();
+    expect(plane.conversations.listConversations(slot.id)).toMatchObject([
+      { generation: 1, conversationKey: 'conversation:a', status: 'closed', closeReason: 'conversation-limit' },
+      { generation: 2, conversationKey: 'conversation:b', status: 'active', predecessorConversationKey: 'conversation:a' },
+    ]);
+    expect(plane.conversations.listCheckpoints(slot.id)).toHaveLength(1);
+    expect(plane.conversations.listRollovers(slot.id)).toHaveLength(1);
+  });
+
+  it('rejects provisional conversation identities at Kernel authority', () => {
+    const { plane } = harness();
+    const project = plane.createProject({ name: 'Canonical', rootPath: 'E:/canonical' }, 1);
+    const slot = plane.createAgentSlot(project.id, 'ROLE01', 2);
+    expect(() => plane.bindAgentConversation(slot.id, 'conversation:WEB:temporary', 3)).toThrow(/canonical durable/i);
+    expect(() => plane.bindAgentConversation(slot.id, 'conversation:new', 4)).toThrow(/canonical durable/i);
+    expect(() => plane.reportAgentBrowser({ slotId: slot.id, profileId: 'gam-default', browserState: 'open', tabId: 9, conversationKey: 'conversation:WEB:temporary' }, 5)).toThrow(/canonical durable/i);
+    expect(plane.getAgentSlot(slot.id)).toMatchObject({ status: 'idle', browserState: 'absent' });
   });
 });
 describe('resource leases', () => {
@@ -159,5 +195,30 @@ describe('supervisor-managed agent fleet lifecycle', () => {
     expect(plane.retireAgentSlot(first.id, 11)).toMatchObject({ desiredState: 'retired', status: 'retired' });
     expect(() => plane.resumeAgentSlot(first.id, 12)).toThrow(/retired/i);
     expect(second.desiredState).toBe('active');
+  });
+});
+
+describe('browser observation monotonicity', () => {
+  it('rejects stale AgentSlot and browser-runtime observations', () => {
+    const { plane } = harness();
+    const project = plane.createProject({ name: 'Observed', rootPath: 'E:/observed' }, 1);
+    const slot = plane.createAgentSlot(project.id, 'ROLE01', 2);
+    plane.reportAgentBrowser({
+      slotId: slot.id, profileId: 'gam-default', browserState: 'opening', tabId: 10,
+    }, 100);
+    expect(() => plane.reportAgentBrowser({
+      slotId: slot.id, profileId: 'gam-default', browserState: 'absent',
+    }, 99)).toThrow(/stale agent browser observation/i);
+    expect(plane.getAgentSlot(slot.id).browserState).toBe('opening');
+
+    plane.reportBrowserRuntime({
+      profileId: 'gam-default', authStatus: 'authenticated', pageHealth: 'ready',
+      openTabs: 1, extensionVersion: '0.5.0', observedAt: 200,
+    });
+    expect(() => plane.reportBrowserRuntime({
+      profileId: 'gam-default', authStatus: 'authentication-required', pageHealth: 'unknown',
+      openTabs: 0, extensionVersion: '0.5.0', observedAt: 199,
+    })).toThrow(/stale browser runtime observation/i);
+    expect(plane.listBrowserRuntime()[0]).toMatchObject({ authStatus: 'authenticated', observedAt: 200 });
   });
 });

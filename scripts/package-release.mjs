@@ -1,10 +1,15 @@
 import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { basename, join, relative, resolve, sep } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
 const outDir = resolve(root, 'release');
 const pkg = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8'));
+const readmeManifest = JSON.parse(await readFile(resolve(root, 'docs/readme/LANGUAGES.json'), 'utf8'));
+const readmeCheck = spawnSync(process.execPath, [resolve(root, 'scripts/check-readme-i18n.mjs'), '--release', '--json'], { encoding: 'utf8' });
+if (readmeCheck.status !== 0) throw new Error(`README i18n release gate failed: ${readmeCheck.stdout || readmeCheck.stderr}`);
+const readmeEvidence = JSON.parse(readmeCheck.stdout.trim());
 const archiveName = `charterion-v${pkg.version}.zip`;
 const archivePath = resolve(outDir, archiveName);
 
@@ -48,20 +53,11 @@ function zipName(path) {
 
 const inputPaths = [
   resolve(root, 'manifest.json'),
-  resolve(root, 'LICENSE'),
-  resolve(root, 'NOTICE'),
-  resolve(root, 'THIRD_PARTY_NOTICES.md'),
-  resolve(root, 'README.md'),
-  resolve(root, 'README.zh-CN.md'),
-  resolve(root, 'README.zh-TW.md'),
-  resolve(root, 'README.ja.md'),
-  resolve(root, 'README.ko.md'),
-  resolve(root, 'README.es.md'),
-  resolve(root, 'README.pt-BR.md'),
-  resolve(root, 'README.fr.md'),
-  resolve(root, 'README.de.md'),
-  resolve(root, 'README.ru.md'),
-  ...await walk(resolve(root, 'docs', 'readme')),
+  resolve(root, 'LICENSE'), resolve(root, 'NOTICE'), resolve(root, 'THIRD_PARTY_NOTICES.md'),
+  ...readmeManifest.languages.map((item) => resolve(root, item.file)),
+  resolve(root, 'docs/readme/LANGUAGES.json'), resolve(root, 'docs/readme/README_SCHEMA.json'),
+  resolve(root, 'docs/readme/TRANSLATION_POLICY.md'), resolve(root, 'docs/readme/GLOSSARY.json'),
+  resolve(root, 'docs/readme/TRANSLATION_STATE.json'),
   ...await walk(resolve(root, 'dist')),
 ];
 const entries = [];
@@ -101,6 +97,7 @@ const archive = Buffer.concat([...localParts, central, end]);
 await rm(outDir, { recursive: true, force: true });
 await mkdir(outDir, { recursive: true });
 await writeFile(archivePath, archive);
+await writeFile(resolve(outDir, 'readme-i18n-evidence.json'), `${JSON.stringify(readmeEvidence, null, 2)}\n`, 'utf8');
 const digest = createHash('sha256').update(archive).digest('hex');
 await writeFile(`${archivePath}.sha256`, `${digest}  ${basename(archivePath)}\n`, 'utf8');
 console.log(`${archivePath}\nsha256 ${digest}`);

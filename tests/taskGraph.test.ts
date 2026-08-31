@@ -24,6 +24,7 @@ function attempt(id: string, state: SendAttemptRecord['state']): SendAttemptReco
     batchId: 'batch',
     tabId: 1,
     conversationKey: 'conversation:c1',
+    contentEpoch: 'content-epoch',
     state,
     textLength: 5,
     baselineAssistantMessageCount: 1,
@@ -111,4 +112,55 @@ describe('task status derivation', () => {
       .toBe('cancelled');
   });
 
+});
+
+describe('structured-result completion', () => {
+  const resultReply = '<GAM_RESULT>{"status":"completed","summary":"Audited the task completion policy.","evidence":["src/taskGraph.ts requires the structured parser for this policy"]}</GAM_RESULT>';
+
+  it('surfaces valid parsed results and releases dependents only after validation', () => {
+    const audit = { ...task('audit', [], ['audit-attempt']), completionPolicy: 'structured-result' as const };
+    const downstream = task('after', ['audit']);
+    const placeholder = { ...attempt('audit-attempt', 'reply-observed'), replyTextTail: 'Read' };
+    const invalid = deriveManagedTasks([audit, downstream], [placeholder]);
+    expect(invalid.map((item) => item.status)).toEqual(['attention', 'blocked']);
+    expect(invalid[0]?.structuredResultError).toMatch(/GAM_RESULT|structured-result/i);
+
+    const validReply = { ...placeholder, replyTextTail: resultReply };
+    const valid = deriveManagedTasks([audit, downstream], [validReply]);
+    expect(valid.map((item) => item.status)).toEqual(['completed', 'ready']);
+    expect(valid[0]?.structuredResult).toEqual({
+      status: 'completed',
+      summary: 'Audited the task completion policy.',
+      evidence: ['src/taskGraph.ts requires the structured parser for this policy'],
+    });
+  });
+
+  it('makes protocol-invalid structured replies retryable only after an explicit retry fact', () => {
+    const audit = { ...task('audit', [], ['audit-attempt']), completionPolicy: 'structured-result' as const };
+    const bad = { ...attempt('audit-attempt', 'reply-observed'), replyTextTail: 'OK' };
+    expect(deriveManagedTasks([audit], [bad])[0]?.status).toBe('attention');
+    const retried = { ...audit, retryAfterAttemptId: 'audit-attempt' };
+    const managed = deriveManagedTasks([retried], [bad])[0]!;
+    expect(managed.status).toBe('ready');
+    expect(managed.structuredResultError).toBeTruthy();
+  });
+});
+
+describe('verified claim completion', () => {
+  it('does not let a browser reply complete a verified-claim task', () => {
+    const verified = { ...task('machine', [], ['attempt-machine']), completionPolicy: 'verified-claim' as const };
+    const reply = { ...attempt('attempt-machine', 'reply-observed'), replyTextTail: 'DONE' };
+    expect(deriveManagedTasks([verified], [reply])[0]?.status).toBe('running');
+  });
+
+  it('completes only from Kernel machine evidence and releases dependents', () => {
+    const verified = {
+      ...task('machine', [], ['attempt-machine']),
+      completionPolicy: 'verified-claim' as const,
+      machineCompletion: { kind: 'verified-claim' as const, claimId: 'claim-1', verificationId: 'verify-1', completedAt: 20, commitSha: 'a'.repeat(40) },
+    };
+    const downstream = task('after', ['machine']);
+    const reply = { ...attempt('attempt-machine', 'reply-observed'), replyTextTail: 'SUP' };
+    expect(deriveManagedTasks([verified, downstream], [reply]).map((item) => item.status)).toEqual(['completed', 'ready']);
+  });
 });

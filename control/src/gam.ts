@@ -76,17 +76,42 @@ function findChrome(): string | undefined {
 }
 
 async function rpc(request: RpcRequest, timeoutMs = 3000): Promise<RpcResponse> {
-  return sendRpc(resolveDaemonConfig().pipeName, request, timeoutMs);
+  const config = resolveDaemonConfig();
+  return sendRpc(config.pipeName, { ...request, instanceId: config.instanceId }, timeoutMs);
 }
-async function health(): Promise<boolean> {
+
+type DaemonProbe =
+  | { kind: 'absent' }
+  | { kind: 'matching' }
+  | { kind: 'foreign'; observedInstanceId?: string };
+
+function healthInstance(response: RpcResponse): string | undefined {
+  if (!response.ok || !response.result || typeof response.result !== 'object') return undefined;
+  const value = (response.result as Record<string, unknown>).instanceId;
+  return typeof value === 'string' ? value : undefined;
+}
+
+async function probeDaemon(): Promise<DaemonProbe> {
+  const config = resolveDaemonConfig();
   try {
-    const response = await rpc({ id: randomUUID(), method: 'health' }, 1000);
-    return response.ok;
-  } catch { return false; }
+    const response = await sendRpc(config.pipeName, { id: randomUUID(), method: 'health' }, 1000);
+    if (!response.ok) return { kind: 'absent' };
+    const observedInstanceId = healthInstance(response);
+    return observedInstanceId === config.instanceId
+      ? { kind: 'matching' }
+      : { kind: 'foreign', ...(observedInstanceId ? { observedInstanceId } : {}) };
+  } catch { return { kind: 'absent' }; }
+}
+
+function foreignInstanceError(probe: Extract<DaemonProbe, { kind: 'foreign' }>): Error {
+  const config = resolveDaemonConfig();
+  return new Error(`GAM pipe ${config.pipeName} belongs to another instance: expected ${config.instanceId}, observed ${probe.observedInstanceId ?? 'legacy-or-unknown'}`);
 }
 
 async function ensureDaemon(): Promise<'started' | 'already-running'> {
-  if (await health()) return 'already-running';
+  const initial = await probeDaemon();
+  if (initial.kind === 'matching') return 'already-running';
+  if (initial.kind === 'foreign') throw foreignInstanceError(initial);
   const config = resolveDaemonConfig();
   mkdirSync(config.homeDir, { recursive: true });
   const gamdPath = join(launcherDir(), 'gamd.cjs');
@@ -102,10 +127,12 @@ async function ensureDaemon(): Promise<'started' | 'already-running'> {
   child.unref();
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {
-    if (await health()) return 'started';
+    const probe = await probeDaemon();
+    if (probe.kind === 'matching') return 'started';
+    if (probe.kind === 'foreign') throw foreignInstanceError(probe);
     await new Promise((resolveWait) => setTimeout(resolveWait, 100));
   }
-  throw new Error('gamd did not become healthy after launch');
+  throw new Error(`gamd did not become healthy for instance ${config.instanceId} on ${config.pipeName}`);
 }
 function launchBrowser(noBrowser: boolean): { browser: 'launched' | 'skipped' | 'unavailable'; chromeProfile: string; chromePath?: string } {
   const config = resolveDaemonConfig();
@@ -172,6 +199,8 @@ function doctor(): LauncherResult {
     node: process.version,
     nodeSupported: nodeMajor >= 22,
     gamHome: config.homeDir,
+    instanceId: config.instanceId,
+    pipeName: config.pipeName,
     chromePath: chrome ?? null,
     chromeAvailable: Boolean(chrome),
     extensionDir: extension,
@@ -185,12 +214,18 @@ function doctor(): LauncherResult {
 async function execute(options: LaunchOptions): Promise<LauncherResult> {
   if (options.command === 'doctor') return doctor();
   if (options.command === 'status') {
-    if (!(await health())) return { status: 'not-running', command: 'status', daemon: 'not-running' };
+    const probe = await probeDaemon();
+    if (probe.kind === 'absent') {
+      const config = resolveDaemonConfig();
+      return { status: 'not-running', command: 'status', daemon: 'not-running', details: { instanceId: config.instanceId, pipeName: config.pipeName } };
+    }
+    if (probe.kind === 'foreign') throw foreignInstanceError(probe);
     const snapshot = await browserSnapshot();
     const projects = Array.isArray(snapshot?.projects) ? snapshot.projects.length : 0;
     const changes = Array.isArray(snapshot?.changeRequests) ? snapshot.changeRequests.length : 0;
     const chatgpt = await browserAuthStatus();
-    return { status: 'ready', command: 'status', daemon: 'already-running', chatgpt, details: { projects, changeRequests: changes } };
+    const config = resolveDaemonConfig();
+    return { status: 'ready', command: 'status', daemon: 'already-running', chatgpt, details: { projects, changeRequests: changes, instanceId: config.instanceId, pipeName: config.pipeName } };
   }
   const daemon = await ensureDaemon();
   const snapshot = await browserSnapshot();
@@ -205,7 +240,7 @@ async function execute(options: LaunchOptions): Promise<LauncherResult> {
     status: 'ready', command: options.command, daemon,
     browser: browser.browser, chromeProfile: browser.chromeProfile,
     chatgpt, ...(project ? { project } : {}),
-    details: { chromePath: browser.chromePath ?? null, humanLoginMayBeRequired: browser.browser === 'launched' },
+    details: { chromePath: browser.chromePath ?? null, humanLoginMayBeRequired: browser.browser === 'launched', instanceId: resolveDaemonConfig().instanceId, pipeName: resolveDaemonConfig().pipeName },
   };
 }
 function printHuman(result: LauncherResult): void {

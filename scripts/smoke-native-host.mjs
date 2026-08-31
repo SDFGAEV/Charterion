@@ -60,19 +60,20 @@ function invokeNative(request) {
 }
 
 try {
-  await waitReady();
+  const health = await waitReady();
+  if (!/^[0-9a-f]{16}$/.test(health.instanceId ?? '')) throw new Error('gamd health did not expose a valid instanceId');
   const project = cli('project.create', {
     name: 'Native Host Project', rootPath: 'E:/native-host-smoke', isolationTier: 'c1-container',
   });
   const browserTokenPath = join(home, 'browser.token');
   if (readFileSync(browserTokenPath, 'utf8').trim().length < 32) throw new Error('browser.token was not created');
-  writeFileSync(hostConfig, JSON.stringify({ pipeName: pipe, browserTokenPath, allowedOrigin: origin }, null, 2));
+  writeFileSync(hostConfig, JSON.stringify({ pipeName: pipe, instanceId: health.instanceId, browserTokenPath, allowedOrigin: origin }, null, 2));
   const listed = invokeNative({ id: 'list', method: 'project.list', params: {} });
   if (!listed.ok || !Array.isArray(listed.result) || !listed.result.some((item) => item.id === project.id)) {
     throw new Error('Native host did not return the expected project');
   }
   const reported = invokeNative({ id: 'browser-report', method: 'browser.report', params: {
-    profileId: 'gam-default', authStatus: 'authenticated', openTabs: 2, extensionVersion: packageVersion, observedAt: Date.now(),
+    profileId: 'gam-default', authStatus: 'authenticated', pageHealth: 'ready', openTabs: 2, extensionVersion: packageVersion, observedAt: Date.now(),
   }});
   if (!reported.ok || reported.result?.authStatus !== 'authenticated') throw new Error('Native host did not accept browser runtime report');
   const browserStatus = invokeNative({ id: 'browser-status', method: 'browser.status', params: {} });

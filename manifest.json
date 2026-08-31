@@ -1,13 +1,14 @@
 {
   "manifest_version": 3,
   "name": "Charterion",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "Open-source multi-agent engineering control plane for ChatGPT Web Agents.",
   "permissions": [
     "tabs",
     "storage",
     "sidePanel",
-    "nativeMessaging"
+    "nativeMessaging",
+    "alarms"
   ],
   "host_permissions": [
     "https://chatgpt.com/*"

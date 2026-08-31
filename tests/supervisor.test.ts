@@ -29,6 +29,7 @@ function tab(
     result.lastAttempt = {
       attemptId: 'last-attempt', batchId: 'batch', tabId,
       conversationKey: `conversation:${tabId}`, state: attemptState, textLength: 1,
+      contentEpoch: 'content-epoch',
       baselineAssistantMessageCount: 0, createdAt: 1, updatedAt: 1,
     };
   }

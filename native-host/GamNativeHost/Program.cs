@@ -3,11 +3,12 @@ using System.IO.Pipes;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 
 const int MaxMessageBytes = 1024 * 1024;
 var allowedMethods = new HashSet<string>(StringComparer.Ordinal)
 {
-    "health", "control.snapshot", "browser.report", "browser.status", "agent.browser-report", "project.list", "agent.list", "resource.list", "lease.list", "events.list"
+    "health", "control.snapshot", "browser.report", "browser.status", "agent.browser-report", "agent.runtime-report", "agent.rollover-request", "agent.rollover-begin", "agent.rollover-bootstrap", "agent.rollover-complete", "agent.rollover-fail", "agent.rollover-status", "browser.operation-plan", "browser.operation-dispatch", "browser.operation-settle", "incident.report", "project.list", "agent.list", "resource.list", "lease.list", "events.list", "work.snapshot", "work.replace", "fleet.reconcile", "workspace.provision", "workspace.list"
 };
 
 try
@@ -83,6 +84,7 @@ static byte[] Handle(byte[] payload, HostConfig config, string browserToken, Has
         {
             ["id"] = id,
             ["method"] = method,
+            ["instanceId"] = config.InstanceId,
             ["auth"] = new JsonObject { ["browserToken"] = browserToken },
         };
         if (request["params"] is JsonObject parameters) forwarded["params"] = parameters.DeepClone();
@@ -121,7 +123,7 @@ static byte[] Forward(string pipeName, byte[] request)
     return payload;
 }
 
-sealed record HostConfig(string PipeName, string BrowserTokenPath, string AllowedOrigin)
+sealed record HostConfig(string PipeName, string BrowserTokenPath, string AllowedOrigin, string InstanceId)
 {
     public static HostConfig Load(string baseDirectory)
     {
@@ -132,9 +134,12 @@ sealed record HostConfig(string PipeName, string BrowserTokenPath, string Allowe
         var pipeName = Required(root, "pipeName");
         var tokenPath = Required(root, "browserTokenPath");
         var origin = Required(root, "allowedOrigin");
+        var instanceId = Required(root, "instanceId");
         if (!origin.StartsWith("chrome-extension://", StringComparison.Ordinal) || !origin.EndsWith('/'))
             throw new InvalidDataException("allowedOrigin is invalid.");
-        return new HostConfig(pipeName, Path.GetFullPath(tokenPath), origin);
+        if (!Regex.IsMatch(instanceId, "^[0-9a-f]{16}$", RegexOptions.CultureInvariant))
+            throw new InvalidDataException("instanceId is invalid.");
+        return new HostConfig(pipeName, Path.GetFullPath(tokenPath), origin, instanceId);
     }
 
     private static string Required(JsonElement root, string name)

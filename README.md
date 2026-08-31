@@ -2,7 +2,7 @@
 
 [![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 [![Chromium](https://img.shields.io/badge/Chromium-Manifest%20V3-4285F4.svg)](manifest.json)
-[![Version](https://img.shields.io/badge/version-0.4.1-2ea44f.svg)](manifest.json)
+[![Version](https://img.shields.io/badge/version-0.5.0-2ea44f.svg)](manifest.json)
 [![ChatGPT Web](https://img.shields.io/badge/target-ChatGPT%20Web-111111.svg)](https://chatgpt.com/)
 [![Latest Release](https://img.shields.io/github/v/release/SDFGAEV/Charterion?display_name=tag)](https://github.com/SDFGAEV/Charterion/releases/latest)
 
@@ -10,99 +10,143 @@
 <p align="center"><strong>English</strong> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.ja.md">日本語</a> · <a href="README.ko.md">한국어</a> · <a href="README.es.md">Español</a> · <a href="README.pt-BR.md">Português (Brasil)</a> · <a href="README.fr.md">Français</a> · <a href="README.de.md">Deutsch</a> · <a href="README.ru.md">Русский</a></p>
 <!-- readme-i18n:navigation:end -->
 
-**A local-first engineering control plane that turns multiple ChatGPT Web conversations into persistent, role-bound software-engineering agents.**
+**A local-first engineering control plane that turns multiple ChatGPT Web conversations into a durable, role-based Agent organization.**
+
+> GAM coordinates ChatGPT Web. It does not replace ChatGPT with an API provider, does not store account credentials, and does not treat model prose as engineering authority.
+
+---
 
 <!-- readme-section:overview -->
 ## Overview
 
-Charterion coordinates multiple **ChatGPT Web conversations** as persistent engineering workers and backs them with a durable local control plane for projects, Git work, reviews, resources, and recovery.
+Charterion manages multiple ChatGPT Web conversations as persistent engineering workers backed by a local deterministic Kernel. Browser tabs are disposable runtime surfaces; Agent identity, projects, Git work, leases, capabilities, evidence, reviews, and recovery state are durable.
 
-The runtime keeps the existing `GAM`, `gamd`, and `gamctl` command names for compatibility, while **Charterion** is the public project name.
+GAM is designed to behave more like a small software company than a tab automator: independent workers operate in isolated scopes, Supervisors review exact evidence, and the Kernel enforces authority boundaries.
 
-It is intentionally focused on `chatgpt.com`: no OpenAI API key, no hosted Charterion backend, and no attempt to replace ChatGPT Web with a provider API.
+<!-- readme-section:capabilities -->
+## Highlights
+
+- **Persistent Agent identity** — `AgentSlot` identity is independent from browser tab IDs and individual ChatGPT conversations.
+- **Project isolation** — `ProjectCell`, Git worktrees, leases, epochs, and scoped capabilities keep concurrent work separated.
+- **Company governance** — every task receives a versioned Company System Policy plus a deterministic Role Charter before the task brief.
+- **Typed completion authority** — `structured-result`, `verified-claim`, `review-pass`, and `human-approval` separate evidence from prose.
+- **Machine-verifiable software work** — exact commit SHA, assigned branch/worktree, lease identity, and evidence are checked before completion.
+- **Supervisor review boundaries** — workers cannot self-approve; review authority is independent from implementation authority.
+- **Parallel work with backpressure** — independent tasks may run concurrently while account-level prompt pacing limits burst rate.
+- **Elastic browser fleet** — excess trusted-idle worker tabs can suspend and close without deleting conversations or durable Agent state.
+- **Crash convergence** — retries, uncertain sends, worktree cleanup, leases, and capability fencing are designed to fail closed and converge after interruption.
+- **Recursive self-hosting** — a stable Parent GAM can develop an isolated Candidate GAM and gate promotion on exact evidence.
 
 <!-- readme-section:architecture -->
 ## Architecture
 
-Charterion has four runtime components:
+```text
+Human / Remote Operator
+          │
+          ▼
+ Side Panel · GAM.cmd · gamctl
+          │
+          ▼
+        gamd
+   Deterministic Kernel
+          │
+  SQLite · Git · leases
+ capabilities · evidence
+ reviews · promotion state
+          │
+          ▼
+Native Messaging Bridge
+          │
+          ▼
+ChatGPT Web Agent Fleet
+```
 
-- **Chrome/Edge Extension** — discovers `chatgpt.com` tabs, binds Role/Project identity, routes prompts, observes replies, and renders the Side Panel.
+<!-- readme-section:core-concepts -->
+## Core concepts
 
-- **`gamd`** — the deterministic local Kernel. It owns SQLite authority, projects, leases, capabilities, evidence, Change Requests, Supervisor reviews, fleet state, and merge-queue state.
+| Concept | Responsibility |
+| --- | --- |
+| `ProjectCell` | Durable project/team boundary, capacity policy, repository root |
+| `AgentSlot` | Persistent worker identity and lifecycle |
+| `AgentConversationRecord` | Durable mapping between an Agent and a ChatGPT conversation generation |
+| Task | Typed unit of work with dependencies and completion authority |
+| Task workspace | Isolated Git worktree, branch, lease, capability, and base SHA |
+| `WorkClaim` | Machine-verifiable completion claim bound to exact evidence |
+| Supervisor | Independent review/integration authority |
+| GAM Kernel | Deterministic owner of durable state and authorization |
 
-- **Native Messaging Host** — a narrow Chromium ↔ `gamd` bridge over a Windows named pipe. It never receives the administrator token.
+<!-- readme-section:organization -->
+## Company-style Agent management
 
-- **`GAM` / `gamctl`** — human- and machine-facing launch/control clients.
+Every dispatched task is composed in this order:
 
 ```text
-Human operator / Remote agent
-             |
-       GAM / gamctl
-             |
-           gamd
-   SQLite · Git · leases
- evidence · reviews · fleet
-             |
- Native Messaging Host
-             |
-      Chromium Extension
-             |
-     ChatGPT Web tabs
+Company System Policy
+        ↓
+Role Charter
+        ↓
+Task Brief
+        ↓
+Revision / Dependency Evidence
+        ↓
+Managed Workspace + Completion Protocol
 ```
 
-<!-- readme-section:operation -->
-## Human and agent operation
+The organization policy requires decoupled architecture, typed contracts, durable authority, least privilege, isolated parallel worktrees, crash convergence, objective tests/evidence, explicit ownership, documentation, and Git discipline. Task text or dependency output cannot widen the Agent's authority.
 
-Human operators can launch the dedicated Chromium runtime with `GAM.cmd`. Authorized remote agents can use the same Kernel through deterministic JSON/CLI commands instead of scraping the UI.
+Typical roles include **Architect**, **Implementer**, **Tester**, **Supervisor**, **Researcher**, and **Operator**. See [`docs/company-governance.md`](docs/company-governance.md).
 
-Charterion does not store ChatGPT passwords, MFA secrets, cookies, or account tokens. The user signs in directly on the official ChatGPT page inside the dedicated browser profile.
+<!-- readme-section:completion -->
+## Task and completion model
 
-```powershell
-GAM.cmd
-GAM.cmd status --json
-GAM.cmd start --json
-GAM.cmd open "My Project" --json
-GAM.cmd doctor --json
-```
+GAM does not equate “the assistant replied” with “the work is done.”
 
-<!-- readme-section:git-workflow -->
-## Git and Change Request workflow
+- `structured-result` requires one strict terminal `<GAM_RESULT>` JSON block; placeholders such as `Read`, `OK`, or `acknowledged` remain attention states.
+- `verified-claim` requires a Kernel-provisioned workspace, committed exact HEAD SHA, scoped claim submission, and Kernel verification.
+- `review-pass` requires a valid review protocol and does not treat failed or malformed review output as terminal success.
+- `human-approval` remains explicitly human-controlled.
 
-For software projects, a model reply is not engineering completion. Work is tied to Git and machine evidence, then reviewed by an independent Supervisor before integration.
-
-Important invariants include exact `baseSha`/`headSha` binding, no self-approval, review invalidation after a new head, machine-evidence checks before queueing, conflict detection against the latest target branch, and independent observation of integration in Git history.
+For software tasks, the normal authority chain is:
 
 ```text
-Task
-  -> Worker branch/worktree
-  -> commit
-  -> machine evidence
-  -> Change Request
-  -> Supervisor review
-  -> merge queue
-  -> observed integration
+Task → isolated worktree → commit → WorkClaim → machine verification
+     → independent review → integration/promotion authority
 ```
 
-<!-- readme-section:browser-orchestration -->
-## Browser orchestration
+<!-- readme-section:parallelism -->
+## Parallelism and prompt pacing
 
-The browser plane provides persistent Role/Project bindings, task DAG routing, `work`/`review`/`human` task kinds, durable Skip/Cancel/Retry facts, bounded review loops, a semantic message bus, send-attempt recovery, fail-closed handling of ambiguous delivery, portable browser state, and an opt-in Auto Supervisor.
+DAG edges represent **real dependencies**, not artificial throttling. Independent work can run in parallel across different AgentSlots and worktrees.
 
-Supervisor-managed `AgentSlot` desired state is separate from browser observation. Workers can be spawned, suspended, resumed, or retired through scoped authority; draining workers stop receiving new work before their tabs are closed.
+Before a physical prompt reaches the ChatGPT composer, the persistent dispatch governor applies account-level pacing: global spacing, rolling-window budget, Project/AgentSlot spacing, concurrent-generation capacity, and persisted exponential backoff after visible rate-limit signals. Ambiguous delivery never causes an automatic duplicate resend.
 
-<!-- readme-section:control-plane -->
-## Durable local control plane
+The exact-task dispatch module provides a fail-closed typed planner for selecting one requested ready task without selecting unrelated ready tasks. It remains subject to the standard prompt governor and workspace authority.
 
-The Kernel persists project, agent, resource, lease, capability, request, work-claim, evidence, review, merge-queue, and browser-runtime facts in SQLite.
+<!-- readme-section:browser-lifecycle -->
+## Browser lifecycle and recovery
 
-SQLite uses foreign keys, WAL mode, strict tables, and transactional state changes. Lease epochs and scoped capabilities fence stale workers. Objective machine facts are verified deterministically; architecture and engineering quality remain Supervisor judgments.
+Browser pages are execution leases, not durable worker identity. GAM can suspend and close excess trusted-idle worker tabs while preserving AgentSlot identity, canonical conversation history, checkpoints, evidence, and Git history. New demand can resume the durable worker instead of silently creating a duplicate identity.
+
+Generating, unknown/unavailable, quarantined, rollover-active, or effect-active pages fail closed and remain open. The stuck-generation convergence module combines GAM-owned page/slot facts, attempt state, stale deadlines, and recent engineering-progress evidence; it never authorizes an uncertain prompt to be automatically resent. Authority-checked stop and later cleanup require explicit convergence evidence.
+
+<!-- readme-section:self-hosting -->
+## Recursive self-hosting
+
+GAM supports the architecture for a **Parent → isolated Candidate → evidence-gated promotion** cycle.
+
+Parent and Candidate runtime identities must remain distinct across repository, `GAM_HOME`, SQLite database, named pipe, and browser profile. Promotion authority is durable and independent: a Candidate cannot approve itself, exact candidate/parent SHA evidence is required, rejected candidates are preserved for inspection, and replay/crash boundaries are tested for convergence.
 
 <!-- readme-section:quick-start -->
 ## Quick start
 
-Current deployment targets Windows 10/11 with Node.js 22+, Chrome or Edge, and .NET 9 when building the Native Host from source.
+#### Requirements
 
-From a source checkout:
+- Windows 10/11 for the current Native Messaging deployment path
+- Node.js 22+
+- Chrome or Microsoft Edge (Chromium)
+- .NET 9 SDK/runtime only when building the Native Host from source
+
+#### Build and verify
 
 ```powershell
 npm install
@@ -110,62 +154,74 @@ npm run verify:full
 npm run setup:windows
 ```
 
-From a packaged Windows runtime, extract the archive and run `SETUP.cmd`.
+#### Runtime commands
+
+```powershell
+GAM.cmd status --json
+GAM.cmd start --json
+GAM.cmd open "My Project" --json
+GAM.cmd doctor --json
+```
+
+`GAM.cmd` keeps a dedicated Chromium profile under `GAM_HOME`, starts the local Kernel idempotently, and never needs an OpenAI API key. The user signs in directly on the official `chatgpt.com` page; GAM does not store passwords, MFA secrets, cookies, or account tokens.
 
 <!-- readme-section:security -->
 ## Security boundaries
 
-- Extension host permission is restricted to `https://chatgpt.com/*`.
-
-- The Native Host uses a narrow allowlist and never receives the GAM administrator token.
-
-- Worker capabilities are scoped to project/task/resource/lease identities and are stored by token hash.
-
-- `gamctl` has no implicit administrator fallback.
-
+- Host permission is limited to `https://chatgpt.com/*`.
+- Native Messaging is restricted to the pinned extension origin.
+- The Native Host never holds the GAM admin token.
+- Worker capabilities are scoped by project/task/resource/lease and persisted only by token hash.
+- `gamctl` has no implicit admin fallback; privileged operations require explicit `--admin`.
 - Unknown, stale, ambiguous, or conflicting authority fails closed.
-
-Charterion is a coordination and policy layer, **not an operating-system sandbox**. Filesystem or terminal tools still need their own VM/container/capability boundary.
-
-<!-- readme-section:verification -->
-## Verification and release
-
-The fast gate checks TypeScript, control-plane types, static assets, README-language invariants, tests, and builds. The full gate adds Native Host publishing and process-level smoke tests.
-
-Release artifacts are emitted with SHA-256 sidecars.
-
-```powershell
-npm run verify
-npm run verify:full
-npm run release
-```
+- Candidate self-promotion is rejected.
+- GAM is a coordination and policy layer, **not an OS sandbox**; filesystem/terminal tools still require appropriate host/container isolation.
 
 <!-- readme-section:development -->
-## Development principles
+## Development
 
-1. ChatGPT Web conversations are the cognition plane; do not silently substitute provider APIs.
+```powershell
+npm run check
+npm run check:control
+npm run check:architecture
+npm test
+npm run test:faults
+npm run verify
+npm run verify:full
+```
 
-2. Git and durable machine observations are engineering facts; model prose is a claim or explanation.
+<!-- readme-section:repository-layout -->
+## Repository layout
 
-3. Give workers broad decision freedom inside narrow, explicit authority.
+```text
+src/            Browser extension runtime and typed policies
+control/        Deterministic Kernel, SQLite authority, RPC, leases, evidence
+native-host/    Chromium Native Messaging bridge
+scripts/        Build, verification, packaging, smoke, and Windows setup tools
+tests/          Browser/runtime/unit/fault tests
+docs/           Architecture and operational documentation
+```
 
-4. Supervisors perform engineering judgment; deterministic code enforces invariant policy.
+<!-- readme-section:contributing -->
+## Contributing
 
-5. Persist facts and derive status; fence stale attempts with identities and epochs.
+Changes should preserve the project’s core engineering rules: explicit ownership, typed boundaries, durable facts, least privilege, isolated Git work, objective tests, documentation, and independent review. Do not widen browser/native permissions or bypass evidence gates merely for convenience.
 
-6. Fail closed when delivery, identity, ownership, or integration state is uncertain.
+For substantial changes, prefer a focused worktree/branch, add targeted tests, run the relevant wider gates, and record the exact commit used for review.
 
 <!-- readme-section:scope -->
 ## Scope
 
-Charterion currently targets **ChatGPT Web on `chatgpt.com`**. Generic LLM APIs, hosted orchestration, Claude/Gemini integrations, and coding-agent CLI providers are outside the current product scope.
+GAM currently targets **ChatGPT Web on `chatgpt.com`**. Generic LLM APIs, hosted orchestration, Claude/Gemini integrations, and coding-agent CLI providers are outside the current product scope.
 
 <!-- readme-section:license -->
 ## License
 
-Licensed under [Apache-2.0](LICENSE). See [NOTICE](NOTICE) and [Third-Party Notices](THIRD_PARTY_NOTICES.md).
+Licensed under [Apache-2.0](LICENSE). See [NOTICE](NOTICE) and [Third-Party Notices](THIRD_PARTY_NOTICES.md). The English `LICENSE` file is authoritative.
+
+---
 
 <!-- readme-section:status -->
 ## Development status
 
-Charterion is under active development. The default branch currently represents the v0.4.1 capability set; newer experimental capabilities are not documented here until they are formally integrated.
+Charterion is under active development. Release candidates must pass the repository verification suite, README i18n release gate, and evidence-based review/promotion boundaries before they are treated as stable.

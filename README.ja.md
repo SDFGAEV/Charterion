@@ -2,7 +2,7 @@
 
 [![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 [![Chromium](https://img.shields.io/badge/Chromium-Manifest%20V3-4285F4.svg)](manifest.json)
-[![Version](https://img.shields.io/badge/version-0.4.1-2ea44f.svg)](manifest.json)
+[![Version](https://img.shields.io/badge/version-0.5.0-2ea44f.svg)](manifest.json)
 [![ChatGPT Web](https://img.shields.io/badge/target-ChatGPT%20Web-111111.svg)](https://chatgpt.com/)
 [![Latest Release](https://img.shields.io/github/v/release/SDFGAEV/Charterion?display_name=tag)](https://github.com/SDFGAEV/Charterion/releases/latest)
 
@@ -10,99 +10,141 @@
 <p align="center"><a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-TW.md">繁體中文</a> · <strong>日本語</strong> · <a href="README.ko.md">한국어</a> · <a href="README.es.md">Español</a> · <a href="README.pt-BR.md">Português (Brasil)</a> · <a href="README.fr.md">Français</a> · <a href="README.de.md">Deutsch</a> · <a href="README.ru.md">Русский</a></p>
 <!-- readme-i18n:navigation:end -->
 
-**複数の ChatGPT Web 会話を、永続的で役割ベースのソフトウェアエンジニアリング Agent に変えるローカルファーストのエンジニアリング制御プレーン。**
+**複数の ChatGPT Web 会話を、永続的でロールベースの Agent 組織として運用するためのローカルファーストなエンジニアリング control plane。**
+
+> GAM は ChatGPT Web を調整します。API Provider で ChatGPT を置き換えず、アカウント資格情報を保存せず、モデルの prose 自体を engineering authority とみなしません。
+
+---
 
 <!-- readme-section:overview -->
 ## 概要
 
-Charterion は複数の **ChatGPT Web 会話**を永続的なエンジニアリング Worker として調整し、プロジェクト、Git 作業、レビュー、リソース、リカバリを耐久性のあるローカル制御プレーンで管理します。
+Charterionは、複数の ChatGPT Web 会話を永続的な engineering Worker として管理し、ローカルの deterministic Kernel が Agent identity、Project、Git、lease、capability、evidence、review、recovery state を保持します。ブラウザ tab は交換可能な runtime surface であり、Agent の Source of Truth ではありません。
 
-実行時亖換性のためコマンド名は `GAM`、`gamd`、`gamctl` を維持し、公開プロジェクト名は **Charterion** です。
+GAM は tab automation ではなく小規模なソフトウェア会社のように動作することを目標にしています。Worker は隔離された scope で作業し、Supervisor は exact evidence をレビューし、Kernel が authority boundary を強制します。
 
-対象は `chatgpt.com` に限定され、OpenAI API キーやホスト型 Charterion バックエンドを必要とせず、ChatGPT Web をプロバイダー API に置き換えません。
+<!-- readme-section:capabilities -->
+## 主要機能
+
+- **永続 Agent identity** — `AgentSlot` は tab ID や単一 ChatGPT 会話から独立します。
+- **Project isolation** — `ProjectCell`、Git worktree、lease、epoch、scoped capability で並列作業を分離します。
+- **Company governance** — 各 task に versioned Company System Policy と deterministic Role Charter を自動注入します。
+- **Typed completion authority** — `structured-result`、`verified-claim`、`review-pass`、`human-approval` で evidence と prose を分離します。
+- **Machine-verifiable work** — exact commit SHA、branch/worktree、lease identity、evidence を検証します。
+- **独立 Supervisor** — Implementer は self-approve できません。
+- **Parallel work + backpressure** — 独立 task は並列実行でき、prompt governor が burst を制御します。
+- **Elastic browser fleet** — trusted-idle Worker は conversation/durable state を削除せず suspend + close できます。
+- **Crash convergence** — uncertain send、cleanup、lease、capability fencing を fail-closed/replay で収束させます。
+- **Recursive self-hosting** — Parent GAM が隔離 Candidate を開発し、exact evidence で promotion を判断します。
 
 <!-- readme-section:architecture -->
 ## アーキテクチャ
 
-Charterion は 4 つの実行時コンポーネントで構成されます。
-
-- **Chrome/Edge Extension** — `chatgpt.com` タブを検出し、Role/Project ID を関連付け、プロンプトをルーティングし、応答を観測して Side Panel を表示します。
-
-- **`gamd`** — 決定論的なローカル Kernel。SQLite 権限状態、プロジェクト、リース、Capability、証拠、Change Request、Supervisor レビュー、Worker Fleet、マージキューを所有します。
-
-- **Native Messaging Host** — Windows named pipe を介した Chromium ↔ `gamd` の狭いブリッジで、管理者トークンは受け取りません。
-
-- **`GAM` / `gamctl`** — 人間および機械向けの起動・制御クライアントです。
+Kernel が durable authority を保持し、ブラウザは許可済み effect の実行面として扱われます。
 
 ```text
-Human operator / Remote agent
-             |
-       GAM / gamctl
-             |
-           gamd
-   SQLite · Git · leases
- evidence · reviews · fleet
-             |
- Native Messaging Host
-             |
-      Chromium Extension
-             |
-     ChatGPT Web tabs
+Human / Remote Operator
+          │
+          ▼
+ Side Panel · GAM.cmd · gamctl
+          │
+          ▼
+        gamd
+   Deterministic Kernel
+          │
+  SQLite · Git · leases
+ capabilities · evidence
+ reviews · promotion state
+          │
+          ▼
+Native Messaging Bridge
+          │
+          ▼
+ChatGPT Web Agent Fleet
 ```
 
-<!-- readme-section:operation -->
-## 人間と Agent の操作
+<!-- readme-section:core-concepts -->
+## コア概念
 
-人間は `GAM.cmd` で専用 Chromium ランタイムを起動できます。許可された Remote Agent は UI をスクレイピングせず、同じ Kernel を決定論的な JSON/CLI コマンドで操作できます。
+| 概念 | 責務 |
+| --- | --- |
+| `ProjectCell` | 永続 Project/Team 境界、capacity policy、repository root |
+| `AgentSlot` | 永続 Worker identity と lifecycle |
+| `AgentConversationRecord` | Agent と ChatGPT conversation generation の永続 mapping |
+| Task | dependency と completion authority を持つ typed work item |
+| Task workspace | 隔離 Git worktree、branch、lease、capability、base SHA |
+| `WorkClaim` | exact evidence に結び付いた machine-verifiable completion claim |
+| Supervisor | 独立した review/integration authority |
+| GAM Kernel | durable state と authorization の deterministic owner |
 
-Charterion は ChatGPT のパスワード、MFA シークレット、Cookie、アカウントトークンを保存しません。ユーザーは専用ブラウザプロファイル内の公式 ChatGPT ページで直接ログインします。
+<!-- readme-section:organization -->
+## 会社型 Agent 管理
 
-```powershell
-GAM.cmd
-GAM.cmd status --json
-GAM.cmd start --json
-GAM.cmd open "My Project" --json
-GAM.cmd doctor --json
-```
-
-<!-- readme-section:git-workflow -->
-## Git / Change Request ワークフロー
-
-ソフトウェア作業ではモデルの返答だけを完了とは扱いません。作業は Git と機械証拠に結び付け、独立した Supervisor のレビューを経て統合されます。
-
-`baseSha`/`headSha` の厳密な束縛、自己承認禁止、新しい head 後の旧レビュー失効、キュー投入前の機械証拠検証、最新 target branch との競合確認、Git 履歴からの独立した統合確認を強制します。
+すべての task は会社ポリシー、Role Charter、Task Brief の固定優先順位で構成され、下位のテキストは上位の authority を拡張できません。
 
 ```text
-Task
-  -> Worker branch/worktree
-  -> commit
-  -> machine evidence
-  -> Change Request
-  -> Supervisor review
-  -> merge queue
-  -> observed integration
+Company System Policy
+        ↓
+Role Charter
+        ↓
+Task Brief
+        ↓
+Revision / Dependency Evidence
+        ↓
+Managed Workspace + Completion Protocol
 ```
 
-<!-- readme-section:browser-orchestration -->
-## ブラウザオーケストレーション
+組織ポリシーは decoupled architecture、typed contract、durable authority、least privilege、独立 worktree、crash convergence、客観的 test/evidence、明確な ownership、documentation、Git discipline を要求します。代表ロールは Architect、Implementer、Tester、Supervisor、Researcher、Operator です。
 
-永続 Role/Project バインド、タスク DAG、`work`/`review`/`human`、耐久 Skip/Cancel/Retry、有限レビュー、セマンティックメッセージバス、送信試行の復旧、不確実な配信の fail-closed、ブラウザ状態移行、任意の Auto Supervisor を提供します。
+[Company Governance ドキュメント](docs/company-governance.md)
 
-Supervisor 管理の `AgentSlot` の desired state とブラウザ観測は分離されています。Worker はスコープ付き権限で spawn/suspend/resume/retire され、draining 中は新規作業を受けません。
+<!-- readme-section:completion -->
+## タスクと完了モデル
 
-<!-- readme-section:control-plane -->
-## 耐久ローカル制御プレーン
+GAM は「Assistant が返信した」ことを作業完了とはみなしません。completion policy ごとに terminal evidence が必要です。
 
-Kernel はプロジェクト、Agent、リソース、リース、Capability、リクエスト、WorkClaim、証拠、レビュー、マージキュー、ブラウザ実行時の事実を SQLite に永続化します。
+- `structured-result` は唯一の厳密な `<GAM_RESULT>` JSON terminal block のみ受理します。
+- `verified-claim` は Kernel-provisioned workspace、exact HEAD SHA、scoped claim、Kernel verification を要求します。
+- `review-pass` は有効な pass review protocol のみ成功とし、fail/malformed review を terminal success にしません。
+- `human-approval` は明示的な human authority を維持します。
 
-SQLite は外部キー、WAL、strict tables、トランザクションを使用します。lease epoch とスコープ付き Capability が古い Worker をフェンスし、客観的事実は決定論的に検証、設計品質は Supervisor が判断します。
+```text
+Task → isolated worktree → commit → WorkClaim → machine verification
+     → independent review → integration/promotion authority
+```
+
+<!-- readme-section:parallelism -->
+## 並列実行とプロンプト制御
+
+DAG edge は実際の dependency だけを表し、throttling のために無関係 task を直列化しません。異なる AgentSlot/worktree の独立作業は並列に実行できます。
+
+Prompt Dispatch Governor は composer へ送信する直前に global spacing、rolling-window budget、Project/AgentSlot spacing、concurrent-generation capacity、rate-limit backoff を適用します。`uncertain` delivery は自動再送しません。
+
+Exact Task Dispatch planner は指定した ready task だけを選び、別 ProjectCell の ready task を巻き込みません。
+
+<!-- readme-section:browser-lifecycle -->
+## ブラウザのライフサイクルと復旧
+
+Browser page は execution lease であり durable identity ではありません。余剰 trusted-idle Worker は suspend して tab を閉じても、AgentSlot、conversation、checkpoint、evidence、Git history を保持できます。
+
+Generating、unknown/unavailable、quarantined、rollover-active、effect-active は fail closed です。Stuck-Generation Convergence は page/slot facts、attempt、deadline、最近の engineering progress を組み合わせて authority-checked stop の可否を判断します。
+
+<!-- readme-section:self-hosting -->
+## 再帰的 self-hosting
+
+GAM は Parent → isolated Candidate → evidence-gated promotion をサポートします。Parent/Candidate の repo、`GAM_HOME`、SQLite DB、pipe、browser profile は分離必須です。
+
+Candidate は self-approve できず、promotion は exact parent/candidate SHA と独立 evidence を要求し、reject-preserve と replay/crash convergence を維持します。
 
 <!-- readme-section:quick-start -->
 ## クイックスタート
 
-現在の対象は Windows 10/11、Node.js 22+、Chrome/Edge で、Native Host をソースからビルドする場合は .NET 9 が必要です。
+現在の Native Messaging deployment path は Windows を主対象としています。
 
-ソース checkout から：
+- Windows 10/11
+- Node.js 22+
+- Chrome または Microsoft Edge（Chromium）
+- .NET 9 SDK/runtime（Native Host を source build する場合のみ）
 
 ```powershell
 npm install
@@ -110,62 +152,72 @@ npm run verify:full
 npm run setup:windows
 ```
 
-パッケージ済み Windows Runtime は展開して `SETUP.cmd` を実行します。
+```powershell
+GAM.cmd status --json
+GAM.cmd start --json
+GAM.cmd open "My Project" --json
+GAM.cmd doctor --json
+```
+
+`GAM.cmd` は専用 Chromium profile を使い、local Kernel を idempotent に起動します。ユーザーは公式 `chatgpt.com` に直接ログインし、GAM は password、MFA secret、cookie、account token を保存せず、OpenAI API key も不要です。
 
 <!-- readme-section:security -->
 ## セキュリティ境界
 
-- Extension の host permission は `https://chatgpt.com/*` のみに限定されます。
-
-- Native Host は狭い allowlist を使用し、GAM 管理者トークンを受け取りません。
-
-- Worker Capability は project/task/resource/lease にスコープされ、token hash のみ保存されます。
-
-- `gamctl` に暗黙の管理者フォールバックはありません。
-
-- 不明・古い・曖昧・競合する権限状態は fail closed です。
-
-Charterion は調整・ポリシー層であり、**OS サンドボックスではありません**。ファイルや端末ツールには別の VM/コンテナ/Capability 境界が必要です。
-
-<!-- readme-section:verification -->
-## 検証とリリース
-
-高速 gate は TypeScript、control-plane 型、静的アセット、README 多言語不変条件、テスト、ビルドを検証します。完全 gate は Native Host publish とプロセスレベル smoke test を追加します。
-
-Release には SHA-256 sidecar が生成されます。
-
-```powershell
-npm run verify
-npm run verify:full
-npm run release
-```
+- Host permission は `https://chatgpt.com/*` のみに限定します。
+- Native Messaging は pinned extension origin のみ許可します。
+- Native Host は GAM admin token を保持しません。
+- Worker capability は project/task/resource/lease で scope され、永続化は token hash のみです。
+- `gamctl` に implicit admin fallback はなく、privileged operation は明示的な `--admin` が必要です。
+- unknown/stale/ambiguous/conflicting authority は fail closed です。
+- Candidate self-promotion は拒否されます。
+- GAM は coordination/policy layer であり OS sandbox ではありません。filesystem/terminal は host/container policy で隔離してください。
 
 <!-- readme-section:development -->
-## 開発原則
+## 開発と検証
 
-1. ChatGPT Web 会話を cognition plane とし、プロバイダー API に暗黙置換しない。
+変更は type check、architecture、unit/fault、smoke gate を通す必要があり、release では README i18n release gate も要求されます。
 
-2. Git と耐久的な機械観測を工程上の事実とし、モデル文は主張または説明として扱う。
+```powershell
+npm run check
+npm run check:control
+npm run check:architecture
+npm test
+npm run test:faults
+npm run verify
+npm run verify:full
+```
 
-3. 狭く明示的な権限内で Worker に広い判断自由を与える。
+<!-- readme-section:repository-layout -->
+## リポジトリ構成
 
-4. Supervisor が工程判断を行い、決定論的コードが不変条件を強制する。
+```text
+src/            Browser extension runtime and typed policies
+control/        Deterministic Kernel, SQLite authority, RPC, leases, evidence
+native-host/    Chromium Native Messaging bridge
+scripts/        Build, verification, packaging, smoke, and Windows setup tools
+tests/          Browser/runtime/unit/fault tests
+docs/           Architecture and operational documentation
+```
 
-5. 事実を永続化して状態を導出し、ID と epoch で古い試行をフェンスする。
+<!-- readme-section:contributing -->
+## コントリビューション
 
-6. 配信、ID、所有権、統合状態が不確実なら fail closed にする。
+変更は explicit ownership、typed boundary、durable facts、least privilege、隔離 Git worktree、客観 test、documentation、独立 review を維持してください。利便性のために browser/native 権限を広げたり evidence gate を迂回しないでください。
+
+大きな変更は独立 branch/worktree を使い、focused tests と必要な wider gates を実行し、exact commit SHA を review 対象として記録してください。
 
 <!-- readme-section:scope -->
-## スコープ
+## 現在のスコープ
 
-Charterion は現在 **`chatgpt.com` 上の ChatGPT Web** を対象とします。汎用 LLM API、ホスト型オーケストレーション、Claude/Gemini 連携、coding-agent CLI provider は対象外です。
+GAM は現在 `chatgpt.com` 上の ChatGPT Web に集中しています。Generic LLM API、hosted orchestration、Claude/Gemini integration、coding-agent CLI provider は現在の product scope 外です。
 
 <!-- readme-section:license -->
 ## ライセンス
 
-[Apache-2.0](LICENSE) でライセンスされています。[NOTICE](NOTICE) と [Third-Party Notices](THIRD_PARTY_NOTICES.md) も参照してください。
+このプロジェクトは [Apache-2.0](LICENSE) で提供され、[NOTICE](NOTICE) と [Third-Party Notices](THIRD_PARTY_NOTICES.md) を含みます。法的に authoritative なのは repository root の英語 `LICENSE` です。
 
 <!-- readme-section:status -->
 ## 開発状況
 
-Charterion は開発中です。default branch は現在 v0.4.1 の能力セットを表し、新しい実験機能は正式統合後にのみ記載されます。
+Charterion は active development 中です。Release Candidate は repository verification、README i18n release gate、evidence-based review/promotion boundary を通過して初めて stable と扱われます。
