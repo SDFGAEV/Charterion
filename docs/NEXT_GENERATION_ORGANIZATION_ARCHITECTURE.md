@@ -1360,3 +1360,70 @@ Persistent Agent
 ```
 
 A mismatched browser profile is a runtime identity violation and must fail closed before the page is accepted as that Organization Agent's active runtime.
+## 36. Workspace Policy Without Mandatory Physical Isolation
+
+Section 36 supersedes the mandatory container/VM requirements in Section 35.2 and the physical-isolation acceptance language in Section 35.7. A dedicated AgentWorkspace remains mandatory as an organizational and operational boundary, but physical isolation is optional rather than a default release requirement.
+
+The default public Charterion release MUST be able to create and run persistent Agents on an ordinary host without Docker, Hyper-V, WSL, VM images, or a separate sandbox service.
+
+This does not mean unrestricted host access is considered safe. It means the default safety model is layered policy enforcement rather than mandatory virtualization.
+
+The default workspace mode is `prompt-guarded`. Stronger tool-level scoping is preferred whenever the connected tool supports it. A future sandbox remains an optional enhancement.
+### 36.1 Three workspace security modes
+
+```text
+prompt-guarded
+  -> dedicated root + dedicated browser/tool profile + injected Workspace Charter
+  -> policy is organizational/prompt-enforced when the tool cannot hard-scope itself
+
+tool-scoped
+  -> all prompt-guarded requirements
+  -> plus tool-native scope enforcement such as allowed directories, machine selection, command policy, account/profile scope, or equivalent
+
+sandboxed
+  -> optional stronger backend such as container/VM/remote sandbox
+  -> not required by Charterion Core or the default release
+```
+
+Charterion MUST report which mode is actually active. `prompt-guarded` must never be advertised as a security sandbox, and `tool-scoped` must not be claimed unless the relevant tool configuration was successfully installed and verified.
+### 36.2 Workspace Charter is a first-class contract
+
+Every live AgentWorkspace has a versioned Workspace Charter compiled from durable policy state. The charter is injected whenever an Agent is created, resumed, rebound to a browser runtime, or rolled over to a new conversation generation.
+
+The charter includes at least:
+
+- Agent identity and workspace root;
+- allowed resource/project references;
+- forbidden host/peer/authority references;
+- dedicated browser/tool profile identity;
+- destructive-action policy;
+- whether tool-native scoping is configured or unsupported;
+- explicit instruction not to weaken or bypass workspace controls;
+- requirement to request access rather than wander outside scope.
+
+The exact charter input is hashed. Charterion stores the policy version and digest so a runtime can prove which workspace rules it was given without treating prompt text as secret authority.
+### 36.3 Default host-safety rules
+
+Without a physical sandbox, the default Workspace Charter still requires the Agent to stay in its assigned root and explicitly allowed project/resource references for ordinary work.
+
+Host-wide effects are not normal workspace actions. System directories, user-home traversal, global package installation, service/startup changes, registry/firewall modification, unrelated process control, Charterion control state, Parent/promotion authority, and peer Agent workspaces require explicit organizational authorization or are denied by policy.
+
+Tools that support native scoping SHOULD be configured from the same Workspace policy. Examples include allowed-directory configuration, dedicated Remote endpoint/device selection, account/profile scoping, project-root restrictions, connector-specific resource filters, and command policy.
+
+A tool that cannot enforce scope may still be used in `prompt-guarded` mode, but its weaker enforcement level must remain visible and auditable.
+### 36.4 Acceptance and security claim
+
+Default-release acceptance MUST demonstrate:
+
+- every persistent Agent receives a distinct durable workspace generation;
+- runtime binding is blocked until workspace policy is configured;
+- browser/tool profiles are not silently shared across live Agents;
+- the compiled Workspace Charter contains the exact root, allowed refs, forbidden refs, and dangerous-action policy;
+- policy digests are deterministic and durable;
+- `tool-scoped` cannot be claimed when tool configuration is unsupported/unconfigured;
+- workspace generation can be replaced without replacing Agent identity or conversation lineage;
+- ordinary work does not require Docker/VM/Noetrium or any other optional execution substrate.
+
+Charterion MUST describe `prompt-guarded` as a governance/workspace-scope mechanism, not a hard security isolation boundary. Users who require strong adversarial containment may opt into a sandboxed backend later without changing Organization, Agent, Mission, Review, or Conversation semantics.
+
+Updated constitutional rule: **give every Agent a dedicated governed workplace by default; strengthen it with tool scoping when available; use physical sandboxing only when the deployment actually needs it.**
