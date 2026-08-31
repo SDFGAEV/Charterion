@@ -1,77 +1,151 @@
 # GPT Agent Manager
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Chrome MV3](https://img.shields.io/badge/Chromium-Manifest%20V3-4285F4)](manifest.json)
-[![Version](https://img.shields.io/badge/version-0.5.0-blue.svg)](manifest.json)
+[![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
+[![Chromium](https://img.shields.io/badge/Chromium-Manifest%20V3-4285F4.svg)](manifest.json)
+[![Version](https://img.shields.io/badge/version-0.5.0-2ea44f.svg)](manifest.json)
+[![ChatGPT Web](https://img.shields.io/badge/target-ChatGPT%20Web-111111.svg)](https://chatgpt.com/)
 
-GPT Agent Manager (GAM) coordinates multiple **ChatGPT web conversations** as persistent, role-bound agents and adds a local durable control plane for projects, Git work, reviews, resources, and recovery.
+**A local-first engineering control plane that turns multiple ChatGPT Web conversations into a durable, role-based Agent organization.**
 
-It is intentionally focused on `chatgpt.com`: no OpenAI API key, no other model providers, and no hosted GAM backend.
+[English](#english) · [中文](#中文)
 
-## v0.5 in one sentence
+> GAM coordinates ChatGPT Web. It does not replace ChatGPT with an API provider, does not store account credentials, and does not treat model prose as engineering authority.
 
-**One GAM Runtime, two operator surfaces:** a visual browser workflow for a human operator and a deterministic JSON/CLI workflow for an authorized agent operating the same projects through Remote tooling.
+---
 
-```text
-Human operator                     Remote / mobile GPT operator
-      │                                      │
-      ▼                                      ▼
-Side Panel / GAM.cmd              GAM.cmd ... --json / gamctl
-      └──────────────────┬───────────────────┘
-                         ▼
-                     GAM Kernel
-                       gamd
-                         │
-       SQLite · Git · leases · capabilities
-       evidence · Change Requests · merge queue
-                         │
-                         ▼
-             ChatGPT web conversations
-```
-## Architecture
+<a id="english"></a>
 
-GAM has four runtime components:
+## English
 
-- **Chrome/Edge Extension** — discovers `chatgpt.com` tabs, binds Role/Project identity, routes prompts, observes replies, and renders the Side Panel.
-- **`gamd`** — the deterministic local GAM Kernel. It owns SQLite authority, project cells, resource leases, capability fencing, evidence facts, Change Requests, Supervisor reviews, and merge queue state.
-- **Native Messaging Host** — a small read-mostly Chromium ↔ `gamd` bridge over a Windows named pipe. It never receives the GAM admin token.
-- **`gamctl` / `GAM` launcher** — machine-friendly clients used by local automation and authorized Remote agents.
+### Overview
 
-`gamd` is the only component intended to remain running. Chromium starts the Native Host on demand; `gamctl` and the `GAM` launcher are short-lived clients.
+GPT Agent Manager (GAM) manages multiple ChatGPT Web conversations as persistent engineering workers backed by a local deterministic Kernel. Browser tabs are disposable runtime surfaces; Agent identity, projects, Git work, leases, capabilities, evidence, reviews, and recovery state are durable.
 
-### Authority model
+GAM is designed to behave more like a small software company than a tab automator: independent workers operate in isolated scopes, Supervisors review exact evidence, and the Kernel enforces authority boundaries.
+
+### Highlights
+
+- **Persistent Agent identity** — `AgentSlot` identity is independent from browser tab IDs and individual ChatGPT conversations.
+- **Project isolation** — `ProjectCell`, Git worktrees, leases, epochs, and scoped capabilities keep concurrent work separated.
+- **Company governance** — every task receives a versioned Company System Policy plus a deterministic Role Charter before the task brief.
+- **Typed completion authority** — `structured-result`, `verified-claim`, `review-pass`, and `human-approval` separate evidence from prose.
+- **Machine-verifiable software work** — exact commit SHA, assigned branch/worktree, lease identity, and evidence are checked before completion.
+- **Supervisor review boundaries** — workers cannot self-approve; review authority is independent from implementation authority.
+- **Parallel work with backpressure** — independent tasks may run concurrently while account-level prompt pacing limits burst rate.
+- **Elastic browser fleet** — excess trusted-idle worker tabs can suspend and close without deleting conversations or durable Agent state.
+- **Crash convergence** — retries, uncertain sends, worktree cleanup, leases, and capability fencing are designed to fail closed and converge after interruption.
+- **Recursive self-hosting** — a stable Parent GAM can develop an isolated Candidate GAM and gate promotion on exact evidence.
+
+### Architecture
 
 ```text
-Worker GPT        Supervisor GPT          GAM Kernel
-   │                    │                     │
-   │ autonomous work    │ engineering review │ deterministic policy
-   │ commit / PR         │ approve / revise   │ leases / evidence / merge gate
-   └───────────────┬────┴──────────────┬──────┘
-                   ▼                   ▼
-                  Git              protected state
+Human / Remote Operator
+          │
+          ▼
+ Side Panel · GAM.cmd · gamctl
+          │
+          ▼
+        gamd
+   Deterministic Kernel
+          │
+  SQLite · Git · leases
+ capabilities · evidence
+ reviews · promotion state
+          │
+          ▼
+Native Messaging Bridge
+          │
+          ▼
+ChatGPT Web Agent Fleet
 ```
 
-Worker autonomy is intentionally high inside the task and resource scope it owns. Authority remains narrow: a worker cannot approve itself, a Supervisor cannot forge machine evidence, and neither can silently mutate protected integration state.
+### Core concepts
 
-### Self-hosting safety
+| Concept | Responsibility |
+| --- | --- |
+| `ProjectCell` | Durable project/team boundary, capacity policy, repository root |
+| `AgentSlot` | Persistent worker identity and lifecycle |
+| `AgentConversationRecord` | Durable mapping between an Agent and a ChatGPT conversation generation |
+| Task | Typed unit of work with dependencies and completion authority |
+| Task workspace | Isolated Git worktree, branch, lease, capability, and base SHA |
+| `WorkClaim` | Machine-verifiable completion claim bound to exact evidence |
+| Supervisor | Independent review/integration authority |
+| GAM Kernel | Deterministic owner of durable state and authorization |
 
-GAM can develop GAM as a **Parent GAM -> isolated Candidate GAM** workflow. The Candidate must use distinct repository, `GAM_HOME`, SQLite database, named pipe, and browser profile identities; its `GAM_HOME` must also live outside the Parent `GAM_HOME` so child state cannot overwrite parent authority. Promotion is evidence-gated: Candidate changes are promoted only after committed work and objective Kernel verification bind the exact revision to the required evidence.
+### Company-style Agent management
 
-## Human and agent operation
-
-### Human mode
-
-Run or double-click:
+Every dispatched task is composed in this order:
 
 ```text
-GAM.cmd
+Company System Policy
+        ↓
+Role Charter
+        ↓
+Task Brief
+        ↓
+Revision / Dependency Evidence
+        ↓
+Managed Workspace + Completion Protocol
 ```
 
-GAM idempotently ensures the local Kernel is running, opens a dedicated Chromium profile, loads the extension, opens `chatgpt.com`, and restores durable project state. The dedicated profile is kept separate from the user's ordinary browser profile.
+The organization policy requires decoupled architecture, typed contracts, durable authority, least privilege, isolated parallel worktrees, crash convergence, objective tests/evidence, explicit ownership, documentation, and Git discipline. Task text or dependency output cannot widen the Agent's authority.
 
-### Agent mode
+Typical roles include **Architect**, **Implementer**, **Tester**, **Supervisor**, **Researcher**, and **Operator**. See [`docs/company-governance.md`](docs/company-governance.md).
 
-A Remote-capable GPT can use the same runtime without scraping GUI text:
+### Task and completion model
+
+GAM does not equate “the assistant replied” with “the work is done.”
+
+- `structured-result` requires one strict terminal `<GAM_RESULT>` JSON block; placeholders such as `Read`, `OK`, or `acknowledged` remain attention states.
+- `verified-claim` requires a Kernel-provisioned workspace, committed exact HEAD SHA, scoped claim submission, and Kernel verification.
+- `review-pass` requires a valid review protocol and does not treat failed or malformed review output as terminal success.
+- `human-approval` remains explicitly human-controlled.
+
+For software tasks, the normal authority chain is:
+
+```text
+Task → isolated worktree → commit → WorkClaim → machine verification
+     → independent review → integration/promotion authority
+```
+
+### Parallelism and prompt pacing
+
+DAG edges represent **real dependencies**, not artificial throttling. Independent work can run in parallel across different AgentSlots and worktrees.
+
+Before a physical prompt reaches the ChatGPT composer, the persistent dispatch governor applies account-level pacing: global spacing, rolling-window budget, Project/AgentSlot spacing, concurrent-generation capacity, and persisted exponential backoff after visible rate-limit signals. Ambiguous delivery never causes an automatic duplicate resend.
+
+The exact-task dispatch module provides a fail-closed typed planner for selecting one requested ready task without selecting unrelated ready tasks. It remains subject to the standard prompt governor and workspace authority.
+
+### Browser lifecycle and recovery
+
+Browser pages are execution leases, not durable worker identity. GAM can suspend and close excess trusted-idle worker tabs while preserving AgentSlot identity, canonical conversation history, checkpoints, evidence, and Git history. New demand can resume the durable worker instead of silently creating a duplicate identity.
+
+Generating, unknown/unavailable, quarantined, rollover-active, or effect-active pages fail closed and remain open. The stuck-generation convergence module combines GAM-owned page/slot facts, attempt state, stale deadlines, and recent engineering-progress evidence; it never authorizes an uncertain prompt to be automatically resent. Authority-checked stop and later cleanup require explicit convergence evidence.
+
+### Recursive self-hosting
+
+GAM supports the architecture for a **Parent → isolated Candidate → evidence-gated promotion** cycle.
+
+Parent and Candidate runtime identities must remain distinct across repository, `GAM_HOME`, SQLite database, named pipe, and browser profile. Promotion authority is durable and independent: a Candidate cannot approve itself, exact candidate/parent SHA evidence is required, rejected candidates are preserved for inspection, and replay/crash boundaries are tested for convergence.
+
+### Quick start
+
+#### Requirements
+
+- Windows 10/11 for the current Native Messaging deployment path
+- Node.js 22+
+- Chrome or Microsoft Edge (Chromium)
+- .NET 9 SDK/runtime only when building the Native Host from source
+
+#### Build and verify
+
+```powershell
+npm install
+npm run verify:full
+npm run setup:windows
+```
+
+#### Runtime commands
 
 ```powershell
 GAM.cmd status --json
@@ -80,151 +154,179 @@ GAM.cmd open "My Project" --json
 GAM.cmd doctor --json
 ```
 
-Agent mode is non-interactive and produces stable structured output. Missing projects, unavailable runtime components, and authentication requirements are reported as explicit states instead of triggering prompts or guessed recovery actions.
+`GAM.cmd` keeps a dedicated Chromium profile under `GAM_HOME`, starts the local Kernel idempotently, and never needs an OpenAI API key. The user signs in directly on the official `chatgpt.com` page; GAM does not store passwords, MFA secrets, cookies, or account tokens.
 
-## ChatGPT account login
+### Security boundaries
 
-GAM does **not** store ChatGPT credentials, passwords, MFA secrets, cookies, or account tokens.
+- Host permission is limited to `https://chatgpt.com/*`.
+- Native Messaging is restricted to the pinned extension origin.
+- The Native Host never holds the GAM admin token.
+- Worker capabilities are scoped by project/task/resource/lease and persisted only by token hash.
+- `gamctl` has no implicit admin fallback; privileged operations require explicit `--admin`.
+- Unknown, stale, ambiguous, or conflicting authority fails closed.
+- Candidate self-promotion is rejected.
+- GAM is a coordination and policy layer, **not an OS sandbox**; filesystem/terminal tools still require appropriate host/container isolation.
 
-On first launch, GAM opens `chatgpt.com` in its dedicated Chromium profile. The user signs in normally on the official ChatGPT page. Chromium persists that session in the GAM profile for later launches.
+### Development
 
-The extension reports only a coarse runtime observation to `gamd`:
-
-```text
-AuthStatus:  authenticated | authentication-required | unknown
-PageHealth: ready | generating | blocked | error | unavailable | unknown
+```powershell
+npm run check
+npm run check:control
+npm run check:architecture
+npm test
+npm run test:faults
+npm run verify
+npm run verify:full
 ```
 
-Authentication identity and page health are deliberately separate. Visible login/signup UI takes precedence over composer readiness, so an anonymous or expired-session composer is reported as `authentication-required`. `blocked` or `error` pages are never treated as authentication evidence, and unhealthy page state blocks fleet expansion until a healthy/fresh observation replaces it. Runtime reports also carry open tab count, extension version, and observation time. If authentication expires, an agent-facing `GAM ... --json` call can report that human login is required, but GAM never attempts to enter credentials or bypass MFA/CAPTCHA.
-## Git / Change Request workflow
-
-For software projects, GAM follows a company-style Git workflow instead of treating a model reply as completion:
+### Repository layout
 
 ```text
-Task
-  ↓
-Worker branch / worktree
-  ↓
-commit
-  ↓
-machine evidence
-  ↓
-Change Request
-  ↓
-Supervisor review
-  ├─ request changes → Worker pushes a new revision → review again
-  └─ approve
-        ↓
-     Merge Queue
-        ↓
-latest target branch + reviewed head
-        ↓
-integration candidate / conflict check
-        ↓
-external protected merge
-        ↓
-GAM observes Git history
-        ↓
-INTEGRATED
+src/            Browser extension runtime and typed policies
+control/        Deterministic Kernel, SQLite authority, RPC, leases, evidence
+native-host/    Chromium Native Messaging bridge
+scripts/        Build, verification, packaging, smoke, and Windows setup tools
+tests/          Browser/runtime/unit/fault tests
+docs/           Architecture and operational documentation
 ```
 
-Important invariants:
+### Contributing
 
-- the Change Request binds exact `baseSha`, `headSha`, source branch, and target branch;
-- the author cannot approve its own Change Request;
-- a review is valid only for the exact reviewed head SHA;
-- pushing a new head invalidates the previous approval;
-- entering the merge queue requires both valid machine evidence and current Supervisor approval;
-- the merge candidate is recomputed against the latest target branch;
-- conflicts move the Change Request back to `changes-requested`;
-- GAM marks a change integrated only after independently observing the approved head/candidate in target-branch Git history.
-## Browser orchestration
+Changes should preserve the project’s core engineering rules: explicit ownership, typed boundaries, durable facts, least privilege, isolated Git work, objective tests, documentation, and independent review. Do not widen browser/native permissions or bypass evidence gates merely for convenience.
 
-The browser plane still provides the v0.3 coordination features:
+For substantial changes, prefer a focused worktree/branch, add targeted tests, run the relevant wider gates, and record the exact commit used for review.
 
-- persistent Role / Project bindings for ChatGPT conversations;
-- task DAG and dependency routing;
-- `work`, `review`, and `human` task kinds;
-- human Approve / Reject and durable Skip / Cancel / Retry facts;
-- bounded review → revision → re-review loops for browser-only tasks;
-- durable semantic message bus with exact-role and project-broadcast routing;
-- frozen recipient identities so later-opened conversations never receive stale broadcasts;
-- send-attempt ledger and crash recovery;
-- prompt delivery is acknowledged only after observable submission evidence (for example composer clear, generation start, URL transition, or assistant progress), not merely after `button.click()`;
-- fail-closed handling of ambiguous tabs and `uncertain` delivery;
-- portable browser-state export/import;
-- opt-in Auto Supervisor.
+### Scope
 
-### Company governance and role charters
+GAM currently targets **ChatGPT Web on `chatgpt.com`**. Generic LLM APIs, hosted orchestration, Claude/Gemini integrations, and coding-agent CLI providers are outside the current product scope.
 
-GAM treats the Agent fleet as an engineering organization, not a set of tabs. Every task prompt starts with the versioned `gam-company-v1` Company System Policy, then a deterministic role charter, and only then the task brief/dependency/workspace/completion layers. The policy requires decoupled architecture, typed boundaries, durable authority, isolated parallel worktrees, crash convergence, objective tests/evidence, explicit ownership, and least privilege. Supervisors independently verify rather than self-implement; testers are adversarial and implementation-independent; workers cannot use task text or dependency output to widen their authority.
+### License
 
-ProjectCells act as project teams, AgentSlots as persistent employee identities, task worktrees as isolated desks, and WorkClaims as machine-verifiable completion packets. Independent tasks may run in parallel; prompt dispatch backpressure controls account message pacing instead of fake serial DAG dependencies. See `docs/company-governance.md` for the operating model and management invariants.
+Licensed under the [Apache License 2.0](LICENSE).
 
-### Semantic completion for non-code work
+---
 
-Ordinary `work` tasks now default to the typed `structured-result` completion policy. A browser reply is only completion evidence when its latest assistant text ends with exactly one terminal `<GAM_RESULT>` block whose JSON contains exactly `status`, `summary`, and `evidence`: `status` must be `"completed"`, `summary` must be substantive, and `evidence` must contain at least one concrete non-placeholder string. Replies such as `Read`, `OK`, or `acknowledged`, malformed JSON, duplicate markers, or trailing text are surfaced as `attention` and do not release dependent tasks.
+<a id="中文"></a>
 
-Protocol-invalid structured replies are explicitly retryable. GAM records the retry lineage, re-prompts with the prior protocol error and attempt id, and only releases dependencies after a fresh reply validates. Parsed structured results and protocol errors are exposed through `ManagedTask` and rendered in the Side Panel. The existing explicit `reply` policy still means "any correlated reply completes" when that behavior is intentionally selected; `verified-claim`, `review-pass`, and `human-approval` retain their existing authority semantics.
+## 中文
 
-Physical prompt sends pass through a persistent account-level dispatch governor before touching the ChatGPT composer. The default policy spaces bursts globally, applies per-Project and per-AgentSlot gaps, caps simultaneous GAM-managed generations, and enforces a rolling minute budget. Direct ChatGPT rate-limit/error UI triggers persisted exponential backoff. Deferred sends do not create a fake successful delivery and are retried only when the normal supervisor/reconciliation loop sees capacity again; GAM favors safe throughput over maximum instantaneous concurrency.
+### 项目简介
 
-The local control plane augments these browser workflows; failure of `gamd` does not cause the extension to invent state or silently resend prompts. Manifest V3 reconciliation is event-driven with a `chrome.alarms` one-minute wakeup as a durability fallback; the service worker does not rely on `setInterval` remaining alive.
+GPT Agent Manager（GAM）把多个 **ChatGPT Web 对话**组织成具有持久身份、岗位分工和工程权限边界的 Agent 团队，并由本地确定性的 GAM Kernel 管理项目、Git、租约、能力令牌、证据、审查和恢复状态。
 
-### Elastic idle-tab cleanup
+浏览器标签页只是可替换的运行载体，不是 Agent 的真实身份。GAM 的目标不是“批量操控网页”，而是把多个 GPT Worker 管理成一个小型软件工程组织。
 
-GAM treats browser tabs as disposable runtime leases, not Worker identity. The Kernel periodically reconciles durable project, task, lease, browser-effect, and AgentSlot facts. For active projects it may suspend only excess trusted-idle slots above `minSlots`; paused, draining, or archived projects may drain to zero browser tabs. A bounded idle grace prevents flap. Generating, unknown/unavailable, quarantined, rollover-active, effect-active, lease-active, or currently demanded roles fail closed and remain open.
+### 核心能力
 
-Cleanup means **suspend + close**, never delete. AgentSlot identity, canonical ChatGPT conversation, checkpoints, evidence, Git/workspace history, and chat history remain durable. When ready work later demands a suspended role, the Kernel resumes the existing matching AgentSlot before browser dispatch instead of silently creating duplicate identity. Same-role capacity is retained according to ready demand, so one remaining task does not keep every duplicate Worker page open.
+- **持久 Agent 身份**：`AgentSlot` 与浏览器 tab ID、单个 ChatGPT 对话解耦。
+- **项目隔离**：`ProjectCell`、Git worktree、lease、epoch 与 scoped capability 隔离并发工作。
+- **公司级治理**：每个任务自动注入版本化 Company System Policy 和岗位 Role Charter，再进入具体任务说明。
+- **Typed 完成协议**：`structured-result`、`verified-claim`、`review-pass`、`human-approval` 把“模型回复”与“工程完成”分开。
+- **机器可验证的软件开发**：Kernel 校验 exact commit SHA、分支/worktree、lease 与 evidence 后才允许完成。
+- **独立 Supervisor 审查**：Worker 不能自批，审查权限和实现权限分离。
+- **并行开发 + 发送背压**：真正独立的工程任务可以并行，消息发送由账号级 Governor 控速。
+- **弹性浏览器集群**：多余的可信 idle Worker 页面可以 suspend + close，但不会删除会话和持久 Agent 状态。
+- **崩溃收敛**：uncertain send、workspace cleanup、lease、capability fencing 都按照 fail-closed / replay / convergence 设计。
+- **递归自托管**：稳定 Parent GAM 可以开发隔离 Candidate GAM，并通过客观证据决定是否晋级。
 
-### Supervisor-managed Worker fleet
-
-Worker pages are controlled by durable `AgentSlot` desired state, not by ad-hoc tab operations. A Supervisor capability with `agent:fleet` may spawn, resume, suspend, or retire Workers. Browser code may only report observed page state; it cannot change fleet intent.
-
-Suspension and retirement are graceful by default: once the Supervisor requests a stop, that Worker is excluded from new task routing and cannot acquire new leases or capabilities. Existing authority remains long enough to finish the current ChatGPT generation. When the Browser Plane observes the page idle, it closes the managed tab and reports `absent`; `gamd` then atomically revokes the old capabilities, releases remaining leases, advances the slot epoch, and finalizes `suspended` or `retired`.
-
-A Worker identity is also independent of any single ChatGPT conversation. When a conversation must roll over, the Kernel persists a `WorkerCheckpoint` and `AgentConversationRollover`, closes the old `AgentConversationRecord`, fences the old browser lease, opens a new page for the same `AgentSlot`, canonicalizes the destination conversation, dispatches the handoff checkpoint, and completes only after Kernel-verified `reply-observed` evidence for that bootstrap attempt. Provisional `WEB:*` or `new` conversation identities never become durable authority.
-
-Workers can also submit typed requests such as `suggestion`, `blocker`, `question`, `resource-request`, `scope-change`, `dependency-request`, `cross-system-request`, `review-request`, and `risk-alert`. A Worker request never mutates fleet or project authority by itself; the Supervisor must accept/reject it and perform any resulting action through its own capability.
-
-## Local control plane
-
-Current durable entities include:
+### 架构
 
 ```text
-ProjectCell
-AgentSlot
-AgentConversationRecord
-WorkerCheckpoint
-AgentConversationRollover
-Resource
-ResourceLease
-CapabilityGrant
-ControlEvent
-WorkerRequest
-WorkClaim
-EvidenceArtifact
-VerificationRecord
-ChangeRequest
-ChangeRequestRevision
-SupervisorReview
-MergeQueueEntry
-BrowserRuntimeStatus
+人类 / Remote Operator
+          │
+          ▼
+ Side Panel · GAM.cmd · gamctl
+          │
+          ▼
+        gamd
+      GAM Kernel
+          │
+ SQLite · Git · Lease
+ Capability · Evidence
+ Review · Promotion
+          │
+          ▼
+ Native Messaging
+          │
+          ▼
+ ChatGPT Web Agent 集群
 ```
 
-SQLite runs with foreign keys, WAL mode, strict tables, and full synchronous durability. State-changing operations use transactions and append durable events. Lease epochs fence stale agents from mutating current authority.
+### 公司化管理模型
 
-Machine verification is deliberately limited to objective facts such as lease identity, file existence/digest, Git commit existence, branch ancestry, and mergeability. Engineering quality and architecture decisions remain the Supervisor Agent's review responsibility.
-## Installation and startup
+| 概念 | 含义 |
+| --- | --- |
+| `ProjectCell` | 项目团队/事业部边界、容量策略、代码根目录 |
+| `AgentSlot` | 持久员工/Worker 身份与生命周期 |
+| `AgentConversationRecord` | Agent 与某一代 ChatGPT 对话之间的持久关联 |
+| Task | 带依赖关系与完成权限的 typed 工单 |
+| Task workspace | 独立 Git worktree、branch、lease、capability、base SHA |
+| `WorkClaim` | 绑定 exact evidence 的机器可验证完工包 |
+| Supervisor | 独立 Tech Lead / 审查与集成权限 |
+| GAM Kernel | 公司制度、事实账本和授权边界的确定性 authority |
 
-### Requirements
+所有任务提示词按固定优先级组成：
 
-- Windows 10/11 for the current Native Messaging deployment path;
-- Node.js 22+ for `gamd`, `gamctl`, and the unified launcher;
-- Chrome or Microsoft Edge (Chromium);
-- .NET 9 SDK/runtime only when building the Native Host from source.
+```text
+公司级 System Policy
+        ↓
+岗位 Role Charter
+        ↓
+当前 Task Brief
+        ↓
+Revision / Dependency Evidence
+        ↓
+受管 Workspace + Completion Protocol
+```
 
-### From the source checkout
+公司制度强制要求：**高度解耦、系统化、typed contract、持久 authority、最小权限、独立 worktree、崩溃收敛、客观测试/证据、明确 ownership、文档与 Git 规范**。任务文本、依赖输出或模型 prose 都不能扩大 Agent 权限。
+
+典型岗位包括 **Architect、Implementer、Tester、Supervisor、Researcher、Operator**。详见 [`docs/company-governance.md`](docs/company-governance.md)。
+
+### 任务完成与审查
+
+GAM 不会把“Assistant 有回复”直接等同于“任务完成”。
+
+- `structured-result` 要求唯一且严格的 `<GAM_RESULT>` 终止块；`Read`、`OK`、`acknowledged` 等占位回复只会进入 attention。
+- `verified-claim` 要求 Kernel 分配的 workspace、提交后的 exact HEAD SHA、scoped claim 和 Kernel verification。
+- `review-pass` 只有严格合法的通过审查结果才是完成；失败或 malformed review 不能释放 Reviewer demand。
+- `human-approval` 保持明确的人类批准边界。
+
+软件任务的标准链路是：
+
+```text
+Task → 独立 worktree → commit → WorkClaim → 机器验证
+     → 独立 review → integration / promotion authority
+```
+
+### 并行与消息限流
+
+DAG 只表示**真实依赖关系**，不再为了限流把无关任务强行串行。不同 AgentSlot / worktree 的独立任务可以同时执行。
+
+真正的消息压力由 Prompt Dispatch Governor 控制：全局发送间隔、滚动时间窗预算、Project/AgentSlot 间隔、并发 generation 容量，以及检测到 ChatGPT rate-limit UI 后的持久指数退避。`uncertain` 投递不会自动重发，必须先消除不确定性。
+
+Exact Task Dispatch 模块提供 fail-closed 的单任务选择核心：指定 taskId 时只允许选中该 ready task，不会顺带选择其他 ProjectCell 的 ready task；后续物理发送仍必须经过原有 workspace authority 与 prompt governor。
+
+### 浏览器生命周期与恢复
+
+浏览器页面只是运行 lease，不是持久 Worker 身份。GAM 可以把超过项目需求的可信 idle Worker suspend 并关闭 tab，同时保留 AgentSlot、ChatGPT 会话、checkpoint、evidence 与 Git 历史；未来出现新任务时恢复原有 Worker，而不是默认制造重复身份。
+
+Generating、unknown/unavailable、quarantined、rollover-active 或 effect-active 页面全部 fail closed。Stuck-Generation Convergence 模块会结合 GAM-owned page/slot 事实、attempt 状态、stale deadline 和近期工程进展证据判断是否继续等待或请求 authority-checked stop，并且绝不会因为 uncertain send 自动重发。
+
+### 递归自托管
+
+GAM 支持 **Parent → 隔离 Candidate → Evidence-Gated Promotion** 架构。
+
+Parent 与 Candidate 的 repo、`GAM_HOME`、SQLite database、named pipe、browser profile 必须互相独立。Candidate 不能自我批准；Promotion Authority 要求 exact candidate/parent SHA 与独立 evidence，支持 replay/crash convergence，并在拒绝后保留 Candidate 源码和证据用于检查。
+
+### 快速开始
+
+#### 环境要求
+
+- Windows 10/11（当前 Native Messaging 部署路径）
+- Node.js 22+
+- Chrome 或 Microsoft Edge（Chromium）
+- 仅从源码构建 Native Host 时需要 .NET 9 SDK/runtime
 
 ```powershell
 npm install
@@ -232,123 +334,61 @@ npm run verify:full
 npm run setup:windows
 ```
 
-`setup:windows` builds and verifies the project, publishes the Native Host, computes the stable extension ID, registers the host for Chrome and Edge, prepares `GAM_HOME`, and starts GAM unless `-NoStart` is supplied.
-
-### From the Windows Runtime ZIP
-
-Extract the archive and double-click:
-
-```text
-SETUP.cmd
-```
-
-The prebuilt installer verifies Node 22+, registers the bundled Native Host, creates a persistent launcher in `GAM_HOME`, optionally creates a desktop shortcut, and starts GAM. It does not rebuild the project.
-
-### Runtime instance identity
-
-Every canonical `GAM_HOME` deterministically derives a 16-character `instanceId`. The default Windows pipe is `\\.\pipe\gpt-agent-manager-<instanceId>` rather than a machine-global pipe. `gamd`, `GAM`, `gamctl`, the installed launcher, `runtime.json`, and the Native Messaging Host all bind to that same identity.
-
-`health` exposes the daemon instance identity, and every non-health production RPC carries the expected `instanceId`. A client that reaches a pipe owned by another GAM home fails closed with `INSTANCE_MISMATCH` before authentication or control dispatch. `GAM.cmd doctor --json` reports both `instanceId` and `pipeName` for diagnostics.
-
-The stable extension identity is derived from the public `manifest.key` and is regression-checked during builds. No private signing key is stored in this repository.
-
-### Browser selection
-
-GAM searches standard Chrome and Edge installation paths. Override discovery when needed:
+#### 常用命令
 
 ```powershell
-set GAM_BROWSER_PATH=C:\path\to\chrome.exe
-GAM.cmd start
+GAM.cmd status --json
+GAM.cmd start --json
+GAM.cmd open "My Project" --json
+GAM.cmd doctor --json
 ```
 
-A dedicated profile is stored under `<GAM_HOME>\chrome-profile`.
-## Security boundaries
+GAM 使用独立 Chromium profile。用户只在官方 `chatgpt.com` 页面正常登录；GAM 不保存密码、MFA secret、cookie 或账号 token，也不需要 OpenAI API key。
 
-- Extension host permission remains exactly `https://chatgpt.com/*`.
-- Browser permissions remain `tabs`, `storage`, `sidePanel`, `nativeMessaging`, and `alarms`. `alarms` is used only as the Manifest V3 reconciliation wakeup fallback.
-- Chromium Native Messaging calls are restricted to the pinned extension origin.
-- The Native Host holds only a browser token and exposes a small allowlist; it never holds the GAM admin token.
-- Worker capabilities are project/task/resource/lease scoped and stored in SQLite only by token hash.
-- gamctl has no implicit administrator fallback: agent calls require a capability token/file, while privileged human/bootstrap operations must opt in explicitly with --admin.
-- Browser runtime reporting cannot create projects, acquire leases, issue capabilities, approve reviews, or merge changes.
-- `gamd` listens on an instance-scoped local named pipe rather than an unauthenticated TCP port; RPC instance fencing prevents another `GAM_HOME` from being mistaken for the current Kernel.
-- Unknown, stale, ambiguous, or conflicting authority fails closed.
+### 安全边界
 
-The extension and GAM Kernel are coordination and policy layers, **not an OS sandbox**. If ChatGPT agents receive filesystem/terminal access through a Remote connector, those execution tools still require an appropriate container/VM/capability boundary.
+- Host permission 仅限 `https://chatgpt.com/*`。
+- Native Messaging 只接受固定 extension origin。
+- Native Host 永远不持有 GAM admin token。
+- Worker capability 按 project/task/resource/lease 做 scoped authority，并只持久化 token hash。
+- `gamctl` 没有隐式 admin fallback；高权限操作必须显式 `--admin`。
+- unknown / stale / ambiguous / conflicting authority 一律 fail closed。
+- Candidate self-promotion 会被拒绝。
+- GAM 是协调与策略层，**不是操作系统 sandbox**；filesystem/terminal 权限仍应由 VM/container/host policy 隔离。
 
-## Verification and release
-
-Fast development gate:
+### 开发与验证
 
 ```powershell
+npm run check
+npm run check:control
+npm run check:architecture
+npm test
+npm run test:faults
 npm run verify
-```
-
-Full release gate:
-
-```powershell
 npm run verify:full
 ```
 
-The full gate includes TypeScript, static permission/UI checks, all tests, extension/control builds, Native Host publish, and real process-level smoke tests for the control plane, evidence flow, Git Change Request flow, Native Messaging protocol, and unified launcher.
-
-Release:
-
-```powershell
-npm run release
-```
-
-Produces both:
+### 目录结构
 
 ```text
-release/gpt-agent-manager-v0.5.0.zip
-release/gpt-agent-manager-v0.5.0-windows-runtime.zip
+src/            浏览器扩展运行时与 typed policy
+control/        Kernel、SQLite authority、RPC、lease、evidence
+native-host/    Chromium Native Messaging bridge
+scripts/        构建、验证、打包、smoke 与 Windows 安装工具
+tests/          浏览器/runtime/unit/fault tests
+docs/           架构与运行文档
 ```
 
-with SHA256 sidecar files. The first archive is the browser-extension payload; the second contains the prebuilt extension, GAM launcher, `gamd`/`gamctl`, Native Host, and Windows runtime installer.
-## Development principles
+### 贡献规范
 
-1. ChatGPT web conversations are the cognition plane; do not replace them with provider APIs.
-2. Git and durable machine observations are engineering facts; model prose is a claim or explanation.
-3. Worker agents should have broad decision freedom inside narrow, explicit authority.
-4. Supervisor agents perform engineering judgment; deterministic code enforces invariant policy.
-5. Persist facts and derive status instead of duplicating mutable state.
-6. Fence stale attempts with identities and epochs.
-7. Keep semantic model context separate from scheduler/control-plane metadata.
-8. Do not expand browser or host permissions merely for convenience.
-9. Prefer protected branch / Change Request workflows over direct writes to authoritative code.
-10. Fail closed when delivery, identity, ownership, or integration state is uncertain.
+所有修改都应继续遵守 GAM 的工程制度：明确 ownership、typed boundary、durable facts、least privilege、隔离 Git worktree、客观测试、文档和独立 review。不要为了方便扩大浏览器/native 权限，也不要绕过 evidence gate。
 
-## Scope
+较大的修改建议使用独立 branch/worktree，补 focused tests，再运行相关 wider gates，并以 exact commit SHA 作为审查对象。
 
-GAM currently targets ChatGPT Web on `chatgpt.com`. Generic LLM APIs, Claude, Gemini, coding-agent CLIs, and hosted multi-provider orchestration are outside the product scope.
+### 当前范围
 
-## License
+GAM 当前专注于 **`chatgpt.com` 上的 ChatGPT Web**。通用 LLM API、托管式多模型编排、Claude/Gemini 集成与 coding-agent CLI provider 暂不属于当前产品范围。
 
-Licensed under the [MIT License](LICENSE).
+### 协议
 
-## Supervisor-managed worker fleet
-
-The Project Supervisor owns worker lifecycle decisions. Workers do not clone, suspend, or retire other workers directly. A Supervisor capability with `agent:fleet` may `agent.spawn`, `agent.suspend`, `agent.resume`, or `agent.retire`; the Kernel enforces project `minSlots` / `maxSlots` and rejects unauthorized fleet changes.
-
-Each `AgentSlot` separates desired state from browser observation:
-
-```text
-Supervisor desired state     Browser observed state
-active                       absent / opening / open / error
-suspended                    open while draining -> closing -> absent
-retired                      closing -> absent
-```
-
-The Extension reconciles these states. Active slots get a ChatGPT page (or their durable conversation is reopened); suspended/retired slots stop receiving new tasks and their page closes only after an in-flight generation finishes.
-Worker capabilities can be bound to an exact `agentSlotId`. A suspend/retire request immediately removes the slot from new task dispatch and blocks new leases or capabilities. If the page is still generating, existing authority is retained only for the drain; when Browser Plane reports the tab absent, the Kernel releases the slot leases, revokes bound capabilities, increments the slot epoch, and leaves old tokens revoked even after a later resume.
-
-Workers may instead raise durable requests to the Supervisor with types including `suggestion`, `blocker`, `question`, `resource-request`, `scope-change`, `dependency-request`, `cross-system-request`, `review-request`, and `risk-alert`. A request is advisory: submitting it never changes fleet or project state. The Supervisor explicitly accepts or rejects it, performs any authorized action, and then resolves it. Open requests are visible in the Local Control Plane panel and, when exactly one active AgentSlot uses the reserved `SUPERVISOR` role, are deterministically mirrored into that Supervisor conversation through the existing duplicate-fenced Semantic Message Bus.
-
-This preserves the core rule: **maximize worker autonomy while minimizing worker authority**. Workers can identify problems and propose organizational changes; the Supervisor decides; the Kernel enforces the resulting transition.
-
-### Exact single-task dispatch planning
-
-`planExactTaskDispatch` is a pure, fail-closed selector for callers that already hold an exact task id and project boundary. It returns at most that one task: missing or duplicate ids, project mismatch, human work, cancellation, terminal evidence, and every non-`ready` state are rejected rather than falling through to another ready task or project.
-
-The success plan carries the original `ManagedTask` and its completion policy unchanged, including `verified-claim` authority metadata. A plan is **not** permission to write to ChatGPT: it is marked `prompt-governor-required` and must be handed to the existing standard dispatch path, where the persistent prompt dispatch governor acquires capacity before any physical send or attempt is created.
+本项目使用 [Apache License 2.0](LICENSE)。
