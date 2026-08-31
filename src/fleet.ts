@@ -10,10 +10,11 @@ export type FleetAction =
 export function agentConversationUrl(conversationKey?: string): string {
   if (!conversationKey?.startsWith('conversation:')) return 'https://chatgpt.com/';
   const id = conversationKey.slice('conversation:'.length);
+  if (!id || id === 'new' || /^WEB:/i.test(id)) return 'https://chatgpt.com/';
   return `https://chatgpt.com/c/${encodeURIComponent(id)}`;
 }
 
-function tabForAgent(agent: ControlAgentView, tabs: readonly ManagedTab[], mappedTabId?: number): ManagedTab | undefined {
+function ownedTabForAgent(agent: ControlAgentView, tabs: readonly ManagedTab[], mappedTabId?: number): ManagedTab | undefined {
   const owned = tabs.filter((tab) => tab.binding.agentSlotId === agent.id);
   if (mappedTabId !== undefined) {
     const mapped = owned.find((tab) => tab.tabId === mappedTabId);
@@ -22,16 +23,32 @@ function tabForAgent(agent: ControlAgentView, tabs: readonly ManagedTab[], mappe
   if (owned.length === 1) return owned[0];
   return undefined;
 }
+
+function reconciliationTabForAgent(agent: ControlAgentView, tabs: readonly ManagedTab[], mappedTabId?: number): ManagedTab | undefined {
+  const owned = ownedTabForAgent(agent, tabs, mappedTabId);
+  if (owned) return owned;
+  const reservedTabId = mappedTabId ?? agent.browserTabId;
+  if (reservedTabId === undefined || agent.browserTabId !== reservedTabId || !agent.browserLeaseId ||
+      !['opening', 'open'].includes(agent.browserState)) return undefined;
+  const reserved = tabs.find((tab) => tab.tabId === reservedTabId);
+  return reserved && !reserved.binding.agentSlotId ? reserved : undefined;
+}
 export function planFleetReconciliation(
   agents: readonly ControlAgentView[],
   tabs: readonly ManagedTab[],
   mappedTabs: Readonly<Record<string, number>>,
+  now = Date.now(),
+  openingGraceMs = 30_000,
 ): FleetAction[] {
   const actions: FleetAction[] = [];
   for (const agent of agents) {
-    const tab = tabForAgent(agent, tabs, mappedTabs[agent.id]);
+    const tab = reconciliationTabForAgent(agent, tabs, mappedTabs[agent.id]);
     if (agent.desiredState === 'active') {
       if (!tab) {
+        const reservedTabId = mappedTabs[agent.id] ?? agent.browserTabId;
+        if (agent.browserState === 'opening' && reservedTabId !== undefined &&
+            (agent.browserObservedAt === undefined || now - agent.browserObservedAt <= openingGraceMs)) continue;
+        if (agent.browserState !== 'absent') { actions.push({ kind: 'report-absent', slotId: agent.id }); continue; }
         actions.push({ kind: 'open', slotId: agent.id, url: agentConversationUrl(agent.conversationKey) });
         continue;
       }
@@ -55,7 +72,7 @@ export function filterFleetTaskTabs(
   const allowed = new Set<number>();
   for (const agent of agents) {
     if (agent.desiredState !== 'active' || agent.browserQuarantined) continue;
-    const tab = tabForAgent(agent, tabs, mappedTabs[agent.id]);
+    const tab = ownedTabForAgent(agent, tabs, mappedTabs[agent.id]);
     if (tab) allowed.add(tab.tabId);
   }
   return tabs.filter((tab) => allowed.has(tab.tabId));

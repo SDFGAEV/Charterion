@@ -28,6 +28,13 @@ const background = textByFile.get(resolve(srcRoot, 'background.ts')) ?? '';
 const backgroundLines = background.split(/\r?\n/).length;
 if (backgroundLines > 950) throw new Error(`src/background.ts exceeded 950-line coordinator budget: ${backgroundLines}`);
 
+const blankCreate = background.indexOf("chrome.tabs.create({ url: 'about:blank', active: false })");
+const fleetBind = background.indexOf('await updateBinding(tab.id', blankCreate);
+const fleetNavigate = background.indexOf("chrome.tabs.update(tab.id, { url: action.url, active: false })", fleetBind);
+if (blankCreate < 0 || fleetBind < 0 || fleetNavigate < 0 || !(blankCreate < fleetBind && fleetBind < fleetNavigate)) {
+  throw new Error('Fleet tab ownership must be persisted before ChatGPT navigation');
+}
+
 const tabCreateOwners = locations('chrome.tabs.create(');
 const tabRemoveOwners = locations('chrome.tabs.remove(');
 if (tabCreateOwners.some((file) => file !== 'src/background.ts')) throw new Error(`chrome.tabs.create escaped fleet runtime: ${tabCreateOwners.join(', ')}`);
@@ -67,7 +74,15 @@ const attempts = textByFile.get(resolve(srcRoot, 'attempts.ts')) ?? '';
 if (!attempts.includes("uncertain: new Set(['reply-observed'])")) {
   throw new Error('uncertain delivery must not become auto-retryable or acknowledged later');
 }
+const adapter = textByFile.get(resolve(srcRoot, 'chatgptAdapter.ts')) ?? '';
+if (!adapter.includes("!/^WEB:/i.test(decoded)")) throw new Error('Temporary WEB conversation ids must not become durable bindings');
+const fleet = textByFile.get(resolve(srcRoot, 'fleet.ts')) ?? '';
+if (!fleet.includes("/^WEB:/i.test(id)") || !fleet.includes("return 'https://chatgpt.com/'")) throw new Error('Fleet resume must reject temporary WEB conversation ids');
+if (!fleet.includes("agent.browserState === 'opening'") || !fleet.includes("kind: 'report-absent'")) {
+  throw new Error('Fleet opening reservation fence is missing');
+}
 const controlPlane = await readFile(resolve(root, 'control/src/controlPlane.ts'), 'utf8');
+if (!controlPlane.includes('canonicalConversationKey(input.conversationKey)') || !controlPlane.includes("/^WEB:/i.test(id)")) throw new Error('Kernel canonical conversation authority fence is missing');
 for (const fence of ['Stale agent browser observation', 'Stale browser runtime observation']) {
   if (!controlPlane.includes(fence)) throw new Error(`Kernel observation fence missing: ${fence}`);
 }

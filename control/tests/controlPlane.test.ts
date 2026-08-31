@@ -45,6 +45,16 @@ describe('project cells and agent slots', () => {
     expect(second.leaseEpoch).toBe(2);
     expect(second.conversationKey).toBe('conversation:b');
   });
+
+  it('rejects provisional conversation identities at Kernel authority', () => {
+    const { plane } = harness();
+    const project = plane.createProject({ name: 'Canonical', rootPath: 'E:/canonical' }, 1);
+    const slot = plane.createAgentSlot(project.id, 'ROLE01', 2);
+    expect(() => plane.bindAgentConversation(slot.id, 'conversation:WEB:temporary', 3)).toThrow(/canonical durable/i);
+    expect(() => plane.bindAgentConversation(slot.id, 'conversation:new', 4)).toThrow(/canonical durable/i);
+    expect(() => plane.reportAgentBrowser({ slotId: slot.id, profileId: 'gam-default', browserState: 'open', tabId: 9, conversationKey: 'conversation:WEB:temporary' }, 5)).toThrow(/canonical durable/i);
+    expect(plane.getAgentSlot(slot.id)).toMatchObject({ status: 'idle', browserState: 'absent' });
+  });
 });
 describe('resource leases', () => {
   it('enforces shared/exclusive conflicts and monotonic resource epochs', () => {

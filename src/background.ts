@@ -699,12 +699,18 @@ async function reconcileAgentFleetOnce(): Promise<void> {
           }
           continue;
         }
-        const tab = await chrome.tabs.create({ url: action.url, active: false });
+        const tab = await chrome.tabs.create({ url: 'about:blank', active: false });
         if (tab.id === undefined) throw new Error(`Chrome did not return a tab id for agent slot ${agent.id}`);
         mapping[agent.id] = tab.id; await saveFleetTabMap(mapping);
         const key = agent.conversationKey ?? `url:${action.url}`;
         await updateBinding(tab.id, key, { role: agent.role, project: project.name, notes: `GAM fleet slot ${agent.id}`, agentSlotId: agent.id });
         await reportNativeAgentBrowser({ slotId: agent.id, profileId: 'gam-default', browserState: 'opening', tabId: tab.id, observedAt: Date.now() });
+        try { await chrome.tabs.update(tab.id, { url: action.url, active: false }); } catch (error) {
+          await clearFleetBinding(undefined, tab.id); delete mapping[agent.id]; await saveFleetTabMap(mapping);
+          try { await chrome.tabs.remove(tab.id); } catch { /* failed launch tab may already be gone */ }
+          await reportNativeAgentBrowser({ slotId: agent.id, profileId: 'gam-default', browserState: 'absent', observedAt: Date.now() });
+          throw error;
+        }
       } else if (action.kind === 'close') {
         await tabOperations.run(action.tabId, async () => {
         await reportNativeAgentBrowser({ slotId: agent.id, profileId: 'gam-default', browserState: 'closing', tabId: action.tabId, observedAt: Date.now() });

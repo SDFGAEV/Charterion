@@ -47,7 +47,9 @@ export function extractConversationId(url: string): string | undefined {
     const direct = parsed.pathname.match(/^\/c\/([^/?#]+)/)?.[1];
     const customGpt = parsed.pathname.match(/^\/g\/[^/]+\/c\/([^/?#]+)/)?.[1];
     const value = direct ?? customGpt;
-    return value ? decodeURIComponent(value) : undefined;
+    if (!value) return undefined;
+    const decoded = decodeURIComponent(value);
+    return decoded !== 'new' && !/^WEB:/i.test(decoded) ? decoded : undefined;
   } catch {
     return undefined;
   }

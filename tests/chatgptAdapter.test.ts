@@ -19,6 +19,9 @@ describe('ChatGPT adapter identity', () => {
     expect(extractConversationId('https://chatgpt.com/g/g-123-helper/c/custom-1')).toBe('custom-1');
     expect(extractConversationId('https://chatgpt.com/')).toBeUndefined();
     expect(conversationKey('https://chatgpt.com/c/a%20b')).toBe('conversation:a b');
+    expect(extractConversationId('https://chatgpt.com/c/WEB:temporary-1')).toBeUndefined();
+    expect(extractConversationId('https://chatgpt.com/c/WEB%3Atemporary-2')).toBeUndefined();
+    expect(conversationKey('https://chatgpt.com/c/WEB:temporary-1')).toBe('url:https://chatgpt.com/c/WEB:temporary-1');
   });
 
   it('normalizes the browser page title without inventing a role', () => {

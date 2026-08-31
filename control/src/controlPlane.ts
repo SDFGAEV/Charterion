@@ -35,6 +35,15 @@ function nonEmpty(value: string, label: string): string {
   return trimmed;
 }
 
+
+function canonicalConversationKey(value: string): string {
+  const key = nonEmpty(value, 'Conversation key');
+  if (!key.startsWith('conversation:')) throw new Error('Only durable ChatGPT conversation identities may bind an agent slot');
+  const id = key.slice('conversation:'.length);
+  if (!id || id === 'new' || /^WEB:/i.test(id)) throw new Error('Conversation key must be a canonical durable ChatGPT identity');
+  return key;
+}
+
 function positiveInt(value: number, label: string, allowZero = false): number {
   if (!Number.isInteger(value) || value < (allowZero ? 0 : 1)) throw new Error(`${label} is invalid`);
   return value;
@@ -233,7 +242,7 @@ export class ControlPlane {
     return rows.map(agentFrom);
   }
   bindAgentConversation(slotId: string, conversationKey: string, now = Date.now()): AgentSlot {
-    const key = nonEmpty(conversationKey, 'Conversation key');
+    const key = canonicalConversationKey(conversationKey);
     return this.database.transaction(() => {
       const slot = this.getAgentSlot(slotId);
       const project = this.requireProject(slot.projectId);
@@ -326,8 +335,7 @@ export class ControlPlane {
       let conversationKey = slot.conversationKey;
       let nextEpoch = slot.leaseEpoch;
       if (input.conversationKey) {
-        const key = nonEmpty(input.conversationKey, 'Conversation key');
-        if (!key.startsWith('conversation:')) throw new Error('Only durable ChatGPT conversation identities may bind an agent slot');
+        const key = canonicalConversationKey(input.conversationKey);
         if (conversationKey && conversationKey !== key) throw new Error('Browser cannot rebind an agent slot to a different durable conversation');
         const conflict = this.database.db.prepare('SELECT id FROM agent_slots WHERE project_id=? AND conversation_key=? AND id<>?').get(slot.projectId, key, slot.id) as { id?: string } | undefined;
         if (conflict?.id) throw new Error(`Conversation ${key} is already bound inside project ${slot.projectId}`);

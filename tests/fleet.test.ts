@@ -25,6 +25,8 @@ describe('agent fleet reconciliation', () => {
   it('opens an active slot and resumes a durable conversation URL', () => {
     expect(agentConversationUrl()).toBe('https://chatgpt.com/');
     expect(agentConversationUrl('conversation:abc/def')).toBe('https://chatgpt.com/c/abc%2Fdef');
+    expect(agentConversationUrl('conversation:WEB:temporary')).toBe('https://chatgpt.com/');
+    expect(agentConversationUrl('conversation:new')).toBe('https://chatgpt.com/');
     expect(planFleetReconciliation([agent()], [], {})).toEqual([
       { kind: 'open', slotId: 'slot-1', url: 'https://chatgpt.com/' },
     ]);
@@ -35,8 +37,16 @@ describe('agent fleet reconciliation', () => {
 
   it('does not trust a stale mapped tab id without AgentSlot identity', () => {
     const unrelated = tab(7, 'url:https://chatgpt.com/', null);
-    expect(planFleetReconciliation([agent({ browserState: 'open' })], [unrelated], { 'slot-1': 7 })).toEqual([
-      { kind: 'open', slotId: 'slot-1', url: 'https://chatgpt.com/' },
+    expect(planFleetReconciliation([agent({ browserState: 'open', browserTabId: 7 })], [unrelated], { 'slot-1': 7 })).toEqual([
+      { kind: 'report-absent', slotId: 'slot-1' },
+    ]);
+  });
+
+  it('holds a fresh opening reservation instead of spawning duplicate tabs', () => {
+    const opening = agent({ browserState: 'opening', browserTabId: 7, browserObservedAt: 1_000 });
+    expect(planFleetReconciliation([opening], [], { 'slot-1': 7 }, 5_000, 10_000)).toEqual([]);
+    expect(planFleetReconciliation([opening], [], { 'slot-1': 7 }, 12_001, 10_000)).toEqual([
+      { kind: 'report-absent', slotId: 'slot-1' },
     ]);
   });
 
@@ -46,9 +56,18 @@ describe('agent fleet reconciliation', () => {
     ]);
   });
 
+  it('re-adopts an exact leased browser address for reconciliation without making it dispatchable', () => {
+    const unbound = tab(11, 'conversation:canonical-new', null);
+    const leased = agent({ browserState: 'open', browserTabId: 11, browserLeaseId: 'lease-1', browserLeaseEpoch: 1 });
+    expect(planFleetReconciliation([leased], [unbound], { 'slot-1': 11 })).toEqual([
+      { kind: 'report-open', slotId: 'slot-1', tabId: 11, conversationKey: 'conversation:canonical-new' },
+    ]);
+    expect(filterFleetTaskTabs([unbound], [leased], { 'slot-1': 11 })).toEqual([]);
+  });
+
   it('reports a durable conversation once an active tab acquires identity', () => {
-    const actions = planFleetReconciliation([agent()], [tab(7, 'conversation:new')], { 'slot-1': 7 });
-    expect(actions).toEqual([{ kind: 'report-open', slotId: 'slot-1', tabId: 7, conversationKey: 'conversation:new' }]);
+    const actions = planFleetReconciliation([agent()], [tab(7, 'conversation:canonical-new')], { 'slot-1': 7 });
+    expect(actions).toEqual([{ kind: 'report-open', slotId: 'slot-1', tabId: 7, conversationKey: 'conversation:canonical-new' }]);
   });
 
   it('gracefully drains a generating worker before closing its page', () => {
