@@ -11,10 +11,10 @@ for (const [name] of Object.entries(dependencies).sort(([a], [b]) => a.localeCom
   rows.push({ name, version: meta.version ?? dependencies[name], license: meta.license ?? 'See package metadata' });
 }
 let out = '# Third-Party Notices\n\n';
-out += 'This file summarizes direct npm dependencies used by GPT Agent Manager. ';
+out += 'This file summarizes direct npm dependencies used by Charterion. ';
 out += 'Transitive dependency metadata remains authoritative in `package-lock.json` and each dependency package.\n\n';
 out += '| Package | Version | License |\n| --- | --- | --- |\n';
 for (const row of rows) out += `| \`${row.name}\` | \`${row.version}\` | ${row.license} |\n`;
-out += '\nGPT Agent Manager itself is licensed under Apache-2.0; see `LICENSE`.\n';
+out += '\nCharterion itself is licensed under Apache-2.0; see `LICENSE`.\n';
 await writeFile(resolve(root, 'THIRD_PARTY_NOTICES.md'), out, 'utf8');
 console.log(`THIRD_PARTY_NOTICES_WRITTEN direct_dependencies=${rows.length}`);

@@ -102,7 +102,7 @@ for (const item of manifest.languages) {
   if (JSON.stringify(links) !== JSON.stringify(englishLinks)) errors.push(`${item.file}: relative link target drift: ${JSON.stringify(links)}`);
   for (const target of links) checkTarget(item.file, target, errors);
   if (navBlock(text) !== navigation(item.locale)) errors.push(`${item.file}: language navigation drift`);
-  if (!text.startsWith('# GPT Agent Manager\n')) errors.push(`${item.file}: canonical project name/header changed`);
+  if (!text.startsWith(`# ${schema.invariants.canonical_project_title}\n`)) errors.push(`${item.file}: canonical project title/header changed`);
   if (!text.includes(`version-${pkg.version}-`)) errors.push(`${item.file}: version badge does not match ${pkg.version}`);
   for (const required of ['Apache-2.0', '](LICENSE)', '](NOTICE)', '](THIRD_PARTY_NOTICES.md)']) {
     if (!text.includes(required)) errors.push(`${item.file}: missing required reference ${required}`);

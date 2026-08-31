@@ -54,7 +54,7 @@ export function sourceSectionDigests() {
   return out;
 }
 function loadState() {
-  if (!existsSync(statePath)) return { schema: 'gpt-agent-manager.readme-translation-state.v1', source_locale: 'en', source_digest: '', translations: {} };
+  if (!existsSync(statePath)) return { schema: 'charterion.readme-translation-state.v1', source_locale: 'en', source_digest: '', translations: {} };
   return loadJson(statePath);
 }
 function writeState(state) { writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`, 'utf8'); }
@@ -95,7 +95,7 @@ function markCurrent(locales) {
 function initState() {
   const digest = sourceDigest();
   const sections = sourceSectionDigests();
-  const state = { schema: 'gpt-agent-manager.readme-translation-state.v1', source_locale: 'en', source_digest: digest, source_sections: sections, translations: {} };
+  const state = { schema: 'charterion.readme-translation-state.v1', source_locale: 'en', source_digest: digest, source_sections: sections, translations: {} };
   for (const item of languages()) if (item.locale !== 'en') state.translations[item.locale] = { source_digest: digest, status: 'current', section_digests: sections };
   writeState(state);
   console.log(`README_I18N_STATE_INIT languages=${languages().length} source=${digest.slice(0, 12)}`);

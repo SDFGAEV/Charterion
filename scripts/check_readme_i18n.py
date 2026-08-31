@@ -133,8 +133,8 @@ def run(release: bool) -> tuple[dict, list[str], list[str]]:
         expected_nav = navigation(locale)
         if navigation_block(text) != expected_nav:
             errors.append(f"{file_name}: language navigation drift")
-        if not text.startswith("# GPT Agent Manager\n"):
-            errors.append(f"{file_name}: canonical project name/header changed")
+        if not text.startswith(f"# {schema['invariants']['canonical_project_title']}\n"):
+            errors.append(f"{file_name}: canonical project title/header changed")
         if version_token not in text:
             errors.append(f"{file_name}: README version badge does not match {version}")
         for required in ("Apache-2.0", "](LICENSE)", "](NOTICE)", "](THIRD_PARTY_NOTICES.md)"):

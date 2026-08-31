@@ -10,7 +10,7 @@ const readmeManifest = JSON.parse(await readFile(resolve(root, 'docs/readme/LANG
 const readmeCheck = spawnSync(process.execPath, [resolve(root, 'scripts/check-readme-i18n.mjs'), '--release', '--json'], { encoding: 'utf8' });
 if (readmeCheck.status !== 0) throw new Error(`README i18n release gate failed: ${readmeCheck.stdout || readmeCheck.stderr}`);
 const readmeEvidence = JSON.parse(readmeCheck.stdout.trim());
-const archiveName = `gpt-agent-manager-v${pkg.version}-windows-runtime.zip`;
+const archiveName = `charterion-v${pkg.version}-windows-runtime.zip`;
 const archivePath = resolve(outDir, archiveName);
 
 const crcTable = Array.from({ length: 256 }, (_, n) => {

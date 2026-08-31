@@ -66,7 +66,7 @@ def source_digest() -> str:
 
 def load_state() -> dict:
     if not STATE_PATH.exists():
-        return {"schema": "gpt-agent-manager.readme-translation-state.v1", "source_locale": "en", "source_digest": "", "translations": {}}
+        return {"schema": "charterion.readme-translation-state.v1", "source_locale": "en", "source_digest": "", "translations": {}}
     return load_json(STATE_PATH)
 
 def sync_navigation() -> None:
@@ -112,7 +112,7 @@ def mark_current(locales: list[str]) -> None:
 def init_state() -> None:
     digest = source_digest()
     state = {
-        "schema": "gpt-agent-manager.readme-translation-state.v1",
+        "schema": "charterion.readme-translation-state.v1",
         "source_locale": "en",
         "source_digest": digest,
         "translations": {},

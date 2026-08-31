@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-This file summarizes direct npm dependencies used by GPT Agent Manager. Transitive dependency metadata remains authoritative in `package-lock.json` and each dependency package.
+This file summarizes direct npm dependencies used by Charterion. Transitive dependency metadata remains authoritative in `package-lock.json` and each dependency package.
 
 | Package | Version | License |
 | --- | --- | --- |
@@ -12,4 +12,4 @@ This file summarizes direct npm dependencies used by GPT Agent Manager. Transiti
 | `typescript` | `5.9.3` | Apache-2.0 |
 | `vitest` | `3.2.7` | MIT |
 
-GPT Agent Manager itself is licensed under Apache-2.0; see `LICENSE`.
+Charterion itself is licensed under Apache-2.0; see `LICENSE`.

@@ -1,5 +1,5 @@
 {
-  "schema": "gpt-agent-manager.readme-languages.v1",
+  "schema": "charterion.readme-languages.v1",
   "default": "en",
   "languages": [
     {"locale": "en", "name": "English", "file": "README.md", "tier": 0},

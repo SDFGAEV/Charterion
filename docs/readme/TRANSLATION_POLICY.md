@@ -4,7 +4,7 @@
 
 ## Invariants
 
-- Keep the canonical project name `GPT Agent Manager` unchanged in every locale.
+- Keep the canonical project name `Charterion` unchanged in every locale.
 - Preserve section IDs, section order, commands, code blocks, paths, identifiers, JSON keys, environment variables, protocol names, database tables, SHAs, branches, and API symbols.
 - Translate explanatory prose naturally; do not force word-for-word translations of architecture terms.
 - Keep `fail-closed`, `Source of Truth`, `AgentSlot`, `ProjectCell`, `WorkClaim`, `GAM_HOME`, and other canonical contract tokens when translation would weaken precision.

@@ -1,4 +1,4 @@
-# GPT Agent Manager
+# Charterion: Open-Source Multi-Agent Engineering Control Plane for ChatGPT Web Agents
 
 [![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 [![Chromium](https://img.shields.io/badge/Chromium-Manifest%20V3-4285F4.svg)](manifest.json)
@@ -18,7 +18,7 @@
 <!-- readme-section:overview -->
 ## Vue d’ensemble
 
-GPT Agent Manager (GAM) gère plusieurs conversations ChatGPT Web comme des engineering Workers persistants. Un deterministic Kernel local conserve Agent identity, projets, Git, leases, capabilities, evidence, reviews et recovery state. Les tabs du navigateur sont des runtime surfaces remplaçables, pas la Source of Truth de l’Agent.
+Charterion gère plusieurs conversations ChatGPT Web comme des engineering Workers persistants. Un deterministic Kernel local conserve Agent identity, projets, Git, leases, capabilities, evidence, reviews et recovery state. Les tabs du navigateur sont des runtime surfaces remplaçables, pas la Source of Truth de l’Agent.
 
 GAM vise le fonctionnement d’une petite entreprise logicielle : Workers dans des scopes isolés, Supervisors sur des exact evidence, Kernel responsable des authority boundaries.
 
@@ -219,4 +219,4 @@ Ce projet utilise [Apache-2.0](LICENSE) et inclut [NOTICE](NOTICE) ainsi que [Th
 <!-- readme-section:status -->
 ## État du développement
 
-GPT Agent Manager est en active development. Un Release Candidate n’est considéré stable qu’après repository verification, README i18n release gate et evidence-based review/promotion boundaries.
+Charterion est en active development. Un Release Candidate n’est considéré stable qu’après repository verification, README i18n release gate et evidence-based review/promotion boundaries.

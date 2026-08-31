@@ -1,4 +1,4 @@
-# GPT Agent Manager
+# Charterion: Open-Source Multi-Agent Engineering Control Plane for ChatGPT Web Agents
 
 [![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 [![Chromium](https://img.shields.io/badge/Chromium-Manifest%20V3-4285F4.svg)](manifest.json)
@@ -18,7 +18,7 @@
 <!-- readme-section:overview -->
 ## 概要
 
-GPT Agent Manager（GAM）は、複数の ChatGPT Web 会話を永続的な engineering Worker として管理し、ローカルの deterministic Kernel が Agent identity、Project、Git、lease、capability、evidence、review、recovery state を保持します。ブラウザ tab は交換可能な runtime surface であり、Agent の Source of Truth ではありません。
+Charterionは、複数の ChatGPT Web 会話を永続的な engineering Worker として管理し、ローカルの deterministic Kernel が Agent identity、Project、Git、lease、capability、evidence、review、recovery state を保持します。ブラウザ tab は交換可能な runtime surface であり、Agent の Source of Truth ではありません。
 
 GAM は tab automation ではなく小規模なソフトウェア会社のように動作することを目標にしています。Worker は隔離された scope で作業し、Supervisor は exact evidence をレビューし、Kernel が authority boundary を強制します。
 
@@ -219,4 +219,4 @@ GAM は現在 `chatgpt.com` 上の ChatGPT Web に集中しています。Generi
 <!-- readme-section:status -->
 ## 開発状況
 
-GPT Agent Manager は active development 中です。Release Candidate は repository verification、README i18n release gate、evidence-based review/promotion boundary を通過して初めて stable と扱われます。
+Charterion は active development 中です。Release Candidate は repository verification、README i18n release gate、evidence-based review/promotion boundary を通過して初めて stable と扱われます。

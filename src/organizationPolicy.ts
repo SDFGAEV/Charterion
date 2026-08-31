@@ -95,7 +95,7 @@ export function buildOrganizationSystemPrompt(context: OrganizationPromptContext
   const roleKind = organizationRoleKind(context.targetRole);
   return `--- GAM company system policy ---
 policyVersion: ${GAM_COMPANY_POLICY_VERSION}
-company: GPT Agent Manager Engineering Organization
+company: Charterion Engineering Organization
 project: ${context.project}
 assignedRole: ${context.targetRole}
 roleClass: ${roleKind}

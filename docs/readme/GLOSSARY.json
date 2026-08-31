@@ -1,5 +1,5 @@
 {
-  "schema": "gpt-agent-manager.readme-glossary.v1",
+  "schema": "charterion.readme-glossary.v1",
   "terms": {
     "authority": {"zh-CN": "authority / 权威", "zh-TW": "authority / 權威", "ja": "authority", "ko": "authority", "es": "authority", "pt-BR": "authority", "fr": "authority", "de": "Authority", "ru": "authority", "notes": "Do not flatten this into generic permission/access terminology."},
     "binding": {"zh-CN": "绑定", "zh-TW": "綁定", "ja": "バインディング", "ko": "바인딩", "es": "vinculación", "pt-BR": "vinculação", "fr": "liaison", "de": "Binding", "ru": "привязка"},

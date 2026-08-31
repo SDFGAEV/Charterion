@@ -1,5 +1,5 @@
 {
-  "schema": "gpt-agent-manager.readme-schema.v1",
+  "schema": "charterion.readme-schema.v1",
   "source_locale": "en",
   "section_ids": [
     "overview",
@@ -23,7 +23,8 @@
   "invariants": {
     "code_blocks": "byte-identical-across-locales",
     "relative_link_targets": "identical-excluding-language-navigation",
-    "canonical_project_name": "GPT Agent Manager",
+    "canonical_project_name": "Charterion",
+    "canonical_project_title": "Charterion: Open-Source Multi-Agent Engineering Control Plane for ChatGPT Web Agents",
     "license": "Apache-2.0"
   }
 }

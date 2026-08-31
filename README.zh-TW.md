@@ -1,4 +1,4 @@
-# GPT Agent Manager
+# Charterion: Open-Source Multi-Agent Engineering Control Plane for ChatGPT Web Agents
 
 [![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 [![Chromium](https://img.shields.io/badge/Chromium-Manifest%20V3-4285F4.svg)](manifest.json)
@@ -18,7 +18,7 @@
 <!-- readme-section:overview -->
 ## 專案概覽
 
-GPT Agent Manager（GAM）把多個 ChatGPT Web 對話管理成持久工程 Worker，並由本地 deterministic Kernel 保存 Agent 身分、專案、Git、lease、capability、evidence、review 與 recovery state。瀏覽器 tab 是可替換的 runtime surface，不是 Agent 的 Source of Truth。
+Charterion把多個 ChatGPT Web 對話管理成持久工程 Worker，並由本地 deterministic Kernel 保存 Agent 身分、專案、Git、lease、capability、evidence、review 與 recovery state。瀏覽器 tab 是可替換的 runtime surface，不是 Agent 的 Source of Truth。
 
 GAM 的目標更接近小型軟體公司，而不是 tab 自動化器：Worker 在隔離 scope 內工作，Supervisor 審查 exact evidence，Kernel 強制 authority boundary。
 
@@ -219,4 +219,4 @@ GAM 目前專注 `chatgpt.com` 上的 ChatGPT Web。Generic LLM API、hosted orc
 <!-- readme-section:status -->
 ## 開發狀態
 
-GPT Agent Manager 仍在持續開發。Release Candidate 必須通過 repository verification、README i18n release gate，以及 evidence-based review/promotion boundary，才可視為 stable。
+Charterion 仍在持續開發。Release Candidate 必須通過 repository verification、README i18n release gate，以及 evidence-based review/promotion boundary，才可視為 stable。
