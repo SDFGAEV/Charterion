@@ -2,7 +2,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-export const CONTROL_SCHEMA_VERSION = 18;
+export const CONTROL_SCHEMA_VERSION = 19;
 
 export class ControlDatabase {
   readonly db: DatabaseSync;
@@ -86,6 +86,7 @@ export class ControlDatabase {
     if (version < 16) this.migrateV16();
     if (version < 17) this.migrateV17();
     if (version < 18) this.migrateV18();
+    if (version < 19) this.migrateV19();
     this.db.prepare(`
       INSERT INTO schema_meta(key, value) VALUES('schema_version', ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value
@@ -490,6 +491,32 @@ export class ControlDatabase {
           ON agent_workspaces(browser_profile_id) WHERE browser_profile_id IS NOT NULL AND status<>'retired';
         CREATE UNIQUE INDEX idx_agent_workspaces_tool_profile_live
           ON agent_workspaces(tool_profile_ref) WHERE tool_profile_ref IS NOT NULL AND status<>'retired';
+      `);
+    });
+  }
+  private migrateV19(): void {
+    this.transaction(() => {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS organization_agent_conversations (
+          id TEXT PRIMARY KEY,
+          organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+          agent_id TEXT NOT NULL REFERENCES organization_agents(id) ON DELETE CASCADE,
+          generation INTEGER NOT NULL CHECK(generation > 0),
+          conversation_key TEXT NOT NULL UNIQUE,
+          status TEXT NOT NULL CHECK(status IN ('active','closed')),
+          predecessor_conversation_key TEXT,
+          runtime_slot_id TEXT REFERENCES agent_slots(id) ON DELETE SET NULL,
+          started_at INTEGER NOT NULL,
+          ended_at INTEGER,
+          close_reason TEXT,
+          UNIQUE(agent_id,generation)
+        ) STRICT;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_org_agent_conversations_one_active
+          ON organization_agent_conversations(agent_id) WHERE status='active';
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_org_agent_conversations_runtime_active
+          ON organization_agent_conversations(runtime_slot_id) WHERE runtime_slot_id IS NOT NULL AND status='active';
+        CREATE INDEX IF NOT EXISTS idx_org_agent_conversations_agent
+          ON organization_agent_conversations(agent_id,generation);
       `);
     });
   }

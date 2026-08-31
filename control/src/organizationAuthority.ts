@@ -325,7 +325,10 @@ export class OrganizationAuthority {
       const agent = this.getAgent(agentId);
       if (!agent.runtimeSlotId) return agent;
       const previous = agent.runtimeSlotId;
+      const slot = this.database.db.prepare('SELECT browser_state FROM agent_slots WHERE id=?').get(previous) as { browser_state?: string } | undefined;
+      if (slot?.browser_state && slot.browser_state !== 'absent') throw new Error('Organization Agent runtime must be browser-absent before unbinding');
       this.database.db.prepare('UPDATE organization_agents SET runtime_slot_id=NULL,updated_at=? WHERE id=?').run(now, agent.id);
+      this.database.db.prepare("UPDATE organization_agent_conversations SET runtime_slot_id=NULL WHERE agent_id=? AND status='active' AND runtime_slot_id=?").run(agent.id, previous);
       this.event('ORGANIZATION_AGENT_RUNTIME_UNBOUND', agent.id, { runtimeSlotId: previous }, now);
       return this.getAgent(agent.id);
     });
@@ -336,12 +339,18 @@ export class OrganizationAuthority {
       if (agent.status !== 'active') throw new Error('Only an active organization Agent can bind a runtime slot');
       const workspace = this.activeAgentWorkspace(agent.id);
       if (!workspace || workspace.status !== 'ready') throw new Error('Organization Agent requires one ready dedicated workspace before runtime binding');
-      const slot = this.database.db.prepare('SELECT id FROM agent_slots WHERE id=?').get(required(slotId, 'Runtime slot id')) as { id?: string } | undefined;
+      if (agent.runtimeSlotId && agent.runtimeSlotId !== slotId) throw new Error('Unbind the Organization Agent runtime slot before moving it');
+      const slot = this.database.db.prepare('SELECT id,conversation_key FROM agent_slots WHERE id=?').get(required(slotId, 'Runtime slot id')) as { id?: string; conversation_key?: string | null } | undefined;
       if (!slot?.id) throw new Error(`Agent slot ${slotId} does not exist`);
+      const activeConversation = this.database.db.prepare("SELECT conversation_key FROM organization_agent_conversations WHERE agent_id=? AND status='active'").get(agent.id) as { conversation_key?: string } | undefined;
+      if (activeConversation?.conversation_key && slot.conversation_key && slot.conversation_key !== activeConversation.conversation_key) {
+        throw new Error('Runtime slot conversation conflicts with the persistent Organization Agent conversation');
+      }
       const conflict = this.database.db.prepare('SELECT id FROM organization_agents WHERE runtime_slot_id=? AND id<>?').get(slotId, agent.id) as { id?: string } | undefined;
       if (conflict?.id) throw new Error(`Runtime slot ${slotId} is already bound to organization Agent ${conflict.id}`);
       this.database.db.prepare('UPDATE organization_agents SET runtime_slot_id=?,updated_at=? WHERE id=?').run(slotId, now, agent.id);
-      this.event('ORGANIZATION_AGENT_RUNTIME_BOUND', agent.id, { runtimeSlotId: slotId }, now);
+      this.database.db.prepare("UPDATE organization_agent_conversations SET runtime_slot_id=? WHERE agent_id=? AND status='active'").run(slotId, agent.id);
+      this.event('ORGANIZATION_AGENT_RUNTIME_BOUND', agent.id, { runtimeSlotId: slotId, conversationKey: activeConversation?.conversation_key ?? null }, now);
       return this.getAgent(agent.id);
     });
   }
