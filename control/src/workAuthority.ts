@@ -121,6 +121,35 @@ export class WorkAuthority {
     return typeof task.completionPolicy === 'string' ? task.completionPolicy : undefined;
   }
 
+  appendTask(input: Record<string, unknown>, now = Date.now()): WorkDocument {
+    const task = document(input, 'task');
+    const id = workId(task, 'task');
+    if (task.kind !== 'work') throw new Error('Appended execution task must be work kind');
+    if (task.completionPolicy !== 'verified-claim') throw new Error('Appended execution task must use verified-claim completion');
+    const dependsOn = stringIds(task.dependsOn ?? [], `task ${id}.dependsOn`);
+    stringIds(task.attemptIds ?? [], `task ${id}.attemptIds`);
+    return this.database.transaction(() => {
+      const existing = this.getTask(id);
+      if (existing) {
+        const identity = ['kind','completionPolicy','project','targetRole','organizationId','organizationAgentId','missionId','organizationWorkItemId','projectId'];
+        if (identity.some((key) => existing[key] !== task[key])) throw new Error(`Task ${id} already exists with a different execution identity`);
+        return existing;
+      }
+      for (const dependencyId of dependsOn) {
+        if (!this.getTask(dependencyId)) throw new Error(`Task ${id} references missing dependency ${dependencyId}`);
+      }
+      const count = this.database.db.prepare('SELECT COUNT(*) AS count FROM manager_tasks').get() as { count: number };
+      this.database.db.prepare('INSERT INTO manager_tasks(id,position,document_json,updated_at) VALUES(?,?,?,?)')
+        .run(id, Number(count.count), JSON.stringify(task), now);
+      const meta = this.database.db.prepare('SELECT revision FROM manager_work_meta WHERE singleton=1').get() as { revision: number };
+      const revision = Number(meta.revision) + 1;
+      this.database.db.prepare('UPDATE manager_work_meta SET revision=?,updated_at=? WHERE singleton=1').run(revision, now);
+      this.database.db.prepare(`INSERT INTO events(project_id,type,subject,payload_json,created_at) VALUES(NULL,'WORK_TASK_APPENDED',?,?,?)`)
+        .run(id, JSON.stringify({ revision, source: 'organization-execution' }), now);
+      return this.getTask(id)!;
+    });
+  }
+
   completeVerifiedClaim(input: { taskId: string; claimId: string; verificationId: string; commitSha?: string }, now = Date.now()): KernelWorkSnapshot {
     const taskId = input.taskId.trim();
     const claimId = input.claimId.trim();

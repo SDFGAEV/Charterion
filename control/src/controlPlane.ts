@@ -14,6 +14,7 @@ import { WorkIngressAuthority } from './workIngressAuthority';
 import { AgentContinuityAuthority } from './agentContinuityAuthority';
 import { FindingAuthority } from './findingAuthority';
 import { ReviewPoolAuthority } from './reviewPoolAuthority';
+import { OrganizationExecutionBridge } from './organizationExecutionBridge';
 import { planElasticFleet, type ElasticFleetDecision } from './elasticFleet';
 import type {
   AcquireLeaseInput,
@@ -175,6 +176,7 @@ export class ControlPlane {
   readonly agentContinuity: AgentContinuityAuthority;
   readonly findings: FindingAuthority;
   readonly reviewPool: ReviewPoolAuthority;
+  readonly organizationExecution: OrganizationExecutionBridge;
   constructor(readonly database: ControlDatabase, gitPath = 'git') {
     this.evidence = new EvidenceAuthority(database, gitPath);
     this.changes = new ChangeRequestAuthority(database, gitPath);
@@ -189,6 +191,7 @@ export class ControlPlane {
     this.agentContinuity = new AgentContinuityAuthority(database);
     this.findings = new FindingAuthority(database);
     this.reviewPool = new ReviewPoolAuthority(database);
+    this.organizationExecution = new OrganizationExecutionBridge(database, this.organization, this.work);
   }
 
   provisionTaskWorkspace(projectId: string, slotId: string, taskId: string, now = Date.now()) {
