@@ -46,7 +46,21 @@ describe('control database migrations', () => {
     expect(slot).toMatchObject({ conversation_key: 'conversation:legacy', conversation_generation: 1, rollover_state: 'idle', active_rollover_id: null });
     expect(lineage).toHaveLength(1);
     expect(lineage[0]).toMatchObject({ id: 'legacy:slot-1', generation: 1, conversation_key: 'conversation:legacy', status: 'active' });
-    expect(Number(version.value)).toBe(14);
+    expect(Number(version.value)).toBe(CONTROL_SCHEMA_VERSION);
+    database.close(); rmSync(dir, { recursive: true, force: true });
+  });
+  it('migrates v14 databases to durable self-hosting promotion authority', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'gam-db-v14-'));
+    const path = join(dir, 'global.db');
+    const initial = new ControlDatabase(path);
+    initial.db.exec("DROP TABLE self_hosting_promotions; UPDATE schema_meta SET value='14' WHERE key='schema_version';");
+    initial.close();
+
+    const database = new ControlDatabase(path);
+    const table = database.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='self_hosting_promotions'").get() as { name?: string } | undefined;
+    const version = database.db.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get() as { value: string };
+    expect(table?.name).toBe('self_hosting_promotions');
+    expect(Number(version.value)).toBe(CONTROL_SCHEMA_VERSION);
     database.close(); rmSync(dir, { recursive: true, force: true });
   });
 });

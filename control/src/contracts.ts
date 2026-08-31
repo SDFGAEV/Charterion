@@ -218,6 +218,19 @@ export interface RegisterArtifactInput {
   kind: ArtifactKind;
   metadata?: Record<string, unknown>;
 }
+export type SelfHostingPromotionStatus = 'pending' | 'approved' | 'rejected' | 'promoted';
+export interface SelfHostingPromotion {
+  id: string; projectId: string; idempotencyKey: string; claimId: string; candidateSubject: string; candidateSha: string;
+  targetRef: string; expectedParentSha: string; requestedBy: string; status: SelfHostingPromotionStatus;
+  decisionBy?: string; decisionReason?: string; decisionAt?: number; promotedAt?: number; createdAt: number; updatedAt: number;
+}
+export interface RequestSelfHostingPromotionInput {
+  projectId: string; idempotencyKey: string; claimId: string; candidateSha: string; targetRef: string; expectedParentSha: string; requestedBy: string;
+}
+export interface DecideSelfHostingPromotionInput {
+  promotionId: string; authoritySubject: string; decision: 'approve' | 'reject'; reason: string;
+}
+export interface ApplySelfHostingPromotionInput { promotionId: string; authoritySubject: string; }
 export type ChangeRequestStatus = 'open' | 'changes-requested' | 'approved' | 'queued' | 'integrated' | 'closed';
 export type SupervisorReviewVerdict = 'approve' | 'request-changes';
 export type MergeQueueStatus = 'queued' | 'validating' | 'integrated' | 'failed' | 'cancelled';

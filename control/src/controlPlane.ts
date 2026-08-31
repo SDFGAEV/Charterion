@@ -8,6 +8,7 @@ import { WorkAuthority } from './workAuthority';
 import { BrowserAuthority } from './browserAuthority';
 import { ConversationAuthority } from './conversationAuthority';
 import { WorkspaceAuthority } from './workspaceAuthority';
+import { PromotionAuthority } from './promotionAuthority';
 import { planElasticFleet, type ElasticFleetDecision } from './elasticFleet';
 import type {
   AcquireLeaseInput,
@@ -163,6 +164,7 @@ export class ControlPlane {
   readonly browser: BrowserAuthority;
   readonly conversations: ConversationAuthority;
   readonly workspaces: WorkspaceAuthority;
+  readonly promotions: PromotionAuthority;
   constructor(readonly database: ControlDatabase, gitPath = 'git') {
     this.evidence = new EvidenceAuthority(database, gitPath);
     this.changes = new ChangeRequestAuthority(database, gitPath);
@@ -171,6 +173,7 @@ export class ControlPlane {
     this.browser = new BrowserAuthority(database);
     this.conversations = new ConversationAuthority(database);
     this.workspaces = new WorkspaceAuthority(database, gitPath);
+    this.promotions = new PromotionAuthority(database, gitPath);
   }
 
   provisionTaskWorkspace(projectId: string, slotId: string, taskId: string, now = Date.now()) {

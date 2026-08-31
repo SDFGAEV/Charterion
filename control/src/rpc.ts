@@ -21,6 +21,9 @@ import type {
   RpcResponse,
   SubmitWorkerRequestInput,
   WorkerRequestType,
+  RequestSelfHostingPromotionInput,
+  DecideSelfHostingPromotionInput,
+  ApplySelfHostingPromotionInput,
 } from './contracts';
 
 const ISOLATION_TIERS = ['c0-host', 'c1-container', 'c2-hypervisor', 'c3-ephemeral-vm'] as const;
@@ -146,7 +149,7 @@ export class RpcRouter {
     switch (request.method) {
       case 'control.snapshot':
         this.requireBrowserOrAdmin(request);
-        const changeRequests = this.plane.changes.listChangeRequests().slice(-200); return { protocolVersion: 2, projects: this.plane.listProjects(), agents: this.plane.listAgentSlots(), resources: this.plane.listResources(), leases: this.plane.listLeases(), claims: this.plane.evidence.listClaims().slice(-200), artifacts: this.plane.evidence.listArtifacts().slice(-200), verifications: this.plane.evidence.listVerifications().slice(-200), changeRequests, reviews: changeRequests.flatMap((item) => this.plane.changes.listReviews(item.id)).slice(-200), mergeQueue: this.plane.changes.listQueue().slice(-200), workerRequests: this.plane.requests.list().slice(-200), browserRuntime: this.plane.listBrowserRuntime(), events: this.plane.listEvents(undefined, 0, 200) };
+        const changeRequests = this.plane.changes.listChangeRequests().slice(-200); return { protocolVersion: 2, projects: this.plane.listProjects(), agents: this.plane.listAgentSlots(), resources: this.plane.listResources(), leases: this.plane.listLeases(), claims: this.plane.evidence.listClaims().slice(-200), artifacts: this.plane.evidence.listArtifacts().slice(-200), verifications: this.plane.evidence.listVerifications().slice(-200), changeRequests, reviews: changeRequests.flatMap((item) => this.plane.changes.listReviews(item.id)).slice(-200), mergeQueue: this.plane.changes.listQueue().slice(-200), workerRequests: this.plane.requests.list().slice(-200), promotions: this.plane.promotions.list().slice(-200), browserRuntime: this.plane.listBrowserRuntime(), events: this.plane.listEvents(undefined, 0, 200) };
       case 'browser.report': return this.browserReport(request, params);
       case 'browser.status': this.requireBrowserOrAdmin(request); return this.plane.listBrowserRuntime();
       case 'project.create': return this.projectCreate(request, params);
@@ -301,6 +304,10 @@ export class RpcRouter {
       case 'merge.queue-list': return this.mergeQueueList(request, params);
       case 'merge.prepare': return this.mergePrepare(request, params);
       case 'merge.observe': return this.mergeObserve(request, params);
+      case 'promotion.request': return this.promotionRequest(request, params);
+      case 'promotion.decide': return this.promotionDecide(request, params);
+      case 'promotion.apply': return this.promotionApply(request, params);
+      case 'promotion.list': return this.promotionList(request, params);
       case 'request.submit': return this.requestSubmit(request, params);
       case 'request.list': return this.requestList(request, params);
       case 'request.decide': return this.requestDecide(request, params);
@@ -654,6 +661,50 @@ export class RpcRouter {
     return this.plane.verifyCapability(token, 'status:read', options);
   }
 
+  private promotionRequest(request: RpcRequest, params: Record<string, unknown>): unknown {
+    const input: RequestSelfHostingPromotionInput = {
+      projectId: stringParam(params, 'projectId')!, idempotencyKey: stringParam(params, 'idempotencyKey')!,
+      claimId: stringParam(params, 'claimId')!, candidateSha: stringParam(params, 'candidateSha')!,
+      targetRef: stringParam(params, 'targetRef')!, expectedParentSha: stringParam(params, 'expectedParentSha')!,
+      requestedBy: stringParam(params, 'requestedBy')!,
+    };
+    const grant = this.requireCapability(request, 'promotion:request', { projectId: input.projectId });
+    if (grant.subject !== input.requestedBy) throw new Error('Capability subject does not match promotion requester');
+    return this.plane.promotions.request(input);
+  }
+
+  private promotionDecide(request: RpcRequest, params: Record<string, unknown>): unknown {
+    const promotionId = stringParam(params, 'promotionId')!;
+    const current = this.plane.promotions.get(promotionId);
+    const authoritySubject = stringParam(params, 'authoritySubject')!;
+    const grant = this.requireCapability(request, 'promotion:decide', { projectId: current.projectId });
+    if (grant.subject !== authoritySubject) throw new Error('Capability subject does not match promotion authority');
+    if (grant.taskId !== undefined) throw new Error('Task-bound capability cannot decide Parent/Candidate promotion');
+    const input: DecideSelfHostingPromotionInput = {
+      promotionId, authoritySubject,
+      decision: enumParam(params, 'decision', ['approve', 'reject'] as const)!,
+      reason: stringParam(params, 'reason')!,
+    };
+    return this.plane.promotions.decide(input);
+  }
+
+  private promotionApply(request: RpcRequest, params: Record<string, unknown>): unknown {
+    const promotionId = stringParam(params, 'promotionId')!;
+    const current = this.plane.promotions.get(promotionId);
+    const authoritySubject = stringParam(params, 'authoritySubject')!;
+    const grant = this.requireCapability(request, 'promotion:apply', { projectId: current.projectId });
+    if (grant.subject !== authoritySubject) throw new Error('Capability subject does not match promotion authority');
+    if (grant.taskId !== undefined) throw new Error('Task-bound capability cannot apply Parent/Candidate promotion');
+    const input: ApplySelfHostingPromotionInput = { promotionId, authoritySubject };
+    return this.plane.promotions.apply(input);
+  }
+
+  private promotionList(request: RpcRequest, params: Record<string, unknown>): unknown {
+    const projectId = stringParam(params, 'projectId')!;
+    if (request.auth?.adminToken) this.requireAdmin(request);
+    else this.requireCapability(request, 'promotion:read', { projectId });
+    return this.plane.promotions.list(projectId);
+  }
   private requestSubmit(request: RpcRequest, params: Record<string, unknown>): unknown {
     const input: SubmitWorkerRequestInput = { projectId: stringParam(params, 'projectId')!, fromSubject: stringParam(params, 'fromSubject')!, type: enumParam<WorkerRequestType>(params, 'type', WORKER_REQUEST_TYPES)!, title: stringParam(params, 'title')!, body: stringParam(params, 'body')! };
     const taskId = stringParam(params, 'taskId', true); const suggestedAction = stringParam(params, 'suggestedAction', true);

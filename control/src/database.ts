@@ -2,7 +2,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-export const CONTROL_SCHEMA_VERSION = 14;
+export const CONTROL_SCHEMA_VERSION = 15;
 
 export class ControlDatabase {
   readonly db: DatabaseSync;
@@ -82,6 +82,7 @@ export class ControlDatabase {
     if (version < 12) this.migrateV12();
     if (version < 13) this.migrateV13();
     if (version < 14) this.migrateV14();
+    if (version < 15) this.migrateV15();
     this.db.prepare(`
       INSERT INTO schema_meta(key, value) VALUES('schema_version', ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value
@@ -304,6 +305,33 @@ export class ControlDatabase {
     });
   }
 
+  private migrateV15(): void {
+    this.transaction(() => {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS self_hosting_promotions (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          idempotency_key TEXT NOT NULL,
+          claim_id TEXT NOT NULL REFERENCES claims(id) ON DELETE RESTRICT,
+          candidate_subject TEXT NOT NULL,
+          candidate_sha TEXT NOT NULL,
+          target_ref TEXT NOT NULL,
+          expected_parent_sha TEXT NOT NULL,
+          requested_by TEXT NOT NULL,
+          status TEXT NOT NULL CHECK(status IN ('pending','approved','rejected','promoted')),
+          decision_by TEXT,
+          decision_reason TEXT,
+          decision_at INTEGER,
+          promoted_at INTEGER,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          UNIQUE(project_id,idempotency_key)
+        ) STRICT;
+        CREATE INDEX IF NOT EXISTS idx_self_hosting_promotions_project_status
+          ON self_hosting_promotions(project_id,status,created_at);
+      `);
+    });
+  }
   private createConversationContinuityTables(): void {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS agent_conversations (
