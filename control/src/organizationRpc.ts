@@ -44,7 +44,7 @@ const METHODS = new Set([
   'org-agent.create','org-agent.list','org-agent.bind-runtime','org-agent.unbind-runtime','org-agent.assign-domain',
   'org-agent.workspace-list','org-agent.workspace-request','org-agent.workspace-configure','org-agent.workspace-prompt','org-agent.workspace-fail','org-agent.workspace-retire',
   'mission.create','mission.list','mission.assign-dri','mission.add-member','mission.status',
-  'org-work.create','org-work.list','org-work.assign-owner','org-work.status','org-work.complete','org-work.outcome',
+  'org-work.create','org-work.list','org-work.assign-owner','org-work.status','org-work.complete','org-work.outcome','org-work.project-execution',
   'work-request.submit','work-request.get','work-request.list','work-request.accept','work-request.reject','work-request.cancel',
 ]);
 
@@ -84,6 +84,7 @@ export class OrganizationRpcController {
       case 'org-work.status': return this.workStatus(request, params);
       case 'org-work.complete': return this.workComplete(request, params);
       case 'org-work.outcome': this.auth.requireBrowserOrAdmin(request); return this.plane.ingress.getOutcome(stringParam(params,'workItemId')!);
+      case 'org-work.project-execution': this.auth.requireBrowserOrAdmin(request); return this.plane.organizationExecution.materialize(stringParam(params,'workItemId')!);
       case 'work-request.submit': return this.requestSubmit(request, params);
       case 'work-request.get': return this.requestGet(request, params);
       case 'work-request.list': return this.requestList(request, params);

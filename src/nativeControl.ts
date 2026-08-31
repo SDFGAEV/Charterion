@@ -422,6 +422,15 @@ export async function provisionNativeTaskWorkspace(input: { projectId: string; s
   return parseNativeTaskWorkspace(await sendNativeMutation('workspace.provision', input));
 }
 
+export interface NativeOrganizationExecutionProjection {
+  workItemId: string; missionId: string; organizationAgentId: string; projectId: string;
+  runtimeSlotId: string; managerTaskId: string; task: import('./contracts').AgentTask;
+}
+
+export async function projectNativeOrganizationWork(workItemId: string): Promise<NativeOrganizationExecutionProjection> {
+  return await sendNativeMutation('org-work.project-execution', { workItemId }) as NativeOrganizationExecutionProjection;
+}
+
 export interface AgentRuntimeReportInput {
   slotId: string; profileId: string; tabId: number; contentEpoch: string; revision: number;
   pageStatus: import('./contracts').AgentStatus; semanticSignature: string; observedAt: number;
