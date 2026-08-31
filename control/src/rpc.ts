@@ -308,12 +308,19 @@ export class RpcRouter {
       case 'events.list': return this.eventsList(request, params);
       case 'work.snapshot': return this.workSnapshot(request);
       case 'work.replace': return this.workReplace(request, params);
+      case 'fleet.reconcile': return this.fleetReconcile(request, params);
       case 'workspace.provision': return this.workspaceProvision(request, params);
       case 'workspace.list': return this.workspaceList(request, params);
       case 'workspace.release': return this.workspaceRelease(request, params);
       default: throw new Error(`Unknown RPC method ${request.method}`);
     }
   }
+  private fleetReconcile(request: RpcRequest, params: Record<string, unknown>): unknown {
+    this.requireBrowser(request);
+    void params;
+    return this.plane.reconcileElasticFleet();
+  }
+
   private agentRuntimeReport(request: RpcRequest, params: Record<string, unknown>): unknown {
     this.requireBrowser(request);
     return this.plane.reportAgentRuntime({

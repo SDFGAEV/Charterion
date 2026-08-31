@@ -10,7 +10,7 @@ import { parseReviewResult } from './review';
 import { assertMessageDeliveryAvailable, buildSemanticMessagePrompt, createAgentMessage, planMessageDispatch } from './messageBus';
 import { createPortableManagerState, parsePortableManagerState, restorePortableAttempts, stringifyPortableManagerState } from './stateTransfer';
 import { recoverAttempt, type AttemptRecoveryObservation } from './recovery';
-import { beginNativeAgentRollover, dispatchNativeBrowserOperation, planNativeBrowserOperation, readNativeControlSnapshot, readNativeWorkSnapshot, replaceNativeWorkState, reportNativeAgentBrowser, reportNativeBrowserRuntime, settleNativeBrowserOperation } from './nativeControl';
+import { beginNativeAgentRollover, dispatchNativeBrowserOperation, planNativeBrowserOperation, readNativeControlSnapshot, readNativeWorkSnapshot, replaceNativeWorkState, reportNativeAgentBrowser, reportNativeBrowserRuntime, reconcileNativeElasticFleet, settleNativeBrowserOperation } from './nativeControl';
 import { planFleetReconciliation, workerRequestMessage } from './fleet';
 import { bootstrapPendingConversationRollover, bootstrapReplyAttemptId, completeConversationRolloverForReply, requestAutomaticConversationRollover } from './conversationRollover';
 import { deriveBrowserRuntimeObservation, fleetExpansionAllowed } from './browserRuntime';
@@ -664,6 +664,7 @@ async function deliverWorkerRequestMessages(snapshot: import('./nativeControl').
 }
 
 async function reconcileAgentFleetOnce(): Promise<void> {
+    await reconcileNativeElasticFleet();
     const snapshot = await readNativeControlSnapshot();
     const state = await workState();
     const currentTabs = await managedTabs(state.attempts);
@@ -806,7 +807,7 @@ chrome.runtime.onMessage.addListener((message: ManagerRequest | RuntimeNotice, s
   }
   if (message.type === 'manager:create-task') {
     void createTask(message.input)
-      .then(async (task) => { await notifyManagerChanged(); kickSupervisor(); sendResponse({ ok: true, task }); })
+      .then(async (task) => { await notifyManagerChanged(); scheduleFleetReconcile(0); kickSupervisor(); sendResponse({ ok: true, task }); })
       .catch((error) => sendResponse({ ok: false, error: String(error) }));
     return true;
   }
@@ -824,35 +825,35 @@ chrome.runtime.onMessage.addListener((message: ManagerRequest | RuntimeNotice, s
   }
   if (message.type === 'manager:run-ready-tasks') {
     void runReadyTasks()
-      .then(async (results) => { await notifyManagerChanged(); sendResponse({ ok: true, results }); })
+      .then(async (results) => { await notifyManagerChanged(); scheduleFleetReconcile(0); sendResponse({ ok: true, results }); })
       .catch((error) => sendResponse({ ok: false, error: String(error) }));
     return true;
   }  if (message.type === 'manager:retry-task') {
     void requestTaskRetry(message.taskId)
-      .then(async (task) => { await notifyManagerChanged(); kickSupervisor(); sendResponse({ ok: true, task }); })
+      .then(async (task) => { await notifyManagerChanged(); scheduleFleetReconcile(0); kickSupervisor(); sendResponse({ ok: true, task }); })
       .catch((error) => sendResponse({ ok: false, error: String(error) }));
     return true;
   }  if (message.type === 'manager:retry-review-loop') {
     void retryReviewLoop(message.taskId)
-      .then(async (updated) => { await notifyManagerChanged(); kickSupervisor(); sendResponse({ ok: true, ...updated }); })
+      .then(async (updated) => { await notifyManagerChanged(); scheduleFleetReconcile(0); kickSupervisor(); sendResponse({ ok: true, ...updated }); })
       .catch((error) => sendResponse({ ok: false, error: String(error) }));
     return true;
   }
   if (message.type === 'manager:decide-human-task') {
     void decideHumanTask(message.taskId, message.decision, message.reason ?? '')
-      .then(async (task) => { await notifyManagerChanged(); kickSupervisor(); sendResponse({ ok: true, task }); })
+      .then(async (task) => { await notifyManagerChanged(); scheduleFleetReconcile(0); kickSupervisor(); sendResponse({ ok: true, task }); })
       .catch((error) => sendResponse({ ok: false, error: String(error) }));
     return true;
   }
   if (message.type === 'manager:skip-task') {
     void setTaskDisposition(message.taskId, 'skip', message.reason ?? '')
-      .then(async (task) => { await notifyManagerChanged(); kickSupervisor(); sendResponse({ ok: true, task }); })
+      .then(async (task) => { await notifyManagerChanged(); scheduleFleetReconcile(0); kickSupervisor(); sendResponse({ ok: true, task }); })
       .catch((error) => sendResponse({ ok: false, error: String(error) }));
     return true;
   }
   if (message.type === 'manager:cancel-task') {
     void setTaskDisposition(message.taskId, 'cancel', message.reason ?? '')
-      .then(async (task) => { await notifyManagerChanged(); kickSupervisor(); sendResponse({ ok: true, task }); })
+      .then(async (task) => { await notifyManagerChanged(); scheduleFleetReconcile(0); kickSupervisor(); sendResponse({ ok: true, task }); })
       .catch((error) => sendResponse({ ok: false, error: String(error) }));
     return true;
   }
@@ -874,7 +875,7 @@ chrome.runtime.onMessage.addListener((message: ManagerRequest | RuntimeNotice, s
   }
   if (message.type === 'manager:import-state') {
     void importStateDocument(message.document)
-      .then(async () => { await notifyManagerChanged(); if (await supervisorEnabled()) kickSupervisor(); sendResponse({ ok: true }); })
+      .then(async () => { await notifyManagerChanged(); scheduleFleetReconcile(0); if (await supervisorEnabled()) kickSupervisor(); sendResponse({ ok: true }); })
       .catch((error) => sendResponse({ ok: false, error: String(error) }));
     return true;
   }

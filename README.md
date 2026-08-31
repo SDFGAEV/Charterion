@@ -159,6 +159,12 @@ Physical prompt sends pass through a persistent account-level dispatch governor 
 
 The local control plane augments these browser workflows; failure of `gamd` does not cause the extension to invent state or silently resend prompts. Manifest V3 reconciliation is event-driven with a `chrome.alarms` one-minute wakeup as a durability fallback; the service worker does not rely on `setInterval` remaining alive.
 
+### Elastic idle-tab cleanup
+
+GAM treats browser tabs as disposable runtime leases, not Worker identity. The Kernel periodically reconciles durable project, task, lease, browser-effect, and AgentSlot facts. For active projects it may suspend only excess trusted-idle slots above `minSlots`; paused, draining, or archived projects may drain to zero browser tabs. A bounded idle grace prevents flap. Generating, unknown/unavailable, quarantined, rollover-active, effect-active, lease-active, or currently demanded roles fail closed and remain open.
+
+Cleanup means **suspend + close**, never delete. AgentSlot identity, canonical ChatGPT conversation, checkpoints, evidence, Git/workspace history, and chat history remain durable. When ready work later demands a suspended role, the Kernel resumes the existing matching AgentSlot before browser dispatch instead of silently creating duplicate identity. Same-role capacity is retained according to ready demand, so one remaining task does not keep every duplicate Worker page open.
+
 ### Supervisor-managed Worker fleet
 
 Worker pages are controlled by durable `AgentSlot` desired state, not by ad-hoc tab operations. A Supervisor capability with `agent:fleet` may spawn, resume, suspend, or retire Workers. Browser code may only report observed page state; it cannot change fleet intent.

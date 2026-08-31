@@ -8,6 +8,7 @@ import { WorkAuthority } from './workAuthority';
 import { BrowserAuthority } from './browserAuthority';
 import { ConversationAuthority } from './conversationAuthority';
 import { WorkspaceAuthority } from './workspaceAuthority';
+import { planElasticFleet, type ElasticFleetDecision } from './elasticFleet';
 import type {
   AcquireLeaseInput,
   AgentSlot,
@@ -403,6 +404,26 @@ export class ControlPlane {
       }
       return this.getAgentSlot(slotId);
     });
+  }
+
+  reconcileElasticFleet(now = Date.now(), idleGraceMs?: number): ElasticFleetDecision[] {
+    const work = this.work.snapshot();
+    const agents = this.listAgentSlots();
+    const activeLeaseRows = this.database.db.prepare("SELECT DISTINCT holder_id FROM leases l JOIN resources r ON r.id=l.resource_id WHERE l.status='active' AND r.kind<>'browser-capacity'").all() as { holder_id: string }[];
+    const unsettledRows = this.database.db.prepare("SELECT DISTINCT slot_id FROM browser_operations WHERE slot_id IS NOT NULL AND state<>'settled'").all() as { slot_id: string }[];
+    const activeLeaseHolderIds = new Set(activeLeaseRows.map((row) => String(row.holder_id)));
+    const unsettledBrowserSlotIds = new Set(unsettledRows.map((row) => String(row.slot_id)));
+    const decisions: ElasticFleetDecision[] = [];
+    for (const project of this.listProjects()) {
+      const planned = planElasticFleet({ project, agents, work, activeLeaseHolderIds, unsettledBrowserSlotIds, now, ...(idleGraceMs === undefined ? {} : { idleGraceMs }) });
+      for (const decision of planned) {
+        if (decision.kind === 'suspend') this.suspendAgentSlot(decision.slotId, now);
+        else this.resumeAgentSlot(decision.slotId, now);
+        this.event(project.id, decision.kind === 'suspend' ? 'ELASTIC_FLEET_SUSPEND_REQUESTED' : 'ELASTIC_FLEET_RESUME_REQUESTED', decision.slotId, { reason: decision.reason }, now);
+        decisions.push(decision);
+      }
+    }
+    return decisions;
   }
 
   resumeAgentSlot(slotId: string, now = Date.now()): AgentSlot {

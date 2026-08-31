@@ -436,6 +436,10 @@ async function sendNativeMutation(method: string, params: Record<string, unknown
   return response.result;
 }
 
+export async function reconcileNativeElasticFleet(): Promise<unknown> {
+  return await sendNativeMutation('fleet.reconcile', {});
+}
+
 export async function reportNativeAgentRuntime(input: AgentRuntimeReportInput): Promise<void> {
   await sendNativeMutation('agent.runtime-report', input as unknown as Record<string, unknown>);
 }
