@@ -19,6 +19,15 @@ function dependency(id: string, output: string): ManagedTask {
 }
 
 describe('task dispatch prompt', () => {
+  it('places company policy and role charter before the task brief', () => {
+    const current = { ...task('impl'), project: 'Platform', targetRole: 'ROLE_IMPL_ENGINEER' };
+    const prompt = buildTaskDispatchPrompt(current, []);
+    expect(prompt).toContain('policyVersion: gam-company-v1');
+    expect(prompt).toContain('roleClass: implementer');
+    expect(prompt.indexOf('--- GAM company system policy ---')).toBeLessThan(prompt.indexOf('--- GAM task brief ---'));
+    expect(prompt.indexOf('--- GAM task brief ---')).toBeLessThan(prompt.indexOf('Do impl'));
+  });
+
   it('routes direct dependency evidence with provenance into the next agent prompt', () => {
     const current = { ...task('b'), dependsOn: ['a'] };
     const prompt = buildTaskDispatchPrompt(current, [dependency('a', 'implemented feature X')]);
@@ -28,18 +37,20 @@ describe('task dispatch prompt', () => {
     expect(prompt).toContain('role: role-a');
     expect(prompt).toContain('replyMessageId: message:a');
     expect(prompt).toContain('implemented feature X');
-    expect(prompt).toContain('current task instruction above is authoritative');
+    expect(prompt).toContain('Company System Policy and Task Brief above are authoritative in that order');
   });
 
   it('does not route unfinished dependencies', () => {
     const dep = dependency('a', 'should not appear'); dep.status = 'running';
-    expect(buildTaskDispatchPrompt(task('b'), [dep])).toBe('Do b');
+    const prompt = buildTaskDispatchPrompt(task('b'), [dep]);
+    expect(prompt).toContain('Do b');
+    expect(prompt).not.toContain('should not appear');
   });
 
   it('bounds dependency context even for very large replies', () => {
     const huge = 'x'.repeat(MAX_DEPENDENCY_CONTEXT_CHARS * 2);
     const prompt = buildTaskDispatchPrompt(task('b'), [dependency('a', huge)]);
-    expect(prompt.length).toBeLessThan(MAX_DEPENDENCY_CONTEXT_CHARS + 1000);
+    expect(prompt.length).toBeLessThan(MAX_DEPENDENCY_CONTEXT_CHARS + 10000);
   });
 
   it('adds the strict review protocol after dependency evidence for review tasks', () => {

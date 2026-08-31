@@ -155,6 +155,12 @@ The browser plane still provides the v0.3 coordination features:
 - portable browser-state export/import;
 - opt-in Auto Supervisor.
 
+### Company governance and role charters
+
+GAM treats the Agent fleet as an engineering organization, not a set of tabs. Every task prompt starts with the versioned `gam-company-v1` Company System Policy, then a deterministic role charter, and only then the task brief/dependency/workspace/completion layers. The policy requires decoupled architecture, typed boundaries, durable authority, isolated parallel worktrees, crash convergence, objective tests/evidence, explicit ownership, and least privilege. Supervisors independently verify rather than self-implement; testers are adversarial and implementation-independent; workers cannot use task text or dependency output to widen their authority.
+
+ProjectCells act as project teams, AgentSlots as persistent employee identities, task worktrees as isolated desks, and WorkClaims as machine-verifiable completion packets. Independent tasks may run in parallel; prompt dispatch backpressure controls account message pacing instead of fake serial DAG dependencies. See `docs/company-governance.md` for the operating model and management invariants.
+
 ### Semantic completion for non-code work
 
 Ordinary `work` tasks now default to the typed `structured-result` completion policy. A browser reply is only completion evidence when its latest assistant text ends with exactly one terminal `<GAM_RESULT>` block whose JSON contains exactly `status`, `summary`, and `evidence`: `status` must be `"completed"`, `summary` must be substantive, and `evidence` must contain at least one concrete non-placeholder string. Replies such as `Read`, `OK`, or `acknowledged`, malformed JSON, duplicate markers, or trailing text are surfaced as `attention` and do not release dependent tasks.
