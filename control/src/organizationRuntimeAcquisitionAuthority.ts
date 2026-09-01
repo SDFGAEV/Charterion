@@ -125,22 +125,22 @@ export class OrganizationRuntimeAcquisitionAuthority {
 
   request(input: RequestOrganizationRuntimeAcquisitionInput, now = Date.now()): OrganizationRuntimeAcquisitionRecord {
     const normalized = this.validateInput(input);
-    const existing = this.database.db.prepare(
-      'SELECT * FROM organization_runtime_acquisitions WHERE organization_id=? AND idempotency_key=?',
-    ).get(normalized.organizationId, normalized.idempotencyKey) as Row | undefined;
-    if (existing) {
-      const record = recordFrom(existing);
-      if (record.agentId !== normalized.agentId || record.projectId !== normalized.projectId || record.role !== normalized.role) {
-        throw new Error('Runtime acquisition idempotency key is bound to different intent');
-      }
-      return record;
-    }
-    const live = this.database.db.prepare(
-      "SELECT id FROM organization_runtime_acquisitions WHERE agent_id=? AND status IN ('requested','acquiring','acquired')",
-    ).get(normalized.agentId) as { id?: string } | undefined;
-    if (live?.id) throw new Error('Organization Agent already has a live runtime acquisition ' + live.id);
     const id = randomUUID();
     return this.database.transaction(() => {
+      const existing = this.database.db.prepare(
+        'SELECT * FROM organization_runtime_acquisitions WHERE organization_id=? AND idempotency_key=?',
+      ).get(normalized.organizationId, normalized.idempotencyKey) as Row | undefined;
+      if (existing) {
+        const record = recordFrom(existing);
+        if (record.agentId !== normalized.agentId || record.projectId !== normalized.projectId || record.role !== normalized.role) {
+          throw new Error('Runtime acquisition idempotency key is bound to different intent');
+        }
+        return record;
+      }
+      const live = this.database.db.prepare(
+        "SELECT id FROM organization_runtime_acquisitions WHERE agent_id=? AND status IN ('requested','acquiring','acquired')",
+      ).get(normalized.agentId) as { id?: string } | undefined;
+      if (live?.id) throw new Error('Organization Agent already has a live runtime acquisition ' + live.id);
       this.database.db.prepare(
         "INSERT INTO organization_runtime_acquisitions(id,organization_id,agent_id,project_id,role,idempotency_key,status,runtime_slot_id,error,created_at,updated_at) VALUES(?,?,?,?,?,?, 'requested',NULL,NULL,?,?)",
       ).run(id, normalized.organizationId, normalized.agentId, normalized.projectId, normalized.role, normalized.idempotencyKey, now, now);

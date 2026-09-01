@@ -113,6 +113,17 @@ describe('OrganizationRuntimeAcquisitionAuthority', () => {
     expect(() => plane.database.db.prepare("UPDATE organization_runtime_acquisitions SET status='acquired' WHERE id=?").run('corrupt-update')).toThrow(/requires a runtime slot/i);
   });
 
+  it('rejects a second live acquisition with a domain error instead of leaking SQLite constraints', () => {
+    const plane = harness();
+    const { project, organization, agent } = setup(plane);
+    plane.organizationRuntime.request({
+      organizationId: organization.id, agentId: agent.id, projectId: project.id, role: 'ENGINEER', idempotencyKey: 'live-1',
+    }, 10);
+    expect(() => plane.organizationRuntime.request({
+      organizationId: organization.id, agentId: agent.id, projectId: project.id, role: 'REVIEWER', idempotencyKey: 'live-2',
+    }, 11)).toThrow(/already has a live runtime acquisition/i);
+  });
+
   it('rejects an idempotency key reused for a different runtime intent', () => {
     const plane = harness();
     const { project, organization, agent } = setup(plane);
