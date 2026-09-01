@@ -48,4 +48,24 @@ describe('task dispatch prompt', () => {
     expect(prompt).toContain('<GAM_REVIEW>');
     expect(prompt.trim().endsWith('Do not place any text after the closing tag.')).toBe(true);
   });
+  it('requires a Kernel workspace for verified-claim work', () => {
+    const verified = { ...task('verified'), completionPolicy: 'verified-claim' as const };
+    expect(() => buildTaskDispatchPrompt(verified, [])).toThrow(/requires a Kernel-provisioned workspace/i);
+  });
+
+  it('injects only scoped capability completion instructions for verified-claim work', () => {
+    const verified = { ...task('verified'), completionPolicy: 'verified-claim' as const };
+    const prompt = buildTaskDispatchPrompt(verified, [], {
+      projectId: 'project-1', taskId: verified.id, slotId: 'slot-1', path: 'E:\\gam\\worktrees\\worker',
+      branch: 'gam/worker/verified', baseSha: 'a'.repeat(40), resourceId: 'resource-1', leaseEpoch: 3,
+      capabilityTokenPath: 'E:\\gam\\capabilities\\task.token', controlCliPath: 'E:\\gam\\GAMCTL.cmd',
+    });
+    expect(prompt).toContain('Work only inside the assigned worktree');
+    expect(prompt).toContain('claim.verify');
+    expect(prompt).toContain('--capability-file');
+    expect(prompt).toContain('--stdin');
+    expect(prompt).toContain('leaseEpoch: 3');
+    expect(prompt).toContain('Never use --admin');
+    expect(prompt).not.toContain('adminToken');
+  });
 });

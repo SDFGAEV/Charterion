@@ -49,3 +49,26 @@ describe('WorkAuthority', () => {
     expect(() => authority.replace({ expectedRevision: 0, ...transport(0, 'broken-2'), ...broken }, 10)).toThrow(/both task and message/i);
   });
 });
+
+describe('WorkAuthority verified completion', () => {
+  it('records one idempotent machine completion and advances revision once', () => {
+    const authority = harness();
+    const seeded = state();
+    seeded.tasks[0] = { ...seeded.tasks[0], completionPolicy: 'verified-claim', updatedAt: 1 };
+    authority.replace({ expectedRevision: 0, ...transport(0, 'seed-machine'), ...seeded }, 10);
+    const completed = authority.completeVerifiedClaim({ taskId: 'task-1', claimId: 'claim-1', verificationId: 'verify-1', commitSha: 'a'.repeat(40) }, 20);
+    expect(completed.revision).toBe(2);
+    expect(completed.tasks[0]).toMatchObject({ machineCompletion: { kind: 'verified-claim', claimId: 'claim-1', verificationId: 'verify-1', completedAt: 20 } });
+    expect(authority.completeVerifiedClaim({ taskId: 'task-1', claimId: 'claim-1', verificationId: 'verify-1', commitSha: 'a'.repeat(40) }, 30).revision).toBe(2);
+    expect(() => authority.completeVerifiedClaim({ taskId: 'task-1', claimId: 'claim-1', verificationId: 'verify-2', commitSha: 'a'.repeat(40) }, 40)).toThrow(/different machine completion/i);
+    expect(authority.snapshot().revision).toBe(2);
+  });
+
+  it('rejects machine completion for a reply-policy task', () => {
+    const authority = harness();
+    const seeded = state();
+    seeded.tasks[0] = { ...seeded.tasks[0], completionPolicy: 'reply' };
+    authority.replace({ expectedRevision: 0, ...transport(0, 'seed-reply'), ...seeded }, 10);
+    expect(() => authority.completeVerifiedClaim({ taskId: 'task-1', claimId: 'claim-1', verificationId: 'verify-1' }, 20)).toThrow(/does not accept verified-claim/i);
+  });
+});

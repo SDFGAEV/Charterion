@@ -95,7 +95,10 @@ export interface ContentRecoveryState {
 }
 
 export type TaskKind = 'work' | 'review' | 'human';
-export type TaskCompletionPolicy = 'reply' | 'review-pass' | 'human-approval';
+export type TaskCompletionPolicy = 'reply' | 'verified-claim' | 'review-pass' | 'human-approval';
+export interface VerifiedTaskCompletion {
+  kind: 'verified-claim'; claimId: string; verificationId: string; completedAt: number; commitSha?: string;
+}
 export type TaskDisplayStatus =
   | 'pending'
   | 'ready'
@@ -173,6 +176,7 @@ export interface AgentTask {
   reviewTargetTaskId?: string;
   maxReviewRounds?: number;
   humanDecision?: HumanDecisionRecord;
+  machineCompletion?: VerifiedTaskCompletion;
   skippedAt?: number;
   skipReason?: string;
   cancelledAt?: number;

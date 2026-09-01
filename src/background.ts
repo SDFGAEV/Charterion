@@ -1,8 +1,7 @@
 import { advanceAttempt } from './attempts';
 import { retainAttemptLedger } from './attemptLedger';
 import { deriveManagedTasks, isRetryableTaskAttempt, validateTaskGraph } from './taskGraph';
-import { planReadyDispatches } from './supervisor';
-import { buildTaskDispatchPrompt } from './taskPrompt';
+import { dispatchReadyManagedTasks } from './taskDispatchRuntime';
 import { attemptBelongsToTab } from './tabAttempt';
 import { applyHumanDecision, applyTaskDisposition } from './taskLifecycle';
 import { applyReviewRemediation } from './reviewLoop';
@@ -12,13 +11,14 @@ import { assertMessageDeliveryAvailable, buildSemanticMessagePrompt, createAgent
 import { createPortableManagerState, parsePortableManagerState, restorePortableAttempts, stringifyPortableManagerState } from './stateTransfer';
 import { recoverAttempt, type AttemptRecoveryObservation } from './recovery';
 import { beginNativeAgentRollover, dispatchNativeBrowserOperation, planNativeBrowserOperation, readNativeControlSnapshot, readNativeWorkSnapshot, replaceNativeWorkState, reportNativeAgentBrowser, reportNativeBrowserRuntime, settleNativeBrowserOperation } from './nativeControl';
-import { filterFleetTaskTabs, planFleetReconciliation, workerRequestMessage } from './fleet';
+import { planFleetReconciliation, workerRequestMessage } from './fleet';
 import { bootstrapPendingConversationRollover, bootstrapReplyAttemptId, completeConversationRolloverForReply, requestAutomaticConversationRollover } from './conversationRollover';
 import { deriveBrowserRuntimeObservation, fleetExpansionAllowed } from './browserRuntime';
 import { CoalescingRunner } from './coalescingRunner';
 import { TabOperationQueue } from './tabOperationQueue';
 import { controlFeedbackMessages } from './controlFeedback';
 import { ContentRuntimeFence } from './contentRuntimeFence';
+import { rehydrateContentRuntimes } from './contentRuntimeRehydration';
 import { browserOperationPolicy } from './browserOperationPolicy';
 import { recoveryStateForTab, snapshotForTab } from './contentRuntimeBridge';
 import { reportIncident, reportSlotRuntime, sha256Text } from './browserRuntimeReporting';
@@ -142,6 +142,21 @@ async function markReplyObserved(attemptId: string, contentEpoch: string, snapsh
     }).catch(() => reportIncident('browser-operation-reply-settle-failed', attemptId, { contentEpoch }));
   }
   return persisted;
+}
+async function rehydrateAssignedContentRuntimes(): Promise<void> {
+  const snapshot = await readNativeControlSnapshot();
+  const tabIds = snapshot.agents
+    .filter((agent) => agent.browserTabId !== undefined && ['opening', 'open'].includes(agent.browserState))
+    .map((agent) => agent.browserTabId!);
+  const results = await rehydrateContentRuntimes(tabIds, async (tabId) => {
+    try { const response = await chrome.tabs.sendMessage(tabId, { type: 'content:get-snapshot' }); return Boolean(response?.ok); }
+    catch { return false; }
+  }, async (tabId) => {
+    await chrome.scripting.executeScript({ target: { tabId }, files: ['dist/content.js'] });
+  });
+  for (const result of results) if (result.status === 'unavailable') {
+    void reportIncident('content-runtime-rehydrate-failed', String(result.tabId), { error: result.error ?? 'Content runtime did not respond after reinjection' });
+  }
 }
 async function reconcileAfterRestart(): Promise<void> {
   const state = await workState();
@@ -553,29 +568,7 @@ async function runReadyTasks(): Promise<TaskDispatchResult[]> {
   const tasks = deriveManagedTasks(state.tasks, state.attempts);
   const tabs = await managedTabs(state.attempts);
   const [controlSnapshot, mapping] = await Promise.all([readNativeControlSnapshot(), fleetTabMap()]);
-  const dispatchTabs = filterFleetTaskTabs(tabs, controlSnapshot.agents, mapping);
-  const byTaskId = new Map(tasks.map((managed) => [managed.task.id, managed]));
-  const decisions = planReadyDispatches(tasks, dispatchTabs);
-  const results: TaskDispatchResult[] = [];
-  const batchId = crypto.randomUUID();
-
-  for (const decision of decisions) {
-    if (decision.tabId === undefined) {
-      results.push({ taskId: decision.taskId, ok: false, error: decision.error ?? 'Task is not dispatchable' });
-      continue;
-    }
-    const managed = byTaskId.get(decision.taskId);
-    if (!managed) continue;
-    const dependencies = managed.task.dependsOn
-      .map((taskId) => byTaskId.get(taskId))
-      .filter((dependency): dependency is NonNullable<typeof dependency> => dependency !== undefined);
-    const instruction = buildTaskDispatchPrompt(managed.task, dependencies);
-    const sent = await dispatchToTab(decision.tabId, instruction, batchId, managed.task.id);
-    const result: TaskDispatchResult = { taskId: managed.task.id, ok: sent.ok, attemptId: sent.attemptId };
-    if (sent.error) result.error = sent.error;
-    results.push(result);
-  }
-  return results;
+  return dispatchReadyManagedTasks(tasks, tabs, controlSnapshot, mapping, crypto.randomUUID(), dispatchToTab);
 }
 
 const supervisorRunner = new CoalescingRunner(async () => {
@@ -927,7 +920,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   })();
 });
 
-void migrateLegacyWorkStateOnce().then(() => reconcileAfterRestart()).then(() => {
+void migrateLegacyWorkStateOnce().then(() => rehydrateAssignedContentRuntimes()).then(() => reconcileAfterRestart()).then(() => {
   void notifyManagerChanged();
   kickSupervisor();
   scheduleFleetReconcile(0);
