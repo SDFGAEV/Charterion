@@ -100,6 +100,19 @@ describe('OrganizationRuntimeAcquisitionAuthority', () => {
     expect(second.status).toBe('acquired');
   });
 
+  it('enforces the acquired-state runtime-slot invariant at the database boundary', () => {
+    const plane = harness();
+    const { project, organization, agent } = setup(plane);
+    const insert = plane.database.db.prepare(
+      "INSERT INTO organization_runtime_acquisitions(id,organization_id,agent_id,project_id,role,idempotency_key,status,runtime_slot_id,error,created_at,updated_at) VALUES(?,?,?,?,?,?, 'acquired',NULL,NULL,?,?)",
+    );
+    expect(() => insert.run('corrupt-insert', organization.id, agent.id, project.id, 'ENGINEER', 'corrupt-insert', 10, 10)).toThrow(/requires a runtime slot/i);
+    plane.database.db.prepare(
+      "INSERT INTO organization_runtime_acquisitions(id,organization_id,agent_id,project_id,role,idempotency_key,status,runtime_slot_id,error,created_at,updated_at) VALUES(?,?,?,?,?,?, 'requested',NULL,NULL,?,?)",
+    ).run('corrupt-update', organization.id, agent.id, project.id, 'ENGINEER', 'corrupt-update', 10, 10);
+    expect(() => plane.database.db.prepare("UPDATE organization_runtime_acquisitions SET status='acquired' WHERE id=?").run('corrupt-update')).toThrow(/requires a runtime slot/i);
+  });
+
   it('rejects an idempotency key reused for a different runtime intent', () => {
     const plane = harness();
     const { project, organization, agent } = setup(plane);

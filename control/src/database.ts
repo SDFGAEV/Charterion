@@ -2,7 +2,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { dirname, relative, resolve, isAbsolute } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-export const CONTROL_SCHEMA_VERSION = 22;
+export const CONTROL_SCHEMA_VERSION = 23;
 
 export class ControlDatabase {
   readonly db: DatabaseSync;
@@ -98,6 +98,7 @@ export class ControlDatabase {
     if (version < 20) this.migrateV20();
     if (version < 21) this.migrateV21();
     if (version < 22) this.migrateV22();
+    if (version < 23) this.migrateV23();
     this.db.prepare(`
       INSERT INTO schema_meta(key, value) VALUES('schema_version', ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value
@@ -625,6 +626,25 @@ export class ControlDatabase {
           ON organization_runtime_acquisitions(agent_id) WHERE status IN ('requested','acquiring','acquired');
         CREATE INDEX IF NOT EXISTS idx_org_runtime_acquisition_project_status
           ON organization_runtime_acquisitions(project_id,status,created_at);
+      `);
+    });
+  }
+
+  private migrateV23(): void {
+    this.transaction(() => {
+      this.db.exec(`
+        CREATE TRIGGER IF NOT EXISTS trg_org_runtime_acquisition_acquired_slot
+        BEFORE INSERT ON organization_runtime_acquisitions
+        WHEN NEW.status='acquired' AND NEW.runtime_slot_id IS NULL
+        BEGIN
+          SELECT RAISE(ABORT, 'Acquired runtime acquisition requires a runtime slot');
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_org_runtime_acquisition_acquired_slot_update
+        BEFORE UPDATE OF status,runtime_slot_id ON organization_runtime_acquisitions
+        WHEN NEW.status='acquired' AND NEW.runtime_slot_id IS NULL
+        BEGIN
+          SELECT RAISE(ABORT, 'Acquired runtime acquisition requires a runtime slot');
+        END;
       `);
     });
   }

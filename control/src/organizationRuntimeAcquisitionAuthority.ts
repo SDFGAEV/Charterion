@@ -42,6 +42,7 @@ function required(value: string, label: string): string {
 }
 
 function recordFrom(row: Row): OrganizationRuntimeAcquisitionRecord {
+  if (row.status === 'acquired' && row.runtime_slot_id === null) throw new Error('Corrupt acquired runtime acquisition has no runtime slot');
   const record: OrganizationRuntimeAcquisitionRecord = {
     id: String(row.id),
     organizationId: String(row.organization_id),
