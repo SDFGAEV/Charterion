@@ -67,8 +67,8 @@ async function assertExpectedDaemon(config: DaemonConfig): Promise<void> {
   }
 }
 
-async function main(): Promise<void> {
-  const options = parseArgs(process.argv.slice(2));
+export async function run(argv: string[] = process.argv.slice(2)): Promise<number> {
+  const options = parseArgs(argv);
   const config = resolveDaemonConfig();
   await assertExpectedDaemon(config);
   const request: RpcRequest = {
@@ -83,10 +83,14 @@ async function main(): Promise<void> {
   }
   const response = await sendRpc(config.pipeName, request);
   process.stdout.write(`${JSON.stringify(response, null, 2)}\n`);
-  if (!response.ok) process.exitCode = 2;
+  return response.ok ? 0 : 2;
 }
 
-void main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
-});
+const invokedPath = process.argv[1]?.toLowerCase() ?? '';
+const isMainModule = invokedPath.endsWith('gamctl.cjs') || invokedPath.endsWith('gamctl.js');
+if (isMainModule) {
+  void run().catch((error) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  });
+}

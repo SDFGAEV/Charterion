@@ -19,7 +19,6 @@ async function main(): Promise<void> {
     closing = true;
     server.close(() => {
       database.close();
-      process.exit(0);
     });
   };
   process.on('SIGINT', close);
@@ -33,5 +32,5 @@ async function main(): Promise<void> {
 
 void main().catch((error) => {
   console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
+  process.exitCode = 1;
 });
