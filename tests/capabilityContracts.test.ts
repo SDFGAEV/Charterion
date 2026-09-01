@@ -67,12 +67,15 @@ describe('capability contracts', () => {
     } as CapabilityProvider;
     registry.register(provider);
     const persisted: unknown[] = [];
-    const runtime = new CapabilityRuntime(registry, { persist: async (receipt) => { persisted.push(receipt); } });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const runtime = new CapabilityRuntime(registry, { persist: async (receipt) => { await gate; persisted.push(receipt); } });
     const receipt = await runtime.invoke(request());
     expect(receipt.outcome).toBe('completed');
     expect(runtime.metrics()).toMatchObject({ dispatched: 1, persistenceQueued: 1, persistenceFailures: 0 });
     expect(persisted).toHaveLength(0);
-    await new Promise((resolve) => queueMicrotask(resolve));
+    release();
+    await new Promise<void>((resolve) => { setTimeout(resolve, 0); });
     expect(persisted).toHaveLength(1);
   });
 
@@ -81,7 +84,7 @@ describe('capability contracts', () => {
     registry.register({ descriptor, invoke: async () => ({ requestId: 'req-1', capabilityId: 'filesystem', operationId: 'read', outcome: 'completed' as const, retryable: false, evidenceRefs: [], artifactRefs: [], observedAt: 2 }) } as CapabilityProvider);
     const runtime = new CapabilityRuntime(registry, { persist: async () => { throw new Error('disk unavailable'); } });
     await expect(runtime.invoke(request())).resolves.toMatchObject({ outcome: 'completed' });
-    await new Promise((resolve) => queueMicrotask(resolve));
+    await new Promise<void>((resolve) => { setTimeout(resolve, 0); });
     expect(runtime.metrics().persistenceFailures).toBe(1);
   });
 });
