@@ -5,6 +5,7 @@ const AGENT_DESIRED_STATES = new Set(['active','suspended','retired']);
 const AGENT_BROWSER_STATES = new Set(['absent','opening','open','closing','error']);
 const LEASE_MODES = new Set(['shared', 'exclusive']);
 const LEASE_STATUSES = new Set(['active', 'released', 'expired']);
+const WORKSPACE_STATUSES = new Set(['active', 'released']);
 const CHANGE_STATUSES = new Set(['open','changes-requested','approved','queued','integrated','closed']);
 const REVIEW_VERDICTS = new Set(['approve','request-changes']);
 const QUEUE_STATUSES = new Set(['queued','validating','integrated','failed','cancelled']);
@@ -407,14 +408,14 @@ export interface NativeTaskWorkspace {
   resourceId: string; leaseId: string; leaseEpoch: number; capabilityId: string; capabilityTokenPath: string; controlCliPath: string; status: 'active'|'released';
 }
 
-function parseNativeTaskWorkspace(value: unknown): NativeTaskWorkspace {
+export function parseNativeTaskWorkspace(value: unknown): NativeTaskWorkspace {
   const item = record(value, 'task workspace');
   return {
     id: stringField(item.id,'workspace.id'), projectId: stringField(item.projectId,'workspace.projectId'), taskId: stringField(item.taskId,'workspace.taskId'),
     slotId: stringField(item.slotId,'workspace.slotId'), repoPath: stringField(item.repoPath,'workspace.repoPath'), path: stringField(item.path,'workspace.path'),
     branch: stringField(item.branch,'workspace.branch'), baseSha: stringField(item.baseSha,'workspace.baseSha'), resourceId: stringField(item.resourceId,'workspace.resourceId'),
     leaseId: stringField(item.leaseId,'workspace.leaseId'), leaseEpoch: numberField(item.leaseEpoch,'workspace.leaseEpoch'), capabilityId: stringField(item.capabilityId,'workspace.capabilityId'),
-    capabilityTokenPath: stringField(item.capabilityTokenPath,'workspace.capabilityTokenPath'), controlCliPath: stringField(item.controlCliPath,'workspace.controlCliPath'), status: stringField(item.status,'workspace.status') as NativeTaskWorkspace['status'],
+    capabilityTokenPath: stringField(item.capabilityTokenPath,'workspace.capabilityTokenPath'), controlCliPath: stringField(item.controlCliPath,'workspace.controlCliPath'), status: enumField(item.status,'workspace.status', WORKSPACE_STATUSES) as NativeTaskWorkspace['status'],
   };
 }
 

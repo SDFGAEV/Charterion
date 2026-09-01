@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseNativeControlSnapshot } from '../src/nativeControl';
+import { parseNativeControlSnapshot, parseNativeTaskWorkspace } from '../src/nativeControl';
 
 function snapshot() {
   return {
@@ -32,6 +32,17 @@ describe('native control snapshot parser', () => {
     const bad = snapshot();
     bad.projects[0]!.status = 'mystery';
     expect(() => parseNativeControlSnapshot(bad)).toThrow(/project.status is invalid/);
+  });
+
+  it('rejects unknown task workspace states at the native boundary', () => {
+    const workspace = {
+      id: 'w', projectId: 'p', taskId: 't', slotId: 'a', repoPath: 'E:/repo',
+      path: 'E:/repo/.worktrees/t', branch: 'charterion/t', baseSha: 'a'.repeat(40),
+      resourceId: 'r', leaseId: 'l', leaseEpoch: 1, capabilityId: 'cap',
+      capabilityTokenPath: 'E:/cap.token', controlCliPath: 'E:/GAMCTL.cmd', status: 'active',
+    };
+    expect(parseNativeTaskWorkspace(workspace).status).toBe('active');
+    expect(() => parseNativeTaskWorkspace({ ...workspace, status: 'corrupted' })).toThrow(/workspace.status is invalid/);
   });
 
   it('rejects structurally incomplete native responses', () => {
