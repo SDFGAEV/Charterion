@@ -22,22 +22,40 @@ function matchesTask(task: AgentTask, tab: ManagedTab): boolean {
 }
 
 export function planReadyDispatches(tasks: readonly ManagedTask[], tabs: readonly ManagedTab[]): DispatchDecision[] {
+  const byRole = new Map<string, ManagedTab[]>();
+  const byRoleAndProject = new Map<string, ManagedTab[]>();
+  for (const tab of tabs) {
+    const role = tab.binding.role.trim();
+    const project = tab.binding.project.trim();
+    const roleTabs = byRole.get(role) ?? [];
+    roleTabs.push(tab);
+    byRole.set(role, roleTabs);
+    const scopedKey = `${role}|${project}`;
+    const scopedTabs = byRoleAndProject.get(scopedKey) ?? [];
+    scopedTabs.push(tab);
+    byRoleAndProject.set(scopedKey, scopedTabs);
+  }
+
   const claimedTabs = new Set<number>();
   const decisions: DispatchDecision[] = [];
   for (const managed of tasks) {
     if (managed.status !== 'ready') continue;
-    const candidates = tabs.filter((tab) => !claimedTabs.has(tab.tabId) && matchesTask(managed.task, tab));
+    const task = managed.task;
+    const candidates = (task.project.trim()
+      ? byRoleAndProject.get(`${task.targetRole}|${task.project.trim()}`) ?? []
+      : byRole.get(task.targetRole) ?? [])
+      .filter((tab) => !claimedTabs.has(tab.tabId) && matchesTask(task, tab));
     if (candidates.length === 0) {
-      decisions.push({ taskId: managed.task.id, error: `No idle ChatGPT tab is uniquely bound to role ${managed.task.targetRole}` });
+      decisions.push({ taskId: task.id, error: `No idle ChatGPT tab is uniquely bound to role ${task.targetRole}` });
       continue;
     }
     if (candidates.length > 1) {
-      decisions.push({ taskId: managed.task.id, error: `Multiple idle ChatGPT tabs match role ${managed.task.targetRole}; routing is ambiguous` });
+      decisions.push({ taskId: task.id, error: `Multiple idle ChatGPT tabs match role ${task.targetRole}; routing is ambiguous` });
       continue;
     }
     const tabId = candidates[0]!.tabId;
     claimedTabs.add(tabId);
-    decisions.push({ taskId: managed.task.id, tabId });
+    decisions.push({ taskId: task.id, tabId });
   }
   return decisions;
 }
