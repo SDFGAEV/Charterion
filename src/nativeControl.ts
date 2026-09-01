@@ -164,6 +164,12 @@ function arrayField(value: unknown, label: string): unknown[] {
   return value;
 }
 
+function nativeResult(response: NativeRpcResponse, requestId: string, operation: string): unknown {
+  if (!response || response.id !== requestId) throw new Error(`Native control response does not match ${operation} request`);
+  if (!response.ok) throw new Error(response.error?.message ?? `Native control host rejected ${operation}`);
+  return response.result;
+}
+
 export function parseNativeControlSnapshot(value: unknown): NativeControlSnapshot {
   const root = record(value, 'control snapshot');
   if (root.protocolVersion !== 2) throw new Error('Unsupported control protocol version');
@@ -294,11 +300,7 @@ export async function readNativeControlSnapshot(): Promise<NativeControlSnapshot
     const reason = error instanceof Error ? error.message : String(error);
     throw new Error(`Native control plane is unavailable: ${reason}`);
   }
-  if (!response?.ok) {
-    const reason = response?.error?.message ?? 'Native control host rejected the request';
-    throw new Error(reason);
-  }
-  return parseNativeControlSnapshot(response.result);
+  return parseNativeControlSnapshot(nativeResult(response, request.id, request.method));
 }
 
 export async function reportNativeBrowserRuntime(input: BrowserRuntimeReportInput): Promise<void> {
@@ -310,7 +312,7 @@ export async function reportNativeBrowserRuntime(input: BrowserRuntimeReportInpu
     const reason = error instanceof Error ? error.message : String(error);
     throw new Error(`Native control plane is unavailable: ${reason}`);
   }
-  if (!response?.ok) throw new Error(response?.error?.message ?? 'Native control host rejected browser runtime report');
+  nativeResult(response, request.id, request.method);
 }
 
 export interface AgentBrowserReportInput {
@@ -323,7 +325,7 @@ export async function reportNativeAgentBrowser(input: AgentBrowserReportInput): 
   let response: NativeRpcResponse;
   try { response = await chrome.runtime.sendNativeMessage(NATIVE_CONTROL_HOST, request) as NativeRpcResponse; }
   catch (error) { throw new Error(`Native control plane is unavailable: ${error instanceof Error ? error.message : String(error)}`); }
-  if (!response?.ok) throw new Error(response?.error?.message ?? 'Native control host rejected agent browser report');
+  nativeResult(response, request.id, request.method);
 }
 
 export interface NativeRolloverStatus { rollover: { id: string; slotId: string; status: 'requested'|'opening'|'bootstrapping'; checkpointId: string; fromConversationKey: string; toConversationKey?: string; bootstrapAttemptId?: string; reason: string; }; checkpoint: { id: string; handoffText: string; reason: string; state: Record<string, unknown>; }; }
@@ -362,8 +364,7 @@ export async function readNativeWorkSnapshot(): Promise<NativeWorkSnapshot> {
   let response: NativeRpcResponse;
   try { response = await chrome.runtime.sendNativeMessage(NATIVE_CONTROL_HOST, request) as NativeRpcResponse; }
   catch (error) { throw new Error(`Native control plane is unavailable: ${error instanceof Error ? error.message : String(error)}`); }
-  if (!response?.ok) throw new Error(response?.error?.message ?? 'Native control host rejected work snapshot');
-  return parseNativeWorkSnapshot(response.result);
+  return parseNativeWorkSnapshot(nativeResult(response, request.id, request.method));
 }
 
 const WORK_TRANSPORT_KEY = 'nativeWorkTransport.v1';
@@ -399,8 +400,7 @@ export async function replaceNativeWorkState(input: NativeWorkSnapshot): Promise
     catch (error) { transportError = error; }
   }
   if (transportError || !response) throw new Error(`Native control plane is unavailable: ${transportError instanceof Error ? transportError.message : String(transportError)}`);
-  if (!response.ok) throw new Error(response.error?.message ?? 'Native control host rejected work replacement');
-  return parseNativeWorkSnapshot(response.result);
+  return parseNativeWorkSnapshot(nativeResult(response, request.id, request.method));
 }
 
 export interface NativeTaskWorkspace {
@@ -442,8 +442,7 @@ async function sendNativeMutation(method: string, params: Record<string, unknown
   let response: NativeRpcResponse;
   try { response = await chrome.runtime.sendNativeMessage(NATIVE_CONTROL_HOST, request) as NativeRpcResponse; }
   catch (error) { throw new Error(`Native control plane is unavailable: ${error instanceof Error ? error.message : String(error)}`); }
-  if (!response?.ok) throw new Error(response?.error?.message ?? `Native control host rejected ${method}`);
-  return response.result;
+  return nativeResult(response, request.id, method);
 }
 
 export async function reconcileNativeElasticFleet(): Promise<unknown> {
