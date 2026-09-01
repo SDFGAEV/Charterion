@@ -8,7 +8,8 @@
     "storage",
     "sidePanel",
     "nativeMessaging",
-    "alarms"
+    "alarms",
+    "scripting"
   ],
   "host_permissions": [
     "https://chatgpt.com/*"
