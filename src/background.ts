@@ -358,9 +358,11 @@ async function dispatchToTab(tabId: number, text: string, batchId: string, taskI
 
 async function sendToTabs(tabIds: number[], text: string): Promise<SendResult[]> {
   const batchId = crypto.randomUUID();
-  const results: SendResult[] = [];
-  for (const tabId of [...new Set(tabIds)]) results.push(await dispatchToTab(tabId, text, batchId));
-  return results;
+  const uniqueTabIds = [...new Set(tabIds)];
+  // Each tab is independently serialized by TabOperationQueue; dispatching the
+  // independent lanes together removes avoidable cross-tab latency while keeping
+  // same-tab writes and their uncertain outcomes strictly ordered.
+  return Promise.all(uniqueTabIds.map((tabId) => dispatchToTab(tabId, text, batchId)));
 }
 
 async function createTask(input: CreateTaskInput): Promise<AgentTask> {
