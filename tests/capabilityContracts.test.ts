@@ -42,12 +42,12 @@ describe('capability contracts', () => {
   });
 
   it('returns a receipt and rejects forged or incomplete provider receipts', async () => {
-    const provider: CapabilityProvider = {
+    const provider = {
       descriptor,
       invoke: async () => ({ requestId: 'req-1', capabilityId: 'filesystem', operationId: 'read', outcome: 'completed', retryable: false, output: { text: 'ok' }, evidenceRefs: ['e1'], artifactRefs: [], observedAt: 2 }),
-    };
+    } as CapabilityProvider;
     await expect(invokeCapability(provider, request())).resolves.toMatchObject({ outcome: 'completed', evidenceRefs: ['e1'] });
-    const bad: CapabilityProvider = { ...provider, invoke: async () => ({ ...await provider.invoke(request()), requestId: 'other' }) };
+    const bad = { ...provider, invoke: async () => ({ ...(await provider.invoke(request())), requestId: 'other' }) } as CapabilityProvider;
     await expect(invokeCapability(bad, request())).rejects.toThrow('requestId mismatch');
   });
 
