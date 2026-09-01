@@ -14,12 +14,13 @@ export async function recoveryStateForTab(tab: chrome.tabs.Tab): Promise<Attempt
 
 export async function snapshotForTab(tab: chrome.tabs.Tab): Promise<ChatSnapshot> {
   const url = tab.url ?? 'https://chatgpt.com/';
-  if (tab.id === undefined) return unavailableSnapshot(url, tab.title ?? 'ChatGPT');
+  const provisionalIdentity = `provisional:tab:${tab.id ?? 'unknown'}`;
+  if (tab.id === undefined) return unavailableSnapshot(url, tab.title ?? 'ChatGPT', provisionalIdentity);
   try {
     const response = await chrome.tabs.sendMessage(tab.id, { type: 'content:get-snapshot' });
     if (response?.ok && response.snapshot) return response.snapshot as ChatSnapshot;
   } catch {
     // Loading/sleeping tabs may not yet have the current content script.
   }
-  return unavailableSnapshot(url, tab.title ?? 'ChatGPT');
+  return unavailableSnapshot(url, tab.title ?? 'ChatGPT', provisionalIdentity);
 }

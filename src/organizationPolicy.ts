@@ -1,15 +1,9 @@
+import { agentRoleClass, type AgentRoleClass } from '../shared/agentRole';
 import type { AgentTask } from './contracts';
 
 export const GAM_COMPANY_POLICY_VERSION = 'gam-company-v1';
 
-export type OrganizationRoleKind =
-  | 'supervisor'
-  | 'architect'
-  | 'implementer'
-  | 'tester'
-  | 'researcher'
-  | 'operator'
-  | 'general';
+export type OrganizationRoleKind = AgentRoleClass;
 
 export interface OrganizationPromptContext {
   project: string;
@@ -61,6 +55,11 @@ const ROLE_CHARTERS: Record<OrganizationRoleKind, readonly string[]> = {
     'Do not modify production files unless the task explicitly grants that ownership.',
     'Treat missing coverage, flaky authority checks, and unverified failure paths as concrete defects.',
   ],
+  integrator: [
+    'Own deterministic integration of independently verified changes without collapsing reviewer/worker authority boundaries.',
+    'Preserve exact-SHA ancestry, conflict evidence, and rollback paths; never hide merge conflicts or stale evidence.',
+    'Integrate only independently approved inputs and rerun the required gates on the integrated candidate.',
+  ],
   researcher: [
     'Separate observations, hypotheses, and conclusions; preserve provenance and reproducible evidence.',
     'Prefer primary sources and explicit uncertainty; do not turn unverified prose into platform truth.',
@@ -76,15 +75,7 @@ const ROLE_CHARTERS: Record<OrganizationRoleKind, readonly string[]> = {
 };
 
 export function organizationRoleKind(role: string): OrganizationRoleKind {
-  const normalized = role.trim().toLowerCase();
-  const tokens = normalized.split(/[^a-z0-9]+/).filter(Boolean);
-  if (normalized.includes('supervisor') || normalized.includes('reviewer')) return 'supervisor';
-  if (normalized.includes('architect')) return 'architect';
-  if (normalized.includes('tester') || normalized.includes('qa')) return 'tester';
-  if (tokens.includes('impl') || normalized.includes('implementer') || normalized.includes('developer') || normalized.includes('engineer')) return 'implementer';
-  if (normalized.includes('research')) return 'researcher';
-  if (normalized.includes('operator') || normalized.includes('ops')) return 'operator';
-  return 'general';
+  return agentRoleClass(role);
 }
 
 function numbered(items: readonly string[]): string {
@@ -110,7 +101,7 @@ ${numbered(COMPANY_PRINCIPLES)}
 Mandatory operating process:
 ${numbered(COMMON_PROCESS)}
 
-Role charter — ${roleKind}:
+Role charter - ${roleKind}:
 ${numbered(ROLE_CHARTERS[roleKind])}
 
 Escalation rule: when the task conflicts with this policy, ownership is ambiguous, or required cross-system authority is missing, fail closed and report the blocker/change request. Do not silently widen scope.`;

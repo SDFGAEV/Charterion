@@ -10,6 +10,7 @@ import { ConversationAuthority } from './conversationAuthority';
 import { WorkspaceAuthority } from './workspaceAuthority';
 import { PromotionAuthority } from './promotionAuthority';
 import { planElasticFleet, type ElasticFleetDecision } from './elasticFleet';
+import { projectRootIdentity } from './projectIdentity';
 import type {
   AcquireLeaseInput,
   AgentSlot,
@@ -272,20 +273,53 @@ export class ControlPlane {
     return projectFrom(row);
   }
 
+  private projectReuseRank(project: ProjectCell): readonly [number, number, number, number] {
+    const counts = this.database.db.prepare(`
+      SELECT
+        SUM(CASE WHEN conversation_key IS NOT NULL AND status<>'retired' THEN 1 ELSE 0 END) AS conversations,
+        SUM(CASE WHEN status<>'retired' THEN 1 ELSE 0 END) AS slots
+      FROM agent_slots WHERE project_id=?
+    `).get(project.id) as { conversations: number | null; slots: number | null };
+    return [Number(counts.conversations ?? 0), Number(counts.slots ?? 0), project.maxSlots, project.updatedAt];
+  }
+
+  private selectReusableProject(candidates: readonly ProjectCell[]): ProjectCell | undefined {
+    return [...candidates].sort((left, right) => {
+      const a = this.projectReuseRank(left); const b = this.projectReuseRank(right);
+      for (let index = 0; index < a.length; index += 1) {
+        const delta = b[index]! - a[index]!;
+        if (delta !== 0) return delta;
+      }
+      return left.id.localeCompare(right.id);
+    })[0];
+  }
+
   createProject(input: CreateProjectInput, now = Date.now()): ProjectCell {
     const name = nonEmpty(input.name, 'Project name');
     const rootPath = nonEmpty(input.rootPath, 'Project root path');
+    const rootIdentity = projectRootIdentity(rootPath);
     const minSlots = positiveInt(input.minSlots ?? 0, 'minSlots', true);
     const maxSlots = positiveInt(input.maxSlots ?? Math.max(minSlots, 1), 'maxSlots', true);
     if (maxSlots < minSlots) throw new Error('maxSlots must be >= minSlots');
     const weight = positiveInt(input.weight ?? 1, 'weight');
-    const id = randomUUID();
     return this.database.transaction(() => {
+      const candidates = this.listProjects().filter((project) => project.status !== 'archived' && projectRootIdentity(project.rootPath) === rootIdentity);
+      const existing = this.selectReusableProject(candidates);
+      if (existing) {
+        const mergedMaxSlots = Math.max(maxSlots, ...candidates.map((project) => project.maxSlots));
+        const mergedMinSlots = Math.min(minSlots, existing.minSlots, mergedMaxSlots);
+        this.database.db.prepare(`UPDATE projects SET status='active',min_slots=?,max_slots=?,updated_at=? WHERE id=?`)
+          .run(mergedMinSlots, mergedMaxSlots, now, existing.id);
+        const reused = this.requireProject(existing.id);
+        this.event(reused.id, 'PROJECT_REUSED', reused.id, { requestedName: name, rootPath, rootIdentity, duplicateProjectIds: candidates.filter((project) => project.id !== reused.id).map((project) => project.id), mergedMinSlots, mergedMaxSlots }, now);
+        return reused;
+      }
+      const id = randomUUID();
       this.database.db.prepare(`
         INSERT INTO projects(id, name, root_path, status, isolation_tier, min_slots, max_slots, weight, created_at, updated_at)
         VALUES(?, ?, ?, 'active', ?, ?, ?, ?, ?, ?)
       `).run(id, name, rootPath, input.isolationTier ?? 'c1-container', minSlots, maxSlots, weight, now, now);
-      this.event(id, 'PROJECT_CREATED', id, { name, rootPath }, now);
+      this.event(id, 'PROJECT_CREATED', id, { name, rootPath, rootIdentity }, now);
       return this.requireProject(id);
     });
   }
@@ -420,10 +454,20 @@ export class ControlPlane {
     for (const project of this.listProjects()) {
       const planned = planElasticFleet({ project, agents, work, activeLeaseHolderIds, unsettledBrowserSlotIds, now, ...(idleGraceMs === undefined ? {} : { idleGraceMs }) });
       for (const decision of planned) {
-        if (decision.kind === 'suspend') this.suspendAgentSlot(decision.slotId, now);
-        else this.resumeAgentSlot(decision.slotId, now);
-        this.event(project.id, decision.kind === 'suspend' ? 'ELASTIC_FLEET_SUSPEND_REQUESTED' : 'ELASTIC_FLEET_RESUME_REQUESTED', decision.slotId, { reason: decision.reason }, now);
-        decisions.push(decision);
+        if (decision.kind === 'suspend') {
+          this.suspendAgentSlot(decision.slotId, now);
+          this.event(project.id, 'ELASTIC_FLEET_SUSPEND_REQUESTED', decision.slotId, { reason: decision.reason }, now);
+          decisions.push(decision);
+        } else if (decision.kind === 'resume') {
+          this.resumeAgentSlot(decision.slotId, now);
+          this.event(project.id, 'ELASTIC_FLEET_RESUME_REQUESTED', decision.slotId, { reason: decision.reason }, now);
+          decisions.push(decision);
+        } else {
+          const created = this.createAgentSlot(project.id, decision.role, now);
+          const applied = { ...decision, slotId: created.id };
+          this.event(project.id, 'ELASTIC_FLEET_AGENT_SPAWNED', created.id, { role: decision.role, affinityKey: decision.affinityKey, reason: decision.reason }, now);
+          decisions.push(applied);
+        }
       }
     }
     return decisions;

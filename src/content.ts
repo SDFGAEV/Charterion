@@ -13,7 +13,7 @@ const inflightAttempts = new Set<string>();
 const deliveredInMemory = new Set<string>();
 
 function snapshot() {
-  return snapshotFromDocument(document, location.href);
+  return snapshotFromDocument(document, location.href, `provisional:${contentEpoch}`);
 }
 
 function deliveredAttempts(): string[] {

@@ -74,14 +74,32 @@ describe('elastic fleet planner', () => {
     const suspended = agent('a2', 'WORKER', { status: 'suspended', desiredState: 'suspended', browserState: 'absent', updatedAt: 50 }); delete suspended.browserPageStatus; delete suspended.browserRuntimeObservedAt;
     const tasks = [{ id: 't1', project: 'Project One', targetRole: 'WORKER', completionPolicy: 'verified-claim', dependsOn: [], attemptIds: [] }];
     const decisions = planElasticFleet({ project: project({ minSlots: 0 }), agents: [suspended], work: work(tasks), activeLeaseHolderIds: new Set(), unsettledBrowserSlotIds: new Set(), now: NOW, idleGraceMs: 0 });
-    expect(decisions).toEqual([{ kind: 'resume', slotId: 'a2', reason: 'ready work demands role WORKER' }]);
+    expect(decisions).toEqual([{ kind: 'resume', slotId: 'a2', reason: 'ready work reuses class:implementer' }]);
   });
+  it('reuses a suspended canonical agent across wave-specific implementer role names', () => {
+    const suspended = agent('a2', 'PAR_IMPL_DISPATCH_20260831', {
+      status: 'suspended', desiredState: 'suspended', browserState: 'absent',
+      conversationKey: 'conversation:persistent-worker', updatedAt: 50,
+    });
+    delete suspended.browserPageStatus; delete suspended.browserRuntimeObservedAt;
+    const tasks = [{ id: 't1', project: 'Project One', targetRole: 'W2_RECOVERY_IMPL_20260831', completionPolicy: 'verified-claim', dependsOn: [], attemptIds: [] }];
+    const decisions = planElasticFleet({ project: project({ minSlots: 0 }), agents: [suspended], work: work(tasks), activeLeaseHolderIds: new Set(), unsettledBrowserSlotIds: new Set(), now: NOW, idleGraceMs: 0 });
+    expect(decisions).toEqual([{ kind: 'resume', slotId: 'a2', reason: 'ready work reuses class:implementer' }]);
+  });
+
+  it('spawns a stable pooled role only when no reusable compatible slot exists', () => {
+    const tasks = [{ id: 't1', project: 'Project One', targetRole: 'PAR_IMPL_RECOVERY_20260831', completionPolicy: 'verified-claim', dependsOn: [], attemptIds: [] }];
+    const decisions = planElasticFleet({ project: project({ minSlots: 0 }), agents: [], work: work(tasks), activeLeaseHolderIds: new Set(), unsettledBrowserSlotIds: new Set(), now: NOW, idleGraceMs: 0 });
+    expect(decisions).toEqual([{ kind: 'spawn', role: 'IMPLEMENTER', affinityKey: 'class:implementer', reason: 'ready work requires new class:implementer; no reusable slot exists' }]);
+  });
+
   it('does not resume a dependent role until its dependency is terminal', () => {
     const suspended = agent('a2', 'WORKER', { status: 'suspended', desiredState: 'suspended', browserState: 'absent' }); delete suspended.browserPageStatus; delete suspended.browserRuntimeObservedAt;
     const dependency = { id: 'dep', project: 'Project One', targetRole: 'PREP', completionPolicy: 'verified-claim', dependsOn: [], attemptIds: [] };
     const target = { id: 't1', project: 'Project One', targetRole: 'WORKER', completionPolicy: 'verified-claim', dependsOn: ['dep'], attemptIds: [] };
     const blocked = planElasticFleet({ project: project({ minSlots: 0 }), agents: [suspended], work: work([dependency, target]), activeLeaseHolderIds: new Set(), unsettledBrowserSlotIds: new Set(), now: NOW, idleGraceMs: 0 });
-    expect(blocked).toEqual([]);
+    expect(blocked).toEqual([{ kind: 'spawn', role: 'PREP', affinityKey: 'role:prep', reason: 'ready work requires new role:prep; no reusable slot exists' }]);
+    expect(blocked.some((item) => item.kind === 'resume' && item.slotId === 'a2')).toBe(false);
     const completed = { ...dependency, machineCompletion: { kind: 'verified-claim', claimId: 'c', verificationId: 'v', completedAt: NOW } };
     const ready = planElasticFleet({ project: project({ minSlots: 0 }), agents: [suspended], work: work([completed, target]), activeLeaseHolderIds: new Set(), unsettledBrowserSlotIds: new Set(), now: NOW, idleGraceMs: 0 });
     expect(ready.map((item) => item.kind)).toEqual(['resume']);
@@ -135,7 +153,7 @@ describe('elastic fleet planner', () => {
     const suspended = agent('a2', 'WORKER', { status: 'suspended', desiredState: 'suspended', browserState: 'absent' }); delete suspended.browserPageStatus; delete suspended.browserRuntimeObservedAt;
     const task = { id: 't1', project: 'Project One', targetRole: 'WORKER', completionPolicy: 'reply', dependsOn: [], attemptIds: ['x1'], retryAfterAttemptId: 'x1' };
     const decisions = planElasticFleet({ project: project({ minSlots: 0 }), agents: [suspended], work: work([task], [{ attemptId: 'x1', state: 'reply-observed' }]), activeLeaseHolderIds: new Set(), unsettledBrowserSlotIds: new Set(), now: NOW, idleGraceMs: 0 });
-    expect(decisions).toEqual([{ kind: 'resume', slotId: 'a2', reason: 'ready work demands role WORKER' }]);
+    expect(decisions).toEqual([{ kind: 'resume', slotId: 'a2', reason: 'ready work reuses class:implementer' }]);
   });
 
 });

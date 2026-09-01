@@ -274,9 +274,9 @@ export type RuntimeNotice =
 
 export const EMPTY_BINDING: RoleBinding = Object.freeze({ role: '', project: '', notes: '' });
 
-export function unavailableSnapshot(url: string, title = 'ChatGPT'): ChatSnapshot {
+export function unavailableSnapshot(url: string, title = 'ChatGPT', provisionalIdentity = 'provisional:unavailable'): ChatSnapshot {
   return {
-    conversationKey: `url:${url}`,
+    conversationKey: provisionalIdentity,
     title,
     url,
     status: 'unavailable',

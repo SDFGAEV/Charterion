@@ -35,6 +35,36 @@ describe('project cells and agent slots', () => {
     expect(plane.listEvents(project.id).map((event) => event.type)).toContain('PROJECT_STATUS_CHANGED');
   });
 
+  it('reuses one durable ProjectCell for the same repository root across iteration names', () => {
+    const { plane } = harness();
+    const first = plane.createProject({ name: 'Recursive Wave 1', rootPath: 'E:/Agent/Charterion', minSlots: 0, maxSlots: 4 }, 1);
+    const second = plane.createProject({ name: 'Recursive Wave 2', rootPath: 'e:\\agent\\charterion\\.', minSlots: 0, maxSlots: 8 }, 2);
+    expect(second.id).toBe(first.id);
+    expect(second.name).toBe('Recursive Wave 1');
+    expect(plane.listProjects()).toHaveLength(1);
+    expect(plane.listEvents(first.id).map((event) => event.type)).toContain('PROJECT_REUSED');
+  });
+
+  it('selects the conversation-rich legacy duplicate as the canonical reusable project', () => {
+    const { plane } = harness();
+    const sparse = plane.createProject({ name: 'Sparse Wave', rootPath: 'E:/Agent/Charterion', minSlots: 0, maxSlots: 2 }, 1);
+    plane.database.db.prepare(`
+      INSERT INTO projects(id,name,root_path,status,isolation_tier,min_slots,max_slots,weight,created_at,updated_at)
+      VALUES('legacy-rich','Rich Wave','e:\\agent\\charterion','paused','c0-host',1,6,1,2,2)
+    `).run();
+    const slot = plane.createAgentSlot(sparse.id, 'ARCHITECT', 3);
+    plane.bindAgentConversation(slot.id, 'conversation:sparse', 4);
+    plane.database.db.prepare(`UPDATE agent_slots SET project_id='legacy-rich' WHERE id=?`).run(slot.id);
+    plane.database.db.prepare(`UPDATE agent_conversations SET project_id='legacy-rich' WHERE slot_id=?`).run(slot.id);
+    const reused = plane.createProject({ name: 'Future Wave', rootPath: 'E:/AGENT/CHARTERION/.', minSlots: 0, maxSlots: 3 }, 5);
+    expect(reused.id).toBe('legacy-rich');
+    expect(reused.status).toBe('active');
+    expect(reused.maxSlots).toBe(6);
+    expect(reused.minSlots).toBe(0);
+    const event = plane.listEvents(reused.id).find((item) => item.type === 'PROJECT_REUSED');
+    expect(event?.payload.duplicateProjectIds).toContain(sparse.id);
+  });
+
   it('rolls a persistent AgentSlot onto a new conversation without losing lineage', () => {
     const { plane } = harness();
     const project = plane.createProject({ name: 'Alpha', rootPath: 'E:/alpha' }, 1);
@@ -195,6 +225,26 @@ describe('supervisor-managed agent fleet lifecycle', () => {
     expect(plane.retireAgentSlot(first.id, 11)).toMatchObject({ desiredState: 'retired', status: 'retired' });
     expect(() => plane.resumeAgentSlot(first.id, 12)).toThrow(/retired/i);
     expect(second.desiredState).toBe('active');
+  });
+
+  it('kernel reconcile spawns once then reuses the same suspended role-class slot', () => {
+    const { plane } = harness();
+    const project = plane.createProject({ name: 'Recursive Company', rootPath: 'E:/recursive-company', minSlots: 0, maxSlots: 2 }, 1);
+    plane.work.replace({
+      expectedRevision: 0, transportGeneration: 'reuse-test', transportSequence: 1, transportMessageId: 'reuse-test-1',
+      tasks: [{ id: 't1', project: project.name, targetRole: 'PAR_IMPL_RECOVERY_20260831', completionPolicy: 'verified-claim', dependsOn: [], attemptIds: [] }],
+      attempts: [], messages: [],
+    }, 2);
+    const spawned = plane.reconcileElasticFleet(3, 0);
+    expect(spawned).toHaveLength(1);
+    expect(spawned[0]).toMatchObject({ kind: 'spawn', role: 'IMPLEMENTER', affinityKey: 'class:implementer' });
+    const slotId = spawned[0]?.kind === 'spawn' ? spawned[0].slotId : undefined;
+    expect(slotId).toBeTruthy();
+    expect(plane.getAgentSlot(slotId!)).toMatchObject({ role: 'IMPLEMENTER', desiredState: 'active' });
+    plane.suspendAgentSlot(slotId!, 4);
+    const reused = plane.reconcileElasticFleet(5, 0);
+    expect(reused).toEqual([{ kind: 'resume', slotId, reason: 'ready work reuses class:implementer' }]);
+    expect(plane.listAgentSlots(project.id)).toHaveLength(1);
   });
 });
 
