@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import type { ControlPlane } from './controlPlane';
+import { OrganizationRpcController } from './organizationRpc';
 import type {
   AcquireLeaseInput,
   ArtifactKind,
@@ -85,12 +86,19 @@ function failure(id: string, code: string, message: string): RpcFailure {
 }
 
 export class RpcRouter {
+  private readonly organizationRpc: OrganizationRpcController;
   constructor(
     private readonly plane: ControlPlane,
     private readonly adminToken: string,
     private readonly browserToken: string,
     private readonly instanceId?: string,
-  ) {}
+  ) {
+    this.organizationRpc = new OrganizationRpcController(plane, {
+      requireAdmin: (request) => this.requireAdmin(request),
+      requireBrowserOrAdmin: (request) => this.requireBrowserOrAdmin(request),
+      requireCapability: (request, scope, input = {}) => this.requireCapability(request, scope, input),
+    });
+  }
 
   handle(request: RpcRequest): RpcResponse {
     const id = typeof request?.id === 'string' && request.id ? request.id : 'unknown';
@@ -180,7 +188,9 @@ export class RpcRouter {
       case 'incident.report': return this.incidentReport(request, params);
       case 'incident.list': return this.incidentList(request, params);
       case 'incident.resolve': return this.incidentResolve(request, params);
-      default: return this.dispatchResources(request, params);
+      default:
+        if (this.organizationRpc.canHandle(request.method)) return this.organizationRpc.handle(request, params);
+        return this.dispatchResources(request, params);
     }
   }
   private browserReport(request: RpcRequest, params: Record<string, unknown>): unknown {

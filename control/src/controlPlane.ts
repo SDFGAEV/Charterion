@@ -9,6 +9,12 @@ import { BrowserAuthority } from './browserAuthority';
 import { ConversationAuthority } from './conversationAuthority';
 import { WorkspaceAuthority } from './workspaceAuthority';
 import { PromotionAuthority } from './promotionAuthority';
+import { OrganizationAuthority } from './organizationAuthority';
+import { WorkIngressAuthority } from './workIngressAuthority';
+import { AgentContinuityAuthority } from './agentContinuityAuthority';
+import { FindingAuthority } from './findingAuthority';
+import { ReviewPoolAuthority } from './reviewPoolAuthority';
+import { OrganizationExecutionBridge } from './organizationExecutionBridge';
 import { planElasticFleet, type ElasticFleetDecision } from './elasticFleet';
 import type {
   AcquireLeaseInput,
@@ -165,6 +171,12 @@ export class ControlPlane {
   readonly conversations: ConversationAuthority;
   readonly workspaces: WorkspaceAuthority;
   readonly promotions: PromotionAuthority;
+  readonly organization: OrganizationAuthority;
+  readonly ingress: WorkIngressAuthority;
+  readonly agentContinuity: AgentContinuityAuthority;
+  readonly findings: FindingAuthority;
+  readonly reviewPool: ReviewPoolAuthority;
+  readonly organizationExecution: OrganizationExecutionBridge;
   constructor(readonly database: ControlDatabase, gitPath = 'git') {
     this.evidence = new EvidenceAuthority(database, gitPath);
     this.changes = new ChangeRequestAuthority(database, gitPath);
@@ -174,6 +186,12 @@ export class ControlPlane {
     this.conversations = new ConversationAuthority(database);
     this.workspaces = new WorkspaceAuthority(database, gitPath);
     this.promotions = new PromotionAuthority(database, gitPath);
+    this.organization = new OrganizationAuthority(database);
+    this.ingress = new WorkIngressAuthority(database);
+    this.agentContinuity = new AgentContinuityAuthority(database);
+    this.findings = new FindingAuthority(database);
+    this.reviewPool = new ReviewPoolAuthority(database);
+    this.organizationExecution = new OrganizationExecutionBridge(database, this.organization, this.work);
   }
 
   provisionTaskWorkspace(projectId: string, slotId: string, taskId: string, now = Date.now()) {
@@ -346,19 +364,38 @@ export class ControlPlane {
       if (project.status === 'archived') throw new Error('Cannot bind an agent in an archived project');
       if (slot.desiredState !== 'active') throw new Error('Cannot bind a non-active agent slot');
       if (slot.rolloverState !== 'idle') throw new Error('Cannot bind a conversation while rollover is active');
-      if (slot.conversationKey === key) return slot;
-      if (slot.conversationKey) throw new Error('Replacing a durable conversation requires an AgentSlot rollover');
-      const conflict = this.database.db.prepare('SELECT id FROM agent_slots WHERE project_id=? AND conversation_key=? AND id<>?').get(slot.projectId, key, slotId) as { id?: string } | undefined;
-      if (conflict?.id) throw new Error(`Conversation ${key} is already bound inside project ${slot.projectId}`);
-      const generation = this.conversations.recordCanonical(slot, key, now);
-      const nextEpoch = slot.leaseEpoch + 1;
-      this.database.db.prepare("UPDATE agent_slots SET conversation_key=?,conversation_generation=?,status='assigned',lease_epoch=?,updated_at=? WHERE id=?")
-        .run(key, generation, nextEpoch, now, slotId);
-      this.event(slot.projectId, 'AGENT_CONVERSATION_BOUND', slotId, { conversationKey: key, generation, epoch: nextEpoch }, now);
+      const organizationAgent = this.database.db.prepare('SELECT id FROM organization_agents WHERE runtime_slot_id=?').get(slot.id) as { id?: string } | undefined;
+      if (organizationAgent?.id) {
+        const active = this.agentContinuity.active(organizationAgent.id);
+        if (active && active.conversationKey !== key) throw new Error('Conversation conflicts with the persistent Organization Agent identity');
+      }
+      if (slot.conversationKey && slot.conversationKey !== key) throw new Error('Replacing a durable conversation requires an AgentSlot rollover');
+      let generation = slot.conversationGeneration;
+      if (!slot.conversationKey) {
+        const conflict = this.database.db.prepare('SELECT id,browser_state,desired_state,status FROM agent_slots WHERE project_id=? AND conversation_key=? AND id<>?').get(slot.projectId, key, slotId) as { id?: string; browser_state?: string; desired_state?: string; status?: string } | undefined;
+        if (conflict?.id) {
+          const organizationConversation = organizationAgent?.id ? this.agentContinuity.active(organizationAgent.id) : undefined;
+          const oldOrganizationBinding = this.database.db.prepare('SELECT id FROM organization_agents WHERE runtime_slot_id=?').get(conflict.id) as { id?: string } | undefined;
+          if (!organizationConversation || organizationConversation.conversationKey !== key || oldOrganizationBinding?.id) {
+            throw new Error(`Conversation ${key} is already bound inside project ${slot.projectId}`);
+          }
+          if (conflict.browser_state !== 'absent') throw new Error('Persistent conversation cannot move while its previous runtime browser is still present');
+          this.database.db.prepare("UPDATE agent_conversations SET slot_id=? WHERE project_id=? AND conversation_key=? AND status='active'").run(slot.id, slot.projectId, key);
+          this.database.db.prepare("UPDATE agent_slots SET conversation_key=NULL,status=CASE WHEN desired_state='active' THEN 'idle' ELSE status END,lease_epoch=lease_epoch+1,updated_at=? WHERE id=?").run(now, conflict.id);
+          this.event(slot.projectId, 'AGENT_CONVERSATION_RUNTIME_MOVED', organizationConversation.agentId, { conversationKey: key, fromSlotId: conflict.id, toSlotId: slot.id }, now);
+        }
+        generation = this.conversations.recordCanonical(slot, key, now);
+        const nextEpoch = slot.leaseEpoch + 1;
+        this.database.db.prepare("UPDATE agent_slots SET conversation_key=?,conversation_generation=?,status='assigned',lease_epoch=?,updated_at=? WHERE id=?")
+          .run(key, generation, nextEpoch, now, slotId);
+        this.event(slot.projectId, 'AGENT_CONVERSATION_BOUND', slotId, { conversationKey: key, generation, epoch: nextEpoch }, now);
+      }
+      if (organizationAgent?.id) {
+        this.agentContinuity.bind({ agentId: organizationAgent.id, conversationKey: key, runtimeSlotId: slot.id, generationHint: generation }, now);
+      }
       return this.getAgentSlot(slotId);
     });
   }
-
   requestAgentConversationRollover(slotId: string, reason: string, handoffText: string, state: Record<string, unknown>, now = Date.now()) {
     const slot = this.getAgentSlot(slotId); const project = this.requireProject(slot.projectId);
     if (project.status !== 'active' || slot.desiredState !== 'active') throw new Error('Conversation rollover requires an active project and AgentSlot');
@@ -377,7 +414,22 @@ export class ControlPlane {
   }
 
   completeAgentConversationRollover(slotId: string, attemptId: string, now = Date.now()) {
-    return this.conversations.complete(this.getAgentSlot(slotId), attemptId, now);
+    const slot = this.getAgentSlot(slotId);
+    const completed = this.conversations.complete(slot, attemptId, now);
+    const organizationAgent = this.database.db.prepare('SELECT id FROM organization_agents WHERE runtime_slot_id=?').get(slot.id) as { id?: string } | undefined;
+    if (organizationAgent?.id && completed.toConversationKey) {
+      const active = this.agentContinuity.active(organizationAgent.id);
+      if (active?.conversationKey === completed.fromConversationKey) {
+        this.agentContinuity.rollover({
+          agentId: organizationAgent.id,
+          fromConversationKey: completed.fromConversationKey,
+          toConversationKey: completed.toConversationKey,
+          runtimeSlotId: slot.id,
+          reason: completed.reason,
+        }, now);
+      }
+    }
+    return completed;
   }
 
   failAgentConversationRollover(slotId: string, error: string, now = Date.now()) {
@@ -473,6 +525,14 @@ export class ControlPlane {
     if (!Number.isInteger(now) || now <= 0) throw new Error('Agent browser observedAt is invalid');
     return this.database.transaction(() => {
       const slot = this.getAgentSlot(input.slotId);
+      const organizationAgent = this.database.db.prepare('SELECT id FROM organization_agents WHERE runtime_slot_id=?').get(slot.id) as { id?: string } | undefined;
+      if (organizationAgent?.id) {
+        const workspace = this.organization.activeAgentWorkspace(organizationAgent.id);
+        if (!workspace || workspace.status !== 'ready') throw new Error('Organization Agent runtime has no ready dedicated workspace');
+        if (!workspace.browserProfileId || workspace.browserProfileId !== profileId) {
+          throw new Error('Browser profile does not match the Organization Agent workspace');
+        }
+      }
       if (slot.browserObservedAt !== undefined && now < slot.browserObservedAt) throw new Error('Stale agent browser observation');
       if (['opening','open'].includes(input.browserState) && slot.desiredState !== 'active') throw new Error('Browser cannot open a non-active agent slot');
       let conversationKey = slot.conversationKey;
@@ -480,12 +540,30 @@ export class ControlPlane {
       let nextEpoch = slot.leaseEpoch;
       if (input.conversationKey) {
         const key = canonicalConversationKey(input.conversationKey);
+        const organizationConversation = organizationAgent?.id ? this.agentContinuity.active(organizationAgent.id) : undefined;
+        const activeRollover = this.conversations.activeRollover(slot.id);
+        const organizationRolloverAllowed = Boolean(
+          organizationConversation && organizationConversation.conversationKey !== key && activeRollover &&
+          ['opening','bootstrapping'].includes(activeRollover.status) && activeRollover.fromConversationKey === organizationConversation.conversationKey
+        );
+        if (organizationConversation && organizationConversation.conversationKey !== key && !organizationRolloverAllowed) {
+          throw new Error('Browser conversation conflicts with the persistent Organization Agent conversation');
+        }
         if (conversationKey && conversationKey !== key) throw new Error('Browser cannot rebind an agent slot to a different durable conversation');
         const conflict = this.database.db.prepare('SELECT id FROM agent_slots WHERE project_id=? AND conversation_key=? AND id<>?').get(slot.projectId, key, slot.id) as { id?: string } | undefined;
         if (conflict?.id) throw new Error(`Conversation ${key} is already bound inside project ${slot.projectId}`);
         if (!conversationKey) {
           const accepted = this.conversations.acceptCanonical(slot, key, now);
           conversationKey = key; conversationGeneration = accepted.generation; nextEpoch += 1;
+        }
+        if (organizationAgent?.id) {
+          if (!organizationConversation) {
+            this.agentContinuity.bind({ agentId: organizationAgent.id, conversationKey: key, runtimeSlotId: slot.id, generationHint: conversationGeneration }, now);
+          } else if (organizationConversation.conversationKey === key) {
+            this.agentContinuity.attachRuntimeSlot(organizationAgent.id, slot.id, now);
+          } else if (organizationRolloverAllowed && activeRollover) {
+            // Keep Organization Agent cognition on the verified source generation until bootstrap completion.
+          }
         }
       }
       let status = slot.desiredState === 'active' ? (conversationKey ? 'assigned' : 'idle') : slot.status;
