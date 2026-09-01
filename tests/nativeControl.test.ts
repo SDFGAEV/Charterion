@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { nativeResult } from '../src/nativeRpcContract';
+import { nativeResult, parseNativeRpcResponse } from '../src/nativeRpcContract';
 import { parseNativeControlSnapshot, parseNativeTaskWorkspace } from '../src/nativeControl';
 
 function snapshot() {
@@ -19,6 +19,14 @@ function snapshot() {
 }
 
 describe('native control snapshot parser', () => {
+  it('enforces the native RPC response envelope at runtime', () => {
+    expect(parseNativeRpcResponse({ id: 'ok', ok: true })).toEqual({ id: 'ok', ok: true });
+    expect(() => parseNativeRpcResponse({ id: 'ok', ok: true, error: { message: 'unexpected' } })).toThrow(/successful native response/i);
+    expect(() => parseNativeRpcResponse({ id: 'bad', ok: false })).toThrow(/must contain an error/i);
+    expect(() => parseNativeRpcResponse({ id: 'bad', ok: false, error: { message: 42 } })).toThrow(/error message is invalid/i);
+    expect(() => parseNativeRpcResponse({ id: 'bad', ok: false, error: {} })).toThrow(/error is empty/i);
+  });
+
   it('rejects mismatched native RPC responses', () => {
     expect(() => nativeResult({ id: 'other', ok: true, result: {} }, 'request', 'control.snapshot')).toThrow(/does not match/);
     expect(() => nativeResult({ id: 'request', ok: false, error: { message: 'denied' } }, 'request', 'control.snapshot')).toThrow('denied');
