@@ -1093,7 +1093,7 @@ The preferred execution path is:
 ```text
 Mission / Work assigned by Charterion
           -> Agent reasons autonomously
-          -> Agent directly uses available computer/tools
+          -> Agent directly uses available computer/tools inside its dedicated AgentWorkspace boundary
           -> Agent reports durable outcome/references
           -> Charterion updates organizational state
 ```
@@ -1220,3 +1220,210 @@ Reject any redesign that:
 The resulting product definition is:
 
 **Charterion receives work, organizes persistent intelligent workers, coordinates responsibility and review, preserves durable organizational truth, and returns outcomes. The Agents themselves perform the work using whatever legitimate capabilities are available to them.**
+
+## 35. Dedicated Agent Workspace Is the Computer-Safety Boundary
+
+Section 35 refines Section 34's direct-Agent capability principle. "Agent directly uses available computer/tools" means **the Agent directly uses tools exposed inside its dedicated workspace boundary**, not unrestricted access to the host computer.
+
+Every persistent Organization Agent SHOULD have one durable `AgentWorkspace` representing its personal company computer. The Agent may use terminal, filesystem, Git, browser automation, Remote, connected tools, local applications, and future capabilities freely inside that workspace. Charterion does not proxy or micro-manage those tool calls.
+
+The workspace exists to contain effects, not to reduce intelligence. The principle becomes: **full capability inside a bounded workplace; explicit authority for effects that cross the boundary.**
+
+`AgentWorkspace` is different from a software `ChangeWorkspace`/Git worktree. The AgentWorkspace is long-lived with the employee identity. A ChangeWorkspace is a narrower, usually disposable engineering workspace created inside or mounted into the AgentWorkspace for one Change.
+### 35.1 Workspace model
+
+```text
+Persistent Organization Agent
+  -> AgentWorkspace generation N
+       -> personal home / scratch / caches
+       -> authorized project mounts
+       -> direct terminal and Remote endpoint
+       -> tool/application configuration
+       -> scoped credentials
+       -> ChangeWorkspace / Git worktrees when needed
+```
+
+The canonical workspace contract should remain backend-neutral:
+
+```text
+AgentWorkspace
+  workspaceId
+  organizationId
+  agentId
+  generation
+  isolationTier
+  backendKind
+  rootRef
+  endpointRefs[]
+  mountedResourceRefs[]
+  state
+  createdAt / updatedAt
+```
+
+The Workspace Registry owns identity, lifecycle and binding facts. It MUST NOT become a generic filesystem or command-execution API.
+### 35.2 Isolation must be enforced, not conventional
+
+A directory naming convention is not an isolation boundary. `E:/agents/A` is insufficient if a shell can simply navigate to `E:/`.
+
+Workspace isolation MUST be enforced by the selected runtime/backend. Supported tiers may include the existing Charterion concepts:
+
+```text
+c0-host          explicit unsafe/trusted opt-in only
+c1-container     default minimum for ordinary autonomous work when technically suitable
+c2-hypervisor    stronger boundary for risky or heterogeneous workloads
+c3-ephemeral-vm  strongest disposable boundary for untrusted/high-risk work
+```
+
+The implementation may evolve across Windows, Linux, container, VM or remote-host backends, but the organizational contract must stay stable.
+
+The default autonomous-Agent policy MUST NOT expose the raw host as the Agent's normal computer. `c0-host` requires explicit human/admin policy and must never be selected merely because provisioning a sandbox failed.
+
+Failure to provision the requested isolation tier is fail-closed: the Agent remains without an active computer workspace rather than silently falling back to host access.
+### 35.3 Host and peer protection invariants
+
+By default an AgentWorkspace MUST NOT expose:
+
+- Charterion Kernel database, admin tokens, promotion keys or Parent authority state;
+- another Agent's workspace/home/cache/credentials;
+- unrestricted user home or arbitrary host filesystem roots;
+- host service-control surfaces or privileged device access;
+- production secrets/resources not explicitly granted for the Mission;
+- Parent/Candidate promotion control paths.
+
+Authorized project repositories, shared datasets, documents, caches or other company resources are mounted/referenced explicitly and with the narrowest practical write semantics.
+
+Workspace credentials are scoped to the Agent/workspace and rotated or revoked independently. Copying the Kernel's global admin credential into an AgentWorkspace is forbidden.
+
+An Agent may inspect shared organizational reality through approved shared resources while retaining private scratch state. Shared reality does not imply shared writable root filesystems.
+### 35.4 Tools are exposed into the workspace, not mediated by Charterion
+
+Charterion does not need `filesystem.read`, `terminal.exec`, `ppt.create`, or similar universal tool APIs. Instead, the workspace provisioning layer makes the Agent's normal tools available **inside the boundary**.
+
+Examples include a Remote/MCP endpoint whose allowed machine is the workspace backend, a shell whose filesystem/process namespace is the workspace, scoped repository mounts, browser/application profiles belonging to the workspace, and credentials/configuration injected only when organizational policy permits them.
+
+The Agent still chooses its own workflow and tools. Charterion only ensures that the environment those tools can affect is the assigned workspace plus explicitly mounted external resources.
+
+A tool channel that bypasses the workspace boundary and reaches the raw host is a protected exception, not an ordinary capability.
+
+### 35.5 Persistent Agent, replaceable workspace generations
+
+Agent identity survives workspace replacement:
+
+```text
+Agent A
+  -> Workspace generation 1 (retired)
+  -> Workspace generation 2 (active)
+  -> Workspace generation 3 (future)
+```
+
+Rebuild, corruption recovery, backend migration or stronger isolation may create a new workspace generation without changing Agent identity or ChatGPT Conversation identity. Durable organizational state remains outside the workspace.
+### 35.6 Relationship to Change worktrees and shared resources
+
+For software work, the preferred nesting is:
+
+```text
+AgentWorkspace
+  -> Mission context
+  -> Change C381
+  -> isolated Git worktree / branch
+  -> commits / PR
+```
+
+A Change worktree remains disposable after integration. The AgentWorkspace remains available for subsequent Missions and preserves local development state that is appropriate for that Agent.
+
+Cross-Agent collaboration happens through shared repositories, PRs, Finding/Review records, artifacts and typed messages—not by letting Agents write freely into one another's workspace.
+
+### 35.7 Workspace safety acceptance evidence
+
+A release is not workspace-safe unless tests demonstrate that an autonomous Agent can freely create/delete files, run processes and use its normal tools inside its workspace while being unable by default to mutate Kernel authority state, another Agent workspace, or arbitrary host files.
+
+Tests MUST cover isolation provisioning failure without host fallback, independent credential revocation, workspace-generation replacement, allowed project mounts, denied peer/Kernel paths, and cleanup that cannot delete shared/authoritative resources.
+
+Constitutional rule: **give every Agent a powerful computer of its own; do not give every Agent the operator's computer.**
+
+### 35.8 Browser and tool-profile isolation
+
+A dedicated filesystem alone is insufficient if the ChatGPT Web session can still select a host-wide Remote/MCP/tool connection. Each live AgentWorkspace therefore SHOULD own a distinct browser profile identity and tool-configuration profile.
+
+The browser profile used by the bound AgentSlot MUST match the active AgentWorkspace. Two live AgentWorkspaces MUST NOT share the same browser/tool profile by default.
+
+The tool profile is expected to expose workspace-scoped endpoints, not host administration endpoints. The host/operator browser profile and its privileged connectors are outside ordinary Agent workspaces.
+
+This creates an enforceable chain:
+
+```text
+Persistent Agent
+-> AgentWorkspace
+-> dedicated browser profile
+-> workspace-scoped tool profile/endpoints
+-> sandbox/VM/container/remote workspace
+```
+
+A mismatched browser profile is a runtime identity violation and must fail closed before the page is accepted as that Organization Agent's active runtime.
+## 36. Workspace Policy Without Mandatory Physical Isolation
+
+Section 36 supersedes the mandatory container/VM requirements in Section 35.2 and the physical-isolation acceptance language in Section 35.7. A dedicated AgentWorkspace remains mandatory as an organizational and operational boundary, but physical isolation is optional rather than a default release requirement.
+
+The default public Charterion release MUST be able to create and run persistent Agents on an ordinary host without Docker, Hyper-V, WSL, VM images, or a separate sandbox service.
+
+This does not mean unrestricted host access is considered safe. It means the default safety model is layered policy enforcement rather than mandatory virtualization.
+
+The default workspace mode is `prompt-guarded`. Stronger tool-level scoping is preferred whenever the connected tool supports it. A future sandbox remains an optional enhancement.
+### 36.1 Three workspace security modes
+
+```text
+prompt-guarded
+  -> dedicated root + dedicated browser/tool profile + injected Workspace Charter
+  -> policy is organizational/prompt-enforced when the tool cannot hard-scope itself
+
+tool-scoped
+  -> all prompt-guarded requirements
+  -> plus tool-native scope enforcement such as allowed directories, machine selection, command policy, account/profile scope, or equivalent
+
+sandboxed
+  -> optional stronger backend such as container/VM/remote sandbox
+  -> not required by Charterion Core or the default release
+```
+
+Charterion MUST report which mode is actually active. `prompt-guarded` must never be advertised as a security sandbox, and `tool-scoped` must not be claimed unless the relevant tool configuration was successfully installed and verified.
+### 36.2 Workspace Charter is a first-class contract
+
+Every live AgentWorkspace has a versioned Workspace Charter compiled from durable policy state. The charter is injected whenever an Agent is created, resumed, rebound to a browser runtime, or rolled over to a new conversation generation.
+
+The charter includes at least:
+
+- Agent identity and workspace root;
+- allowed resource/project references;
+- forbidden host/peer/authority references;
+- dedicated browser/tool profile identity;
+- destructive-action policy;
+- whether tool-native scoping is configured or unsupported;
+- explicit instruction not to weaken or bypass workspace controls;
+- requirement to request access rather than wander outside scope.
+
+The exact charter input is hashed. Charterion stores the policy version and digest so a runtime can prove which workspace rules it was given without treating prompt text as secret authority.
+### 36.3 Default host-safety rules
+
+Without a physical sandbox, the default Workspace Charter still requires the Agent to stay in its assigned root and explicitly allowed project/resource references for ordinary work.
+
+Host-wide effects are not normal workspace actions. System directories, user-home traversal, global package installation, service/startup changes, registry/firewall modification, unrelated process control, Charterion control state, Parent/promotion authority, and peer Agent workspaces require explicit organizational authorization or are denied by policy.
+
+Tools that support native scoping SHOULD be configured from the same Workspace policy. Examples include allowed-directory configuration, dedicated Remote endpoint/device selection, account/profile scoping, project-root restrictions, connector-specific resource filters, and command policy.
+
+A tool that cannot enforce scope may still be used in `prompt-guarded` mode, but its weaker enforcement level must remain visible and auditable.
+### 36.4 Acceptance and security claim
+
+Default-release acceptance MUST demonstrate:
+
+- every persistent Agent receives a distinct durable workspace generation;
+- runtime binding is blocked until workspace policy is configured;
+- browser/tool profiles are not silently shared across live Agents;
+- the compiled Workspace Charter contains the exact root, allowed refs, forbidden refs, and dangerous-action policy;
+- policy digests are deterministic and durable;
+- `tool-scoped` cannot be claimed when tool configuration is unsupported/unconfigured;
+- workspace generation can be replaced without replacing Agent identity or conversation lineage;
+- ordinary work does not require Docker/VM/Noetrium or any other optional execution substrate.
+
+Charterion MUST describe `prompt-guarded` as a governance/workspace-scope mechanism, not a hard security isolation boundary. Users who require strong adversarial containment may opt into a sandboxed backend later without changing Organization, Agent, Mission, Review, or Conversation semantics.
+
+Updated constitutional rule: **give every Agent a dedicated governed workplace by default; strengthen it with tool scoping when available; use physical sandboxing only when the deployment actually needs it.**
