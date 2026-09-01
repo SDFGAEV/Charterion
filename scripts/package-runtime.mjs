@@ -56,6 +56,7 @@ const inputPaths = [
   ...readmeManifest.languages.map((item) => resolve(root, item.file)),
   resolve(root, 'docs/readme/LANGUAGES.json'), resolve(root, 'docs/readme/README_SCHEMA.json'),
   resolve(root, 'docs/readme/TRANSLATION_POLICY.md'), resolve(root, 'docs/readme/GLOSSARY.json'), resolve(root, 'docs/readme/TRANSLATION_STATE.json'),
+  resolve(root, 'docs/DEPLOYMENT.md'),
   resolve(root, 'GAM.cmd'), resolve(root, 'GAMCTL.cmd'), resolve(root, 'SETUP.cmd'),
   ...await walk(resolve(root, 'dist')), ...await walk(resolve(root, 'dist-control')),
   resolve(root, 'dist-native-host', 'GamNativeHost.exe'),

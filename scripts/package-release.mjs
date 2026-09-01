@@ -58,6 +58,7 @@ const inputPaths = [
   resolve(root, 'docs/readme/LANGUAGES.json'), resolve(root, 'docs/readme/README_SCHEMA.json'),
   resolve(root, 'docs/readme/TRANSLATION_POLICY.md'), resolve(root, 'docs/readme/GLOSSARY.json'),
   resolve(root, 'docs/readme/TRANSLATION_STATE.json'),
+  resolve(root, 'docs/DEPLOYMENT.md'),
   ...await walk(resolve(root, 'dist')),
 ];
 const entries = [];
