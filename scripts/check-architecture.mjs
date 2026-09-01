@@ -91,7 +91,7 @@ for (const method of ['agent.rollover-request','agent.rollover-begin','agent.rol
   if (!nativeHost.includes(`"${method}"`)) throw new Error(`Native Host rollover allowlist is missing ${method}`);
 }
 const database = await readFile(resolve(root, 'control/src/database.ts'), 'utf8');
-for (const token of ['CONTROL_SCHEMA_VERSION = 15', 'agent_conversations', 'worker_checkpoints', 'agent_rollovers', 'self_hosting_promotions']) {
+for (const token of ['CONTROL_SCHEMA_VERSION = 21', 'agent_conversations', 'worker_checkpoints', 'agent_rollovers', 'self_hosting_promotions']) {
   if (!database.includes(token)) throw new Error(`Control schema fence missing: ${token}`);
 }
 const conversationAuthority = await readFile(resolve(root, 'control/src/conversationAuthority.ts'), 'utf8');
