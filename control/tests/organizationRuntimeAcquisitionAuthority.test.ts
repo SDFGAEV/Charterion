@@ -113,6 +113,18 @@ describe('OrganizationRuntimeAcquisitionAuthority', () => {
     expect(() => plane.database.db.prepare("UPDATE organization_runtime_acquisitions SET status='acquired' WHERE id=?").run('corrupt-update')).toThrow(/requires a runtime slot/i);
   });
 
+  it('enforces cross-table project-role and Agent-binding invariants', () => {
+    const plane = harness();
+    const { project, slot, organization, agent } = setup(plane);
+    const other = plane.createProject({ name: 'Other project', rootPath: 'E:/other-project', maxSlots: 1 }, 10);
+    const wrongSlot = plane.createAgentSlot(other.id, 'ENGINEER', 11);
+    plane.database.db.prepare(
+      "INSERT INTO organization_runtime_acquisitions(id,organization_id,agent_id,project_id,role,idempotency_key,status,runtime_slot_id,error,created_at,updated_at) VALUES(?,?,?,?,?,?, 'requested',NULL,NULL,?,?)",
+    ).run('cross-table', organization.id, agent.id, project.id, 'ENGINEER', 'cross-table', 12, 12);
+    expect(() => plane.database.db.prepare("UPDATE organization_runtime_acquisitions SET status='acquired',runtime_slot_id=? WHERE id=?").run(wrongSlot.id, 'cross-table')).toThrow(/project and role intent/i);
+    expect(() => plane.database.db.prepare("UPDATE organization_runtime_acquisitions SET status='acquired',runtime_slot_id=? WHERE id=?").run(slot!.id, 'cross-table')).toThrow(/not bound to the Organization Agent/i);
+  });
+
   it('rejects a second live acquisition with a domain error instead of leaking SQLite constraints', () => {
     const plane = harness();
     const { project, organization, agent } = setup(plane);

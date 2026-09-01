@@ -2,7 +2,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { dirname, relative, resolve, isAbsolute } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-export const CONTROL_SCHEMA_VERSION = 23;
+export const CONTROL_SCHEMA_VERSION = 25;
 
 export class ControlDatabase {
   readonly db: DatabaseSync;
@@ -99,6 +99,8 @@ export class ControlDatabase {
     if (version < 21) this.migrateV21();
     if (version < 22) this.migrateV22();
     if (version < 23) this.migrateV23();
+    if (version < 24) this.migrateV24();
+    if (version < 25) this.migrateV25();
     this.db.prepare(`
       INSERT INTO schema_meta(key, value) VALUES('schema_version', ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value
@@ -644,6 +646,126 @@ export class ControlDatabase {
         WHEN NEW.status='acquired' AND NEW.runtime_slot_id IS NULL
         BEGIN
           SELECT RAISE(ABORT, 'Acquired runtime acquisition requires a runtime slot');
+        END;
+      `);
+    });
+  }
+
+  private migrateV24(): void {
+    this.transaction(() => {
+      this.db.exec(`
+        CREATE TRIGGER IF NOT EXISTS trg_org_runtime_acquisition_intent
+        BEFORE INSERT ON organization_runtime_acquisitions
+        WHEN NEW.status='acquired'
+          AND NEW.runtime_slot_id IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM agent_slots
+          WHERE id=NEW.runtime_slot_id
+            AND project_id=NEW.project_id
+            AND role=NEW.role
+            AND status<>'retired'
+        )
+        BEGIN
+          SELECT RAISE(ABORT, 'Acquired runtime slot does not match project and role intent');
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_org_runtime_acquisition_intent_update
+        BEFORE UPDATE OF status,runtime_slot_id,project_id,role ON organization_runtime_acquisitions
+        WHEN NEW.status='acquired'
+          AND NEW.runtime_slot_id IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM agent_slots
+          WHERE id=NEW.runtime_slot_id
+            AND project_id=NEW.project_id
+            AND role=NEW.role
+            AND status<>'retired'
+        )
+        BEGIN
+          SELECT RAISE(ABORT, 'Acquired runtime slot does not match project and role intent');
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_org_runtime_acquisition_binding
+        BEFORE INSERT ON organization_runtime_acquisitions
+        WHEN NEW.status='acquired'
+          AND EXISTS (
+            SELECT 1 FROM agent_slots
+            WHERE id=NEW.runtime_slot_id
+              AND project_id=NEW.project_id
+              AND role=NEW.role
+              AND status<>'retired'
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM organization_agents
+            WHERE id=NEW.agent_id
+              AND organization_id=NEW.organization_id
+              AND runtime_slot_id=NEW.runtime_slot_id
+          )
+        BEGIN
+          SELECT RAISE(ABORT, 'Acquired runtime slot is not bound to the Organization Agent');
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_org_runtime_acquisition_binding_update
+        BEFORE UPDATE OF status,runtime_slot_id,agent_id,organization_id ON organization_runtime_acquisitions
+        WHEN NEW.status='acquired'
+          AND EXISTS (
+            SELECT 1 FROM agent_slots
+            WHERE id=NEW.runtime_slot_id
+              AND project_id=NEW.project_id
+              AND role=NEW.role
+              AND status<>'retired'
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM organization_agents
+            WHERE id=NEW.agent_id
+              AND organization_id=NEW.organization_id
+              AND runtime_slot_id=NEW.runtime_slot_id
+          )
+        BEGIN
+          SELECT RAISE(ABORT, 'Acquired runtime slot is not bound to the Organization Agent');
+        END;
+      `);
+    });
+  }
+
+  private migrateV25(): void {
+    this.transaction(() => {
+      this.db.exec(`
+        DROP TRIGGER IF EXISTS trg_org_runtime_acquisition_binding;
+        DROP TRIGGER IF EXISTS trg_org_runtime_acquisition_binding_update;
+        CREATE TRIGGER trg_org_runtime_acquisition_binding
+        BEFORE INSERT ON organization_runtime_acquisitions
+        WHEN NEW.status='acquired'
+          AND EXISTS (
+            SELECT 1 FROM agent_slots
+            WHERE id=NEW.runtime_slot_id
+              AND project_id=NEW.project_id
+              AND role=NEW.role
+              AND status<>'retired'
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM organization_agents
+            WHERE id=NEW.agent_id
+              AND organization_id=NEW.organization_id
+              AND runtime_slot_id=NEW.runtime_slot_id
+          )
+        BEGIN
+          SELECT RAISE(ABORT, 'Acquired runtime slot is not bound to the Organization Agent');
+        END;
+        CREATE TRIGGER trg_org_runtime_acquisition_binding_update
+        BEFORE UPDATE OF status,runtime_slot_id,agent_id,organization_id ON organization_runtime_acquisitions
+        WHEN NEW.status='acquired'
+          AND EXISTS (
+            SELECT 1 FROM agent_slots
+            WHERE id=NEW.runtime_slot_id
+              AND project_id=NEW.project_id
+              AND role=NEW.role
+              AND status<>'retired'
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM organization_agents
+            WHERE id=NEW.agent_id
+              AND organization_id=NEW.organization_id
+              AND runtime_slot_id=NEW.runtime_slot_id
+          )
+        BEGIN
+          SELECT RAISE(ABORT, 'Acquired runtime slot is not bound to the Organization Agent');
         END;
       `);
     });
