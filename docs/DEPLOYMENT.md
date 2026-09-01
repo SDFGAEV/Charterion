@@ -142,7 +142,7 @@ procedure above:
 $repo = "E:\\Agent-Research-Workspace\\projects\\charterion"
 Set-Location $repo
 npm ci
-npm run setup:windows
+powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\setup-windows.ps1 -NoStart
 & "$env:USERPROFILE\\.gpt-agent-manager\\GAM.cmd" doctor --json
 & "$env:USERPROFILE\\.gpt-agent-manager\\GAM.cmd" start --json
 ~~~
