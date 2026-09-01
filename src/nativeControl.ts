@@ -500,25 +500,6 @@ export async function projectNativeOrganizationWork(workItemId: string): Promise
   return parseNativeOrganizationExecutionProjection(await sendNativeMutation('org-work.project-execution', { workItemId }));
 }
 
-export interface NativeTaskWorkspace {
-  id: string; projectId: string; taskId: string; slotId: string; repoPath: string; path: string; branch: string; baseSha: string;
-  resourceId: string; leaseId: string; leaseEpoch: number; capabilityId: string; capabilityTokenPath: string; controlCliPath: string; status: 'active'|'released';
-}
-
-function parseNativeTaskWorkspace(value: unknown): NativeTaskWorkspace {
-  const item = record(value, 'task workspace');
-  return {
-    id: stringField(item.id,'workspace.id'), projectId: stringField(item.projectId,'workspace.projectId'), taskId: stringField(item.taskId,'workspace.taskId'),
-    slotId: stringField(item.slotId,'workspace.slotId'), repoPath: stringField(item.repoPath,'workspace.repoPath'), path: stringField(item.path,'workspace.path'),
-    branch: stringField(item.branch,'workspace.branch'), baseSha: stringField(item.baseSha,'workspace.baseSha'), resourceId: stringField(item.resourceId,'workspace.resourceId'),
-    leaseId: stringField(item.leaseId,'workspace.leaseId'), leaseEpoch: numberField(item.leaseEpoch,'workspace.leaseEpoch'), capabilityId: stringField(item.capabilityId,'workspace.capabilityId'),
-    capabilityTokenPath: stringField(item.capabilityTokenPath,'workspace.capabilityTokenPath'), controlCliPath: stringField(item.controlCliPath,'workspace.controlCliPath'), status: stringField(item.status,'workspace.status') as NativeTaskWorkspace['status'],
-  };
-}
-
-export async function provisionNativeTaskWorkspace(input: { projectId: string; slotId: string; taskId: string }): Promise<NativeTaskWorkspace> {
-  return parseNativeTaskWorkspace(await sendNativeMutation('workspace.provision', input));
-}
 
 export interface AgentRuntimeReportInput {
   slotId: string; profileId: string; tabId: number; contentEpoch: string; revision: number;
