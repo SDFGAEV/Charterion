@@ -97,8 +97,15 @@ for (const method of ['agent.rollover-request','agent.rollover-begin','agent.rol
   if (!nativeHost.includes(`"${method}"`)) throw new Error(`Native Host rollover allowlist is missing ${method}`);
 }
 const database = await readFile(resolve(root, 'control/src/database.ts'), 'utf8');
-for (const token of ['CONTROL_SCHEMA_VERSION = 21', 'agent_conversations', 'worker_checkpoints', 'agent_rollovers', 'self_hosting_promotions']) {
+const schemaVersion = database.match(/CONTROL_SCHEMA_VERSION = (\d+)/)?.[1];
+if (!schemaVersion || Number(schemaVersion) < 1) throw new Error('Control schema version declaration is missing or invalid');
+for (const token of ['agent_conversations', 'worker_checkpoints', 'agent_rollovers', 'self_hosting_promotions', 'organization_runtime_acquisitions']) {
   if (!database.includes(token)) throw new Error(`Control schema fence missing: ${token}`);
+}
+const migrationVersions = [...database.matchAll(/private migrateV(\d+)\(\):/g)].map((match) => Number(match[1]));
+const expectedMigrations = Array.from({ length: Number(schemaVersion) }, (_, index) => index + 1);
+if (migrationVersions.length !== expectedMigrations.length || migrationVersions.some((version, index) => version !== expectedMigrations[index])) {
+  throw new Error('Control schema migration chain is not contiguous through the declared version');
 }
 const conversationAuthority = await readFile(resolve(root, 'control/src/conversationAuthority.ts'), 'utf8');
 if (!conversationAuthority.includes("operation.outcome !== 'reply-observed'")) throw new Error('Kernel rollover completion lost reply-evidence authority');

@@ -2,7 +2,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { dirname, relative, resolve, isAbsolute } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-export const CONTROL_SCHEMA_VERSION = 21;
+export const CONTROL_SCHEMA_VERSION = 22;
 
 export class ControlDatabase {
   readonly db: DatabaseSync;
@@ -97,6 +97,7 @@ export class ControlDatabase {
     if (version < 19) this.migrateV19();
     if (version < 20) this.migrateV20();
     if (version < 21) this.migrateV21();
+    if (version < 22) this.migrateV22();
     this.db.prepare(`
       INSERT INTO schema_meta(key, value) VALUES('schema_version', ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value
@@ -599,6 +600,31 @@ export class ControlDatabase {
         ) STRICT;
         CREATE INDEX IF NOT EXISTS idx_review_slots_state ON review_slots(state,review_request_id);
         CREATE INDEX IF NOT EXISTS idx_review_slots_reviewer ON review_slots(reviewer_agent_id,state);
+      `);
+    });
+  }
+
+  private migrateV22(): void {
+    this.transaction(() => {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS organization_runtime_acquisitions (
+          id TEXT PRIMARY KEY,
+          organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+          agent_id TEXT NOT NULL REFERENCES organization_agents(id) ON DELETE CASCADE,
+          project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          role TEXT NOT NULL,
+          idempotency_key TEXT NOT NULL,
+          status TEXT NOT NULL CHECK(status IN ('requested','acquiring','acquired','released','failed')),
+          runtime_slot_id TEXT REFERENCES agent_slots(id) ON DELETE SET NULL,
+          error TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          UNIQUE(organization_id,idempotency_key)
+        ) STRICT;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_org_runtime_acquisition_one_live_agent
+          ON organization_runtime_acquisitions(agent_id) WHERE status IN ('requested','acquiring','acquired');
+        CREATE INDEX IF NOT EXISTS idx_org_runtime_acquisition_project_status
+          ON organization_runtime_acquisitions(project_id,status,created_at);
       `);
     });
   }

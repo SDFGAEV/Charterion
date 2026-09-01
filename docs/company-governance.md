@@ -45,6 +45,15 @@ Task text, dependency output, repository content, or model prose cannot waive th
 Work should be decomposed into the smallest coherent subsystem packages with non-overlapping ownership. Independent packages are intentionally parallelized across independent AgentSlots/worktrees. DAG edges express real technical or evidence dependencies only; they are not a substitute for message rate limiting.
 
 Prompt pacing is a separate resource-governance concern. The account-level dispatch governor spaces sends, enforces rolling budgets and per-project/per-slot gaps, limits excessive concurrent generation, and applies persisted platform-rate-limit backoff.
+
+## Organization runtime acquisition
+
+A persistent Organization Agent does not directly select a browser tab. Runtime presence is acquired through `OrganizationRuntimeAcquisitionAuthority`, which records the organization, Agent, ProjectCell, role, idempotency key, selected AgentSlot, and lifecycle status in the Kernel database.
+
+The state machine is `requested -> acquiring -> acquired -> released`, with `failed -> requested` available only through explicit retry. Acquisition reuses a compatible idle slot or obtains capacity through the Kernel slot factory, then binds the Agent only after its dedicated workspace is ready. The ledger is deliberately written before external binding so a crash between binding and finalization can be reconciled by replaying acquisition.
+
+Release is idempotent and refuses to unbind an unrelated slot. RPC callers use `org-agent.runtime-request`, `org-agent.runtime-acquire`, `org-agent.runtime-retry`, `org-agent.runtime-release`, and the read-only get/list methods; all mutating operations remain administrator-authorized.
+
 ## Standard delivery lifecycle
 
 1. Intake records the problem, desired outcome, scope, authority, and evidence requirements.

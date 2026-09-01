@@ -2,6 +2,7 @@ import type { CapabilityGrant, RpcRequest } from './contracts';
 import type { ControlPlane } from './controlPlane';
 import type { AgentWorkspaceDangerousActionPolicy, AgentWorkspaceSecurityMode, AgentWorkspaceToolPolicyState, MissionMemberRole, MissionStatus, WorkItemStatus } from './organizationContracts';
 import type { WorkPriority, WorkRequesterKind, WorkRequestStatus } from './workIngressContracts';
+import type { RequestOrganizationRuntimeAcquisitionInput } from './organizationRuntimeAcquisitionAuthority';
 
 type Params = Record<string, unknown>;
 export interface OrganizationRpcAuth {
@@ -42,6 +43,7 @@ const METHODS = new Set([
   'organization.create','organization.list','organization.snapshot',
   'department.create','department.list','domain.create','domain.list',
   'org-agent.create','org-agent.list','org-agent.bind-runtime','org-agent.unbind-runtime','org-agent.assign-domain',
+  'org-agent.runtime-request','org-agent.runtime-acquire','org-agent.runtime-release','org-agent.runtime-retry','org-agent.runtime-get','org-agent.runtime-list',
   'org-agent.workspace-list','org-agent.workspace-request','org-agent.workspace-configure','org-agent.workspace-prompt','org-agent.workspace-fail','org-agent.workspace-retire',
   'mission.create','mission.list','mission.assign-dri','mission.add-member','mission.status',
   'org-work.create','org-work.list','org-work.assign-owner','org-work.status','org-work.complete','org-work.outcome','org-work.project-execution',
@@ -66,6 +68,12 @@ export class OrganizationRpcController {
       case 'org-agent.list': this.auth.requireBrowserOrAdmin(request); return this.plane.organization.listAgents(stringParam(params,'organizationId',true));
       case 'org-agent.bind-runtime': this.auth.requireAdmin(request); return this.plane.organization.bindRuntimeSlot(stringParam(params,'agentId')!, stringParam(params,'slotId')!);
       case 'org-agent.unbind-runtime': this.auth.requireAdmin(request); return this.plane.organization.unbindRuntimeSlot(stringParam(params,'agentId')!);
+      case 'org-agent.runtime-request': this.auth.requireAdmin(request); return this.runtimeRequest(request, params);
+      case 'org-agent.runtime-acquire': this.auth.requireAdmin(request); return this.plane.organizationRuntime.acquire(stringParam(params,'acquisitionId')!);
+      case 'org-agent.runtime-release': this.auth.requireAdmin(request); return this.plane.organizationRuntime.release(stringParam(params,'acquisitionId')!);
+      case 'org-agent.runtime-retry': this.auth.requireAdmin(request); return this.plane.organizationRuntime.retry(stringParam(params,'acquisitionId')!);
+      case 'org-agent.runtime-get': this.auth.requireBrowserOrAdmin(request); return this.plane.organizationRuntime.get(stringParam(params,'acquisitionId')!);
+      case 'org-agent.runtime-list': this.auth.requireBrowserOrAdmin(request); return this.plane.organizationRuntime.list(stringParam(params,'organizationId',true), stringParam(params,'projectId',true));
       case 'org-agent.workspace-list': this.auth.requireBrowserOrAdmin(request); return this.plane.organization.listAgentWorkspaces(stringParam(params,'agentId',true));
       case 'org-agent.workspace-request': return this.workspaceRequest(request, params);
       case 'org-agent.workspace-configure': return this.workspaceConfigure(request, params);
@@ -135,6 +143,18 @@ export class OrganizationRpcController {
       toolPolicyState: enumParam<AgentWorkspaceToolPolicyState>(params,'toolPolicyState',['unconfigured','configured','unsupported'] as const,true),
     });
   }
+  private runtimeRequest(request: RpcRequest, params: Params): unknown {
+    this.auth.requireAdmin(request);
+    const input: RequestOrganizationRuntimeAcquisitionInput = {
+      organizationId: stringParam(params,'organizationId')!,
+      agentId: stringParam(params,'agentId')!,
+      projectId: stringParam(params,'projectId')!,
+      role: stringParam(params,'role')!,
+      idempotencyKey: stringParam(params,'idempotencyKey')!,
+    };
+    return this.plane.organizationRuntime.request(input);
+  }
+
   private agentAssignDomain(request: RpcRequest, params: Params): unknown {
     this.auth.requireAdmin(request);
     return this.plane.organization.assignAgentDomain(stringParam(params,'agentId')!, stringParam(params,'domainId')!, enumParam(params,'responsibility',['primary','secondary'] as const)!);

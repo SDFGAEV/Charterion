@@ -15,6 +15,7 @@ import { AgentContinuityAuthority } from './agentContinuityAuthority';
 import { FindingAuthority } from './findingAuthority';
 import { ReviewPoolAuthority } from './reviewPoolAuthority';
 import { OrganizationExecutionBridge } from './organizationExecutionBridge';
+import { OrganizationRuntimeAcquisitionAuthority } from './organizationRuntimeAcquisitionAuthority';
 import { parseJsonRecord, parseJsonStringArray } from './persistenceCodec';
 import { planElasticFleet, type ElasticFleetDecision } from './elasticFleet';
 import { projectRootIdentity } from './projectIdentity';
@@ -180,6 +181,7 @@ export class ControlPlane {
   readonly findings: FindingAuthority;
   readonly reviewPool: ReviewPoolAuthority;
   readonly organizationExecution: OrganizationExecutionBridge;
+  readonly organizationRuntime: OrganizationRuntimeAcquisitionAuthority;
   constructor(readonly database: ControlDatabase, gitPath = 'git') {
     this.evidence = new EvidenceAuthority(database, gitPath);
     this.changes = new ChangeRequestAuthority(database, gitPath);
@@ -195,6 +197,7 @@ export class ControlPlane {
     this.findings = new FindingAuthority(database);
     this.reviewPool = new ReviewPoolAuthority(database);
     this.organizationExecution = new OrganizationExecutionBridge(database, this.organization, this.work);
+    this.organizationRuntime = new OrganizationRuntimeAcquisitionAuthority(database, this.organization, (projectId, role, now) => this.createAgentSlot(projectId, role, now));
   }
 
   provisionTaskWorkspace(projectId: string, slotId: string, taskId: string, now = Date.now()) {
