@@ -161,6 +161,8 @@ GAM.cmd doctor --json
 
 `GAM.cmd` usa um Chromium profile dedicado e inicia o local Kernel de forma idempotente. O usuário entra diretamente em `chatgpt.com`; GAM não armazena password, MFA secret, cookie nem account token e não precisa de OpenAI API key.
 
+For the complete local, source, release, and Remote Desktop Commander deployment procedure, see [Deployment Guide](https://github.com/SDFGAEV/Charterion/blob/main/docs/DEPLOYMENT.md).
+
 <!-- readme-section:security -->
 ## Limites de segurança
 

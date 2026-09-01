@@ -163,6 +163,8 @@ GAM.cmd doctor --json
 
 GAM 使用独立 Chromium profile。用户只在官方 `chatgpt.com` 页面正常登录；GAM 不保存密码、MFA secret、cookie 或账号 token，也不需要 OpenAI API key。
 
+For the complete local, source, release, and Remote Desktop Commander deployment procedure, see [Deployment Guide](https://github.com/SDFGAEV/Charterion/blob/main/docs/DEPLOYMENT.md).
+
 <!-- readme-section:security -->
 ## 安全边界
 
