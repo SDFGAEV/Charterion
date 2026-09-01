@@ -83,6 +83,16 @@ describe('named-pipe transport', () => {
     const response = await sendRpc(pipe, { id: 'health', method: 'health' });
     expect(response).toEqual({ id: 'health', ok: true, result: { status: 'ok', protocolVersion: 2, instanceId: null } });
   });
+
+  it('rejects a response whose id does not match the request', async () => {
+    const pipe = process.platform === 'win32'
+      ? `\\\\.\\pipe\\gam-test-${randomUUID()}`
+      : join(tmpdir(), `gam-test-${randomUUID()}.sock`);
+    const mismatchingRouter = { handle: () => ({ id: 'other-request', ok: true, result: { status: 'ok' } }) } as unknown as RpcRouter;
+    const server = await startIpcServer(pipe, mismatchingRouter);
+    cleanups.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
+    await expect(sendRpc(pipe, { id: 'expected-request', method: 'health' })).rejects.toThrow(/different request/i);
+  });
 });
 
 describe('browser control credential', () => {
