@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { nativeResult } from '../src/nativeRpcContract';
 import { parseNativeControlSnapshot, parseNativeTaskWorkspace } from '../src/nativeControl';
 
 function snapshot() {
@@ -18,6 +19,11 @@ function snapshot() {
 }
 
 describe('native control snapshot parser', () => {
+  it('rejects mismatched native RPC responses', () => {
+    expect(() => nativeResult({ id: 'other', ok: true, result: {} }, 'request', 'control.snapshot')).toThrow(/does not match/);
+    expect(() => nativeResult({ id: 'request', ok: false, error: { message: 'denied' } }, 'request', 'control.snapshot')).toThrow('denied');
+  });
+
   it('accepts a typed control snapshot', () => {
     const parsed = parseNativeControlSnapshot(snapshot());
     expect(parsed.projects[0]?.name).toBe('P');

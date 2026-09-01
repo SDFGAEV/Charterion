@@ -1,3 +1,5 @@
+import { nativeResult, type NativeRpcResponse } from './nativeRpcContract';
+
 export const NATIVE_CONTROL_HOST = 'com.gpt_agent_manager.control';
 const PROJECT_STATUSES = new Set(['active', 'draining', 'paused', 'archived']);
 const AGENT_STATUSES = new Set(['idle', 'assigned', 'suspended', 'retired']);
@@ -131,13 +133,6 @@ export interface NativeControlSnapshot {
   events: ControlEventView[];
 }
 
-interface NativeRpcResponse {
-  id: string;
-  ok: boolean;
-  result?: unknown;
-  error?: { code?: string; message?: string };
-}
-
 function record(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} is invalid`);
   return value as Record<string, unknown>;
@@ -162,12 +157,6 @@ function enumField(value: unknown, label: string, allowed: ReadonlySet<string>):
 function arrayField(value: unknown, label: string): unknown[] {
   if (!Array.isArray(value)) throw new Error(`${label} must be an array`);
   return value;
-}
-
-function nativeResult(response: NativeRpcResponse, requestId: string, operation: string): unknown {
-  if (!response || response.id !== requestId) throw new Error(`Native control response does not match ${operation} request`);
-  if (!response.ok) throw new Error(response.error?.message ?? `Native control host rejected ${operation}`);
-  return response.result;
 }
 
 export function parseNativeControlSnapshot(value: unknown): NativeControlSnapshot {
