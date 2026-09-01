@@ -1,6 +1,7 @@
 import { advanceAttempt } from './attempts';
 import { retainAttemptLedger } from './attemptLedger';
 import { deriveManagedTasks, isRetryableTaskAttempt, validateTaskGraph } from './taskGraph';
+import { markReplyObserved, persistAttempt, readWorkState, replaceWorkState, serializeStateMutation, transitionAttempt, workState, type WorkState } from './backgroundWorkState';
 import { dispatchReadyManagedTasks } from './taskDispatchRuntime';
 import { attemptBelongsToTab } from './tabAttempt';
 import { applyHumanDecision, applyTaskDisposition } from './taskLifecycle';
@@ -10,7 +11,7 @@ import { parseReviewResult } from './review';
 import { assertMessageDeliveryAvailable, buildSemanticMessagePrompt, createAgentMessage, planMessageDispatch } from './messageBus';
 import { createPortableManagerState, parsePortableManagerState, restorePortableAttempts, stringifyPortableManagerState } from './stateTransfer';
 import { recoverAttempt, type AttemptRecoveryObservation } from './recovery';
-import { beginNativeAgentRollover, dispatchNativeBrowserOperation, planNativeBrowserOperation, readNativeControlSnapshot, readNativeWorkSnapshot, replaceNativeWorkState, reportNativeAgentBrowser, reportNativeBrowserRuntime, reconcileNativeElasticFleet, settleNativeBrowserOperation } from './nativeControl';
+import { beginNativeAgentRollover, dispatchNativeBrowserOperation, planNativeBrowserOperation, mutateNativeWorkDocument, readNativeControlSnapshot, readNativeWorkSnapshot, replaceNativeWorkState, reportNativeAgentBrowser, reportNativeBrowserRuntime, reconcileNativeElasticFleet, settleNativeBrowserOperation } from './nativeControl';
 import { planFleetReconciliation, workerRequestMessage } from './fleet';
 import { bootstrapPendingConversationRollover, bootstrapReplyAttemptId, completeConversationRolloverForReply, requestAutomaticConversationRollover } from './conversationRollover';
 import { deriveBrowserRuntimeObservation, fleetExpansionAllowed } from './browserRuntime';
@@ -53,14 +54,32 @@ const promptDispatchGovernor = new PromptDispatchGovernor({
   read: async () => (await chrome.storage.local.get(PROMPT_DISPATCH_GOVERNOR_KEY))[PROMPT_DISPATCH_GOVERNOR_KEY],
   write: async (state) => { await chrome.storage.local.set({ [PROMPT_DISPATCH_GOVERNOR_KEY]: state }); },
 });
+function parseBinding(value: unknown): RoleBinding | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const item = value as Record<string, unknown>;
+  if (typeof item.role !== 'string' || typeof item.project !== 'string' || typeof item.notes !== 'string') return undefined;
+  if (item.agentSlotId !== undefined && typeof item.agentSlotId !== 'string') return undefined;
+  return { role: item.role, project: item.project, notes: item.notes, ...(typeof item.agentSlotId === 'string' ? { agentSlotId: item.agentSlotId } : {}) };
+}
+
+function parseBindingMap(value: unknown): Record<string, RoleBinding> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const result: Record<string, RoleBinding> = {};
+  for (const [key, raw] of Object.entries(value)) {
+    const binding = parseBinding(raw);
+    if (binding) result[key] = binding;
+  }
+  return result;
+}
+
 async function localBindings(): Promise<Record<string, RoleBinding>> {
   const stored = await chrome.storage.local.get(BINDINGS_KEY);
-  return (stored[BINDINGS_KEY] as Record<string, RoleBinding> | undefined) ?? {};
+  return parseBindingMap(stored[BINDINGS_KEY]);
 }
 
 async function sessionBindings(): Promise<Record<string, RoleBinding>> {
   const stored = await chrome.storage.session.get(TAB_BINDINGS_KEY);
-  return (stored[TAB_BINDINGS_KEY] as Record<string, RoleBinding> | undefined) ?? {};
+  return parseBindingMap(stored[TAB_BINDINGS_KEY]);
 }
 
 async function saveLocal(bindings: Record<string, RoleBinding>): Promise<void> {
@@ -73,79 +92,17 @@ async function saveSession(bindings: Record<string, RoleBinding>): Promise<void>
 
 async function fleetTabMap(): Promise<Record<string, number>> {
   const stored = await chrome.storage.session.get(FLEET_TABS_KEY);
-  return (stored[FLEET_TABS_KEY] as Record<string, number> | undefined) ?? {};
+  const value = stored[FLEET_TABS_KEY];
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const result: Record<string, number> = {};
+  for (const [slotId, tabId] of Object.entries(value)) {
+    if (Number.isInteger(tabId) && Number(tabId) >= 0) result[slotId] = Number(tabId);
+  }
+  return result;
 }
 
 async function saveFleetTabMap(value: Record<string, number>): Promise<void> {
   await chrome.storage.session.set({ [FLEET_TABS_KEY]: value });
-}
-interface WorkState {
-  revision: number;
-  attempts: SendAttemptRecord[];
-  tasks: AgentTask[];
-  messages: AgentMessage[];
-}
-
-async function readWorkState(): Promise<WorkState> {
-  const state = await readNativeWorkSnapshot();
-  return { revision: state.revision, attempts: state.attempts, tasks: state.tasks.map(normalizeTask), messages: state.messages };
-}
-
-async function replaceWorkState(current: WorkState, patch: Partial<Pick<WorkState, 'attempts' | 'tasks' | 'messages'>>): Promise<WorkState> {
-  const next = await replaceNativeWorkState({ revision: current.revision, attempts: patch.attempts ?? current.attempts, tasks: patch.tasks ?? current.tasks, messages: patch.messages ?? current.messages });
-  return { revision: next.revision, attempts: next.attempts, tasks: next.tasks.map(normalizeTask), messages: next.messages };
-}
-
-function serializeStateMutation<T>(operation: () => Promise<T>): Promise<T> {
-  const run = stateMutationTail.then(operation, operation);
-  stateMutationTail = run.then(() => undefined, () => undefined);
-  return run;
-}
-
-async function workState(): Promise<WorkState> {
-  await stateMutationTail;
-  return readWorkState();
-}
-
-async function persistAttempt(record: SendAttemptRecord): Promise<void> {
-  await serializeStateMutation(async () => {
-    const state = await readWorkState();
-    const attempts = retainAttemptLedger([...state.attempts.filter((item) => item.attemptId !== record.attemptId), record], state.tasks, state.messages);
-    await replaceWorkState(state, { attempts });
-  });
-}
-
-async function transitionAttempt(record: SendAttemptRecord, state: SendAttemptState, error?: string): Promise<SendAttemptRecord> {
-  return serializeStateMutation(async () => {
-    const currentState = await readWorkState();
-    const current = currentState.attempts.find((item) => item.attemptId === record.attemptId) ?? record;
-    const next = advanceAttempt(current, state, Date.now(), error);
-    const attempts = retainAttemptLedger([...currentState.attempts.filter((item) => item.attemptId !== next.attemptId), next], currentState.tasks, currentState.messages);
-    await replaceWorkState(currentState, { attempts });
-    return next;
-  });
-}
-
-async function markReplyObserved(attemptId: string, contentEpoch: string, snapshot: ChatSnapshot, senderTabId?: number): Promise<boolean> {
-  const persisted = await serializeStateMutation(async () => {
-    const state = await readWorkState();
-    const current = state.attempts.find((item) => item.attemptId === attemptId);
-    if (!current || current.contentEpoch !== contentEpoch || (senderTabId !== undefined && current.tabId !== senderTabId)) return false;
-    if (current.state === 'reply-observed') return true;
-    const advanced = advanceAttempt(current, 'reply-observed');
-    if (advanced.state !== 'reply-observed') return false;
-    const next: SendAttemptRecord = { ...advanced, replyObservedAt: Date.now(), replyTextTail: snapshot.latestAssistantText.slice(-8000) };
-    if (snapshot.latestAssistantMessageId) next.replyMessageId = snapshot.latestAssistantMessageId;
-    const attempts = retainAttemptLedger([...state.attempts.filter((item) => item.attemptId !== next.attemptId), next], state.tasks, state.messages);
-    await replaceWorkState(state, { attempts });
-    return true;
-  });
-  if (persisted) {
-    await settleNativeBrowserOperation(attemptId, 'reply-observed', {
-      contentEpoch, assistantMessageId: snapshot.latestAssistantMessageId ?? null, assistantMessageCount: snapshot.assistantMessageCount,
-    }).catch(() => reportIncident('browser-operation-reply-settle-failed', attemptId, { contentEpoch }));
-  }
-  return persisted;
 }
 async function reconcileAfterRestart(): Promise<void> {
   const state = await workState();
@@ -680,6 +637,7 @@ async function reconcileAgentFleetOnce(): Promise<void> {
     for (const action of actions) {
       const agent = agents.get(action.slotId); if (!agent) continue;
       const project = projects.get(agent.projectId); if (!project) continue;
+      try {
       if (action.kind === 'open') {
         if (!expansionAllowed) {
           if (agent.browserState !== 'absent') {
@@ -722,6 +680,9 @@ async function reconcileAgentFleetOnce(): Promise<void> {
       } else {
         delete mapping[agent.id]; await saveFleetTabMap(mapping);
         await reportNativeAgentBrowser({ slotId: agent.id, profileId: 'gam-default', browserState: 'absent', observedAt: Date.now() });
+      }
+      } catch (error) {
+        await reportIncident('fleet-action-failed', action.slotId, { kind: action.kind, error: error instanceof Error ? error.message : String(error) });
       }
     }
     await deliverWorkerRequestMessages(snapshot);
@@ -804,7 +765,7 @@ chrome.runtime.onMessage.addListener((message: ManagerRequest | RuntimeNotice, s
     void sendToTabs(message.tabIds, message.text).then(async (results) => {
       await notifyManagerChanged();
       sendResponse({ ok: true, results });
-    });
+    }).catch((error) => sendResponse({ ok: false, error: String(error) }));
     return true;
   }
   if (message.type === 'manager:create-task') {
@@ -896,7 +857,7 @@ chrome.runtime.onMessage.addListener((message: ManagerRequest | RuntimeNotice, s
   return false;
 });
 
-void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch((error) => reportIncident('side-panel-configuration-failed', 'extension', { error: String(error) }));
 chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
   if (tab.url?.startsWith('https://chatgpt.com/') && (changeInfo.status === 'complete' || changeInfo.url !== undefined)) {
     void notifyManagerChanged();
@@ -915,7 +876,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
     if (changed) await Promise.all([saveSession(bindings), saveFleetTabMap(mapping)]);
     await notifyManagerChanged();
     scheduleFleetReconcile(0);
-  })();
+  })().catch((error) => reportIncident('tab-removal-reconciliation-failed', String(tabId), { error: error instanceof Error ? error.message : String(error) }));
 });
 
 void migrateLegacyWorkStateOnce().then(() => reconcileAfterRestart()).then(() => {
@@ -928,13 +889,13 @@ void migrateLegacyWorkStateOnce().then(() => reconcileAfterRestart()).then(() =>
 const FLEET_RECONCILE_ALARM = 'gam:fleet-reconcile';
 async function ensureFleetReconcileAlarm(): Promise<void> {
   const existing = await chrome.alarms.get(FLEET_RECONCILE_ALARM);
-  if (!existing) chrome.alarms.create(FLEET_RECONCILE_ALARM, { periodInMinutes: 1 });
+  if (!existing) await chrome.alarms.create(FLEET_RECONCILE_ALARM, { periodInMinutes: 1 });
 }
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name !== FLEET_RECONCILE_ALARM) return;
   scheduleBrowserRuntimeReport();
   scheduleFleetReconcile(0);
 });
-chrome.runtime.onInstalled.addListener(() => { void ensureFleetReconcileAlarm(); scheduleFleetReconcile(0); });
-chrome.runtime.onStartup.addListener(() => { void ensureFleetReconcileAlarm(); scheduleFleetReconcile(0); });
-void ensureFleetReconcileAlarm();
+chrome.runtime.onInstalled.addListener(() => { void ensureFleetReconcileAlarm().catch((error) => reportIncident('fleet-alarm-configuration-failed', 'extension', { error: String(error) })); scheduleFleetReconcile(0); });
+chrome.runtime.onStartup.addListener(() => { void ensureFleetReconcileAlarm().catch((error) => reportIncident('fleet-alarm-configuration-failed', 'extension', { error: String(error) })); scheduleFleetReconcile(0); });
+void ensureFleetReconcileAlarm().catch((error) => reportIncident('fleet-alarm-configuration-failed', 'extension', { error: String(error) }));

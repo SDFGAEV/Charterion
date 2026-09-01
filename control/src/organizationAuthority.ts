@@ -28,6 +28,7 @@ import type {
   RequestAgentWorkspaceInput,
 } from './organizationContracts';
 import { buildWorkspacePolicy, WORKSPACE_CHARTER_VERSION } from './workspacePolicy';
+import { parseJsonStringArray } from './persistenceCodec';
 type Row = Record<string, string | number | null>;
 
 function required(value: string, label: string): string {
@@ -87,7 +88,7 @@ function missionFrom(row: Row): MissionRecord {
 function workItemFrom(row: Row): WorkItemRecord {
   const value: WorkItemRecord = {
     id: String(row.id), missionId: String(row.mission_id), title: String(row.title), objective: String(row.objective),
-    status: String(row.status) as WorkItemRecord['status'], dependsOn: JSON.parse(String(row.depends_on_json)) as string[],
+    status: String(row.status) as WorkItemRecord['status'], dependsOn: parseJsonStringArray(String(row.depends_on_json), 'organization work item dependencies'),
     createdAt: Number(row.created_at), updatedAt: Number(row.updated_at),
   };
   if (row.owner_agent_id !== null) value.ownerAgentId = String(row.owner_agent_id);
@@ -98,9 +99,9 @@ function workspaceFrom(row: Row): AgentWorkspaceRecord {
   const value: AgentWorkspaceRecord = {
     id: String(row.id), organizationId: String(row.organization_id), agentId: String(row.agent_id),
     generation: Number(row.generation), securityMode: String(row.security_mode) as AgentWorkspaceSecurityMode,
-    endpointRefs: JSON.parse(String(row.endpoint_refs_json)) as string[],
-    allowedRefs: JSON.parse(String(row.allowed_refs_json)) as string[],
-    forbiddenRefs: JSON.parse(String(row.forbidden_refs_json)) as string[],
+    endpointRefs: parseJsonStringArray(String(row.endpoint_refs_json), 'agent workspace endpoint refs'),
+    allowedRefs: parseJsonStringArray(String(row.allowed_refs_json), 'agent workspace allowed refs'),
+    forbiddenRefs: parseJsonStringArray(String(row.forbidden_refs_json), 'agent workspace forbidden refs'),
     workspaceCharterVersion: String(row.workspace_charter_version),
     workspaceCharterDigest: String(row.workspace_charter_digest),
     dangerousActionPolicy: String(row.dangerous_action_policy) as AgentWorkspaceRecord['dangerousActionPolicy'],

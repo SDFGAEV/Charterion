@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { ControlDatabase } from './database';
+import { parseJsonRecord } from './persistenceCodec';
 import type {
   AgentSlot, BrowserOperationOutcome, BrowserOperationRecord,
   PlanBrowserOperationInput, ReportAgentRuntimeInput, ResourceLease, RuntimeIncident,
@@ -14,7 +15,7 @@ function nonEmpty(value: string, label: string): string {
 }
 
 function parseJson(value: string): Record<string, unknown> {
-  return JSON.parse(value) as Record<string, unknown>;
+  return parseJsonRecord(value, 'Browser persisted evidence');
 }
 
 function operationFrom(row: Row): BrowserOperationRecord {

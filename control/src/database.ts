@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, relative, resolve, isAbsolute } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
 export const CONTROL_SCHEMA_VERSION = 21;
@@ -27,21 +27,29 @@ export class ControlDatabase {
   }
 
   checkpoint(mode: 'PASSIVE'|'FULL'|'RESTART'|'TRUNCATE' = 'FULL'): Record<string, number> {
-    const row = this.db.prepare(`PRAGMA wal_checkpoint(${mode})`).get() as Record<string, number> | undefined;
-    return row ?? {};
+    const row = this.db.prepare(`PRAGMA wal_checkpoint(${mode})`).get() as Record<string, unknown> | undefined;
+    if (!row) throw new Error('SQLite checkpoint returned no result');
+    const values = Object.values(row).map(Number);
+    if (values.length < 3 || values.some((value) => !Number.isInteger(value) || value < 0)) throw new Error('SQLite checkpoint returned an invalid result');
+    return Object.fromEntries(Object.entries(row).map(([key, value]) => [key, Number(value)]));
   }
 
-  backupTo(destination: string): { path: string; health: { ok: boolean; quickCheck: string[]; foreignKeyViolations: number } } {
-    if (existsSync(destination)) throw new Error('Database backup destination already exists');
-    mkdirSync(dirname(destination), { recursive: true });
+  backupTo(destination: string, options: { authorizedRoot?: string } = {}): { path: string; health: { ok: boolean; quickCheck: string[]; foreignKeyViolations: number } } {
+    const target = resolve(destination);
+    const root = resolve(options.authorizedRoot ?? dirname(this.path));
+    const rel = relative(root, target);
+    if (!isAbsolute(target) || !rel || rel === '.' || rel.startsWith('..') || isAbsolute(rel)) throw new Error('Database backup destination is outside the authorized root');
+    if (target.toLowerCase() === resolve(this.path).toLowerCase()) throw new Error('Database backup destination must differ from the live database');
+    if (existsSync(target)) throw new Error('Database backup destination already exists');
+    mkdirSync(dirname(target), { recursive: true });
     this.checkpoint('FULL');
-    const escaped = destination.replaceAll("'", "''");
+    const escaped = target.replaceAll("'", "''");
     this.db.exec(`VACUUM INTO '${escaped}'`);
-    const backup = new ControlDatabase(destination);
+    const backup = new ControlDatabase(target);
     try {
       const health = backup.health();
       if (!health.ok) throw new Error('Database backup verification failed');
-      return { path: destination, health };
+      return { path: target, health };
     } finally { backup.close(); }
   }
 

@@ -35,18 +35,18 @@ function rememberDelivered(attemptId: string): void {
 
 function readPendingPrompt(): PendingPromptEvidence | undefined {
   try {
-    const parsed = JSON.parse(sessionStorage.getItem(PENDING_PROMPT_KEY) ?? 'null') as Partial<PendingPromptEvidence> | null;
-    if (!parsed || typeof parsed.attemptId !== 'string' || typeof parsed.baselineAssistantMessageCount !== 'number') return undefined;
-    if (typeof parsed.contentEpoch !== 'string' || parsed.contentEpoch !== contentEpoch) return undefined;
+    const parsed: unknown = JSON.parse(sessionStorage.getItem(PENDING_PROMPT_KEY) ?? 'null');
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
+    const item = parsed as Record<string, unknown>;
+    if (typeof item.attemptId !== 'string' || typeof item.baselineAssistantMessageCount !== 'number') return undefined;
+    if (typeof item.contentEpoch !== 'string' || item.contentEpoch !== contentEpoch) return undefined;
     const pending: PendingPromptEvidence = {
-      attemptId: parsed.attemptId,
+      attemptId: item.attemptId,
       contentEpoch,
-      baselineAssistantMessageCount: parsed.baselineAssistantMessageCount,
-      startedAt: typeof parsed.startedAt === 'number' ? parsed.startedAt : 0,
+      baselineAssistantMessageCount: item.baselineAssistantMessageCount,
+      startedAt: typeof item.startedAt === 'number' ? item.startedAt : 0,
     };
-    if (typeof parsed.baselineAssistantMessageId === 'string') {
-      pending.baselineAssistantMessageId = parsed.baselineAssistantMessageId;
-    }
+    if (typeof item.baselineAssistantMessageId === 'string') pending.baselineAssistantMessageId = item.baselineAssistantMessageId;
     return pending;
   } catch { return undefined; }
 }
@@ -143,8 +143,8 @@ chrome.runtime.onMessage.addListener((message: ContentRequest, _sender, sendResp
         startedAt: Date.now(),
       };
       if (baseline.latestAssistantMessageId) pending.baselineAssistantMessageId = baseline.latestAssistantMessageId;
-      writePendingPrompt(pending);
       try {
+        writePendingPrompt(pending);
         await sendPrompt(document, message.text);
         rememberDelivered(message.attemptId);
         schedulePublish();

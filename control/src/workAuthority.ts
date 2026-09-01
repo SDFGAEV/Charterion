@@ -31,6 +31,15 @@ export interface ReplaceKernelWorkInput {
   messages: WorkDocument[];
 }
 
+export interface UpsertKernelWorkInput {
+  kind: WorkKind;
+  expectedRevision: number;
+  transportGeneration: string;
+  transportSequence: number;
+  transportMessageId: string;
+  document: WorkDocument;
+}
+
 function document(value: unknown, label: string): WorkDocument {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} must be an object`);
   const copy = JSON.parse(JSON.stringify(value)) as WorkDocument;
@@ -147,6 +156,57 @@ export class WorkAuthority {
       this.database.db.prepare(`INSERT INTO events(project_id,type,subject,payload_json,created_at) VALUES(NULL,'WORK_TASK_APPENDED',?,?,?)`)
         .run(id, JSON.stringify({ revision, source: 'organization-execution' }), now);
       return this.getTask(id)!;
+    });
+  }
+
+  upsert(input: UpsertKernelWorkInput, now = Date.now()): { revision: number } {
+    if (!Number.isInteger(input.expectedRevision) || input.expectedRevision < 0) throw new Error('expectedRevision is invalid');
+    if (!input.transportGeneration.trim() || !input.transportMessageId.trim()) throw new Error('Work transport identity is required');
+    if (!Number.isInteger(input.transportSequence) || input.transportSequence !== input.expectedRevision + 1) throw new Error('Work transport sequence must equal expectedRevision + 1');
+    const item = document(input.document, input.kind + ' document');
+    const id = workId(item, input.kind);
+    if (input.kind === 'task') {
+      stringIds(item.attemptIds ?? [], `task ${id}.attemptIds`);
+      stringIds(item.dependsOn ?? [], `task ${id}.dependsOn`);
+      for (const key of ['kind', 'completionPolicy', 'title', 'project', 'instruction', 'targetRole']) if (typeof item[key] !== 'string') throw new Error(`task ${id}.${key} is required`);
+    } else if (input.kind === 'message') {
+      stringIds(item.attemptIds ?? [], `message ${id}.attemptIds`);
+      document(item.target, `message ${id}.target`);
+      for (const key of ['project', 'fromRole', 'type', 'content']) if (typeof item[key] !== 'string') throw new Error(`message ${id}.${key} is required`);
+    }
+    const table = input.kind === 'task' ? 'manager_tasks' : input.kind === 'attempt' ? 'manager_attempts' : 'manager_messages';
+    const payloadHash = createHash('sha256').update(JSON.stringify({ kind: input.kind, expectedRevision: input.expectedRevision, document: item })).digest('hex');
+    return this.database.transaction(() => {
+      const receipt = this.database.db.prepare('SELECT generation,sequence,payload_hash,result_revision FROM manager_work_mutations WHERE message_id=?').get(input.transportMessageId) as { generation?: string; sequence?: number; payload_hash?: string; result_revision?: number } | undefined;
+      if (receipt) {
+        if (receipt.generation !== input.transportGeneration || Number(receipt.sequence) !== input.transportSequence || receipt.payload_hash !== payloadHash) throw new Error('Work transport message identity conflict');
+        return { revision: Number(receipt.result_revision) };
+      }
+      const sequenceConflict = this.database.db.prepare('SELECT message_id FROM manager_work_mutations WHERE generation=? AND sequence=?').get(input.transportGeneration, input.transportSequence) as { message_id?: string } | undefined;
+      if (sequenceConflict?.message_id) throw new Error('Work transport sequence is already occupied by another message');
+      const current = this.database.db.prepare('SELECT revision FROM manager_work_meta WHERE singleton=1').get() as { revision: number };
+      if (Number(current.revision) !== input.expectedRevision) throw new Error(`Work state revision conflict: expected ${input.expectedRevision}, current ${current.revision}`);
+      if (input.kind === 'attempt') {
+        const taskId = typeof item.taskId === 'string' ? item.taskId : undefined;
+        const messageId = typeof item.messageId === 'string' ? item.messageId : undefined;
+        if (taskId && messageId) throw new Error(`Attempt ${id} cannot belong to both task and message`);
+        if (taskId && !this.getTask(taskId)) throw new Error(`Attempt ${id} references missing task ${taskId}`);
+        if (messageId && !this.database.db.prepare('SELECT id FROM manager_messages WHERE id=?').get(messageId)) throw new Error(`Attempt ${id} references missing message ${messageId}`);
+      }
+      const existing = this.database.db.prepare(`SELECT id FROM ${table} WHERE id=?`).get(id);
+      if (existing) {
+        this.database.db.prepare(`UPDATE ${table} SET document_json=?,updated_at=? WHERE id=?`).run(JSON.stringify(item), now, id);
+      } else {
+        const count = this.database.db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number };
+        this.database.db.prepare(`INSERT INTO ${table}(id,position,document_json,updated_at) VALUES(?,?,?,?)`).run(id, Number(count.count), JSON.stringify(item), now);
+      }
+      const revision = input.expectedRevision + 1;
+      this.database.db.prepare('UPDATE manager_work_meta SET revision=?,updated_at=? WHERE singleton=1').run(revision, now);
+      this.database.db.prepare('INSERT INTO manager_work_mutations(message_id,generation,sequence,payload_hash,result_revision,created_at) VALUES(?,?,?,?,?,?)')
+        .run(input.transportMessageId, input.transportGeneration, input.transportSequence, payloadHash, revision, now);
+      this.database.db.prepare(`INSERT INTO events(project_id,type,subject,payload_json,created_at) VALUES(NULL,'WORK_DOCUMENT_UPSERTED',?,?,?)`)
+        .run(id, JSON.stringify({ kind: input.kind, revision }), now);
+      return { revision };
     });
   }
 

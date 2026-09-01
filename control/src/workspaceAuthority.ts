@@ -124,6 +124,13 @@ export class WorkspaceAuthority {
     return { repoPath, path, branch, baseSha };
   }
 
+  abortMaterialized(materialized: MaterializedWorkspace): void {
+    if (!this.registeredWorktree(materialized.repoPath, materialized.path)) return;
+    const observation = this.git(materialized.path, ['status', '--porcelain=v1', '--untracked-files=all'], true);
+    if (observation || this.git(materialized.path, ['branch', '--show-current'], true) !== materialized.branch) return;
+    this.git(materialized.repoPath, ['worktree', 'remove', materialized.path], true);
+  }
+
   record(input: MaterializedWorkspace & {
     projectId: string; taskId: string; slotId: string; resourceId: string; leaseId: string; leaseEpoch: number;
     capabilityId: string; capabilityToken: string;

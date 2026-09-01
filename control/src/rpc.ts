@@ -80,8 +80,10 @@ export class RpcRouter {
       return { id, ok: true, result: this.dispatch(request) };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      const code = /authentication|Capability token/i.test(message) ? 'UNAUTHORIZED' : 'INVALID_REQUEST';
-      return failure(id, code, message);
+      const unauthorized = /authentication|Capability token/i.test(message);
+      const clientFault = /required|invalid|must be|cannot|does not|not found|conflict|stale|unsupported|already|missing|rejected|evidence|policy|task|attempt|message|lease|workspace|project|request|review|queue|browser|work state|candidate|sha|head|parent|target|subject|authority|claim|commit|ref|grant/i.test(message);
+      const code = unauthorized ? 'UNAUTHORIZED' : clientFault ? 'INVALID_REQUEST' : 'INTERNAL_ERROR';
+      return failure(id, code, code === 'INTERNAL_ERROR' ? 'Internal control-plane error' : message);
     }
   }
   private requireAdmin(request: RpcRequest): void {
@@ -291,6 +293,7 @@ export class RpcRouter {
       case 'events.list': return this.eventsList(request, params);
       case 'work.snapshot': return this.workSnapshot(request);
       case 'work.replace': return this.workReplace(request, params);
+      case 'work.mutate': return this.workMutate(request, params);
       case 'fleet.reconcile': return this.fleetReconcile(request, params);
       case 'workspace.provision': return this.workspaceProvision(request, params);
       case 'workspace.list': return this.workspaceList(request, params);
@@ -724,6 +727,20 @@ export class RpcRouter {
       tasks: objectArrayParam(params, 'tasks'),
       attempts: objectArrayParam(params, 'attempts'),
       messages: objectArrayParam(params, 'messages'),
+    });
+  }
+
+  private workMutate(request: RpcRequest, params: Record<string, unknown>): unknown {
+    this.requireBrowser(request);
+    const kind = enumParam(params, 'kind', ['task', 'attempt', 'message'] as const)!;
+    const document = objectParam(params, 'document')!;
+    return this.plane.work.upsert({
+      kind,
+      expectedRevision: numberParam(params, 'expectedRevision')!,
+      transportGeneration: stringParam(params, 'transportGeneration')!,
+      transportSequence: numberParam(params, 'transportSequence')!,
+      transportMessageId: stringParam(params, 'transportMessageId')!,
+      document,
     });
   }
 

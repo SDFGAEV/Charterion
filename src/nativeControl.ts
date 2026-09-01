@@ -1,4 +1,4 @@
-import { nativeResult, type NativeRpcResponse } from './nativeRpcContract';
+import { nativeResult, parseNativeRpcResponse, type NativeRpcResponse } from './nativeRpcContract';
 
 export const NATIVE_CONTROL_HOST = 'com.gpt_agent_manager.control';
 const PROJECT_STATUSES = new Set(['active', 'draining', 'paused', 'archived']);
@@ -159,6 +159,12 @@ function arrayField(value: unknown, label: string): unknown[] {
   return value;
 }
 
+function stringArrayField(value: unknown, label: string): string[] {
+  const array = arrayField(value, label);
+  if (!array.every((item) => typeof item === 'string' && item.trim().length > 0)) throw new Error(`${label} must contain non-empty strings`);
+  return array as string[];
+}
+
 export function parseNativeControlSnapshot(value: unknown): NativeControlSnapshot {
   const root = record(value, 'control snapshot');
   if (root.protocolVersion !== 2) throw new Error('Unsupported control protocol version');
@@ -284,7 +290,7 @@ export async function readNativeControlSnapshot(): Promise<NativeControlSnapshot
   const request = { id: crypto.randomUUID(), method: 'control.snapshot', params: {} };
   let response: NativeRpcResponse;
   try {
-    response = await chrome.runtime.sendNativeMessage(NATIVE_CONTROL_HOST, request) as NativeRpcResponse;
+    response = await parseNativeRpcResponse(await chrome.runtime.sendNativeMessage(NATIVE_CONTROL_HOST, request));
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     throw new Error(`Native control plane is unavailable: ${reason}`);
@@ -296,7 +302,7 @@ export async function reportNativeBrowserRuntime(input: BrowserRuntimeReportInpu
   const request = { id: crypto.randomUUID(), method: 'browser.report', params: input };
   let response: NativeRpcResponse;
   try {
-    response = await chrome.runtime.sendNativeMessage(NATIVE_CONTROL_HOST, request) as NativeRpcResponse;
+    response = await parseNativeRpcResponse(await chrome.runtime.sendNativeMessage(NATIVE_CONTROL_HOST, request));
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     throw new Error(`Native control plane is unavailable: ${reason}`);
@@ -312,19 +318,40 @@ export interface AgentBrowserReportInput {
 export async function reportNativeAgentBrowser(input: AgentBrowserReportInput): Promise<void> {
   const request = { id: crypto.randomUUID(), method: 'agent.browser-report', params: input };
   let response: NativeRpcResponse;
-  try { response = await chrome.runtime.sendNativeMessage(NATIVE_CONTROL_HOST, request) as NativeRpcResponse; }
+  try { response = await parseNativeRpcResponse(await chrome.runtime.sendNativeMessage(NATIVE_CONTROL_HOST, request)); }
   catch (error) { throw new Error(`Native control plane is unavailable: ${error instanceof Error ? error.message : String(error)}`); }
   nativeResult(response, request.id, request.method);
 }
 
 export interface NativeRolloverStatus { rollover: { id: string; slotId: string; status: 'requested'|'opening'|'bootstrapping'; checkpointId: string; fromConversationKey: string; toConversationKey?: string; bootstrapAttemptId?: string; reason: string; }; checkpoint: { id: string; handoffText: string; reason: string; state: Record<string, unknown>; }; }
+const ROLLOVER_STATUSES = new Set(['requested', 'opening', 'bootstrapping']);
+
+function parseNativeRolloverStatus(value: unknown): NativeRolloverStatus | null {
+  if (value === null) return null;
+  const root = record(value, 'rollover status');
+  const rollover = record(root.rollover, 'rollover');
+  const checkpoint = record(root.checkpoint, 'checkpoint');
+  const result: NativeRolloverStatus = {
+    rollover: { id: stringField(rollover.id, 'rollover.id'), slotId: stringField(rollover.slotId, 'rollover.slotId'),
+      status: enumField(rollover.status, 'rollover.status', ROLLOVER_STATUSES) as NativeRolloverStatus['rollover']['status'],
+      checkpointId: stringField(rollover.checkpointId, 'rollover.checkpointId'), fromConversationKey: stringField(rollover.fromConversationKey, 'rollover.fromConversationKey'),
+      reason: stringField(rollover.reason, 'rollover.reason') },
+    checkpoint: { id: stringField(checkpoint.id, 'checkpoint.id'), handoffText: stringField(checkpoint.handoffText, 'checkpoint.handoffText'),
+      reason: stringField(checkpoint.reason, 'checkpoint.reason'), state: record(checkpoint.state, 'checkpoint.state') },
+  };
+  if (rollover.toConversationKey !== undefined) result.rollover.toConversationKey = stringField(rollover.toConversationKey, 'rollover.toConversationKey');
+  if (rollover.bootstrapAttemptId !== undefined) result.rollover.bootstrapAttemptId = stringField(rollover.bootstrapAttemptId, 'rollover.bootstrapAttemptId');
+  return result;
+}
 
 export async function requestNativeAgentRollover(input: { slotId: string; reason: string; handoffText: string; state: Record<string, unknown> }): Promise<void> { await sendNativeMutation('agent.rollover-request', input as unknown as Record<string, unknown>); }
 export async function beginNativeAgentRollover(slotId: string, rolloverId: string): Promise<void> { await sendNativeMutation('agent.rollover-begin', { slotId, rolloverId }); }
 export async function markNativeAgentRolloverBootstrap(slotId: string, rolloverId: string, attemptId: string): Promise<void> { await sendNativeMutation('agent.rollover-bootstrap', { slotId, rolloverId, attemptId }); }
 export async function completeNativeAgentRollover(slotId: string, attemptId: string): Promise<void> { await sendNativeMutation('agent.rollover-complete', { slotId, attemptId }); }
 export async function failNativeAgentRollover(slotId: string, error: string): Promise<void> { await sendNativeMutation('agent.rollover-fail', { slotId, error }); }
-export async function readNativeAgentRolloverStatus(slotId: string): Promise<NativeRolloverStatus | null> { return await sendNativeMutation('agent.rollover-status', { slotId }) as NativeRolloverStatus | null; }
+export async function readNativeAgentRolloverStatus(slotId: string): Promise<NativeRolloverStatus | null> {
+  return parseNativeRolloverStatus(await sendNativeMutation('agent.rollover-status', { slotId }));
+}
 
 export interface NativeWorkSnapshot {
   revision: number;
@@ -338,6 +365,22 @@ function parseNativeWorkSnapshot(value: unknown): NativeWorkSnapshot {
   const parseDocuments = <T>(key: string, idField: 'id' | 'attemptId'): T[] => arrayField(root[key], key).map((entry, index) => {
     const item = record(entry, `${key}[${index}]`);
     stringField(item[idField], `${key}[${index}].${idField}`);
+    if (key === 'tasks') {
+      stringArrayField(item.attemptIds, `${key}[${index}].attemptIds`);
+      stringArrayField(item.dependsOn, `${key}[${index}].dependsOn`);
+      stringField(item.kind, `${key}[${index}].kind`);
+      stringField(item.completionPolicy, `${key}[${index}].completionPolicy`);
+    } else if (key === 'attempts') {
+      stringField(item.state, `${key}[${index}].state`);
+      numberField(item.tabId, `${key}[${index}].tabId`);
+      numberField(item.createdAt, `${key}[${index}].createdAt`);
+      numberField(item.updatedAt, `${key}[${index}].updatedAt`);
+    } else {
+      stringArrayField(item.attemptIds, `${key}[${index}].attemptIds`);
+      record(item.target, `${key}[${index}].target`);
+      stringField(item.type, `${key}[${index}].type`);
+      stringField(item.content, `${key}[${index}].content`);
+    }
     return item as T;
   });
   return {
@@ -351,7 +394,7 @@ function parseNativeWorkSnapshot(value: unknown): NativeWorkSnapshot {
 export async function readNativeWorkSnapshot(): Promise<NativeWorkSnapshot> {
   const request = { id: crypto.randomUUID(), method: 'work.snapshot', params: {} };
   let response: NativeRpcResponse;
-  try { response = await chrome.runtime.sendNativeMessage(NATIVE_CONTROL_HOST, request) as NativeRpcResponse; }
+  try { response = await parseNativeRpcResponse(await chrome.runtime.sendNativeMessage(NATIVE_CONTROL_HOST, request)); }
   catch (error) { throw new Error(`Native control plane is unavailable: ${error instanceof Error ? error.message : String(error)}`); }
   return parseNativeWorkSnapshot(nativeResult(response, request.id, request.method));
 }
@@ -385,11 +428,32 @@ export async function replaceNativeWorkState(input: NativeWorkSnapshot): Promise
   let response: NativeRpcResponse | undefined;
   let transportError: unknown;
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    try { response = await chrome.runtime.sendNativeMessage(NATIVE_CONTROL_HOST, request) as NativeRpcResponse; transportError = undefined; break; }
+    try { response = await parseNativeRpcResponse(await chrome.runtime.sendNativeMessage(NATIVE_CONTROL_HOST, request)); transportError = undefined; break; }
     catch (error) { transportError = error; }
   }
   if (transportError || !response) throw new Error(`Native control plane is unavailable: ${transportError instanceof Error ? transportError.message : String(transportError)}`);
   return parseNativeWorkSnapshot(nativeResult(response, request.id, request.method));
+}
+
+export async function mutateNativeWorkDocument(input: { kind: 'task' | 'attempt' | 'message'; expectedRevision: number; document: Record<string, unknown> }): Promise<number> {
+  const generation = await workTransportGeneration();
+  const sequence = input.expectedRevision + 1;
+  const payloadHash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify({ kind: input.kind, expectedRevision: input.expectedRevision, document: input.document })));
+  const digest = [...new Uint8Array(payloadHash)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+  const transportMessageId = `work-mutate:${generation}:${sequence}:${digest}`;
+  const request = {
+    id: crypto.randomUUID(), method: 'work.mutate',
+    params: { kind: input.kind, expectedRevision: input.expectedRevision, transportGeneration: generation, transportSequence: sequence, transportMessageId, document: input.document },
+  };
+  let response: NativeRpcResponse | undefined;
+  let transportError: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try { response = await parseNativeRpcResponse(await chrome.runtime.sendNativeMessage(NATIVE_CONTROL_HOST, request)); transportError = undefined; break; }
+    catch (error) { transportError = error; }
+  }
+  if (transportError || !response) throw new Error(`Native control plane is unavailable: ${transportError instanceof Error ? transportError.message : String(transportError)}`);
+  const result = record(nativeResult(response, request.id, request.method), 'work mutation result');
+  return numberField(result.revision, 'work mutation revision');
 }
 
 export interface NativeTaskWorkspace {
@@ -417,8 +481,23 @@ export interface NativeOrganizationExecutionProjection {
   runtimeSlotId: string; managerTaskId: string; task: import('./contracts').AgentTask;
 }
 
+function parseNativeOrganizationExecutionProjection(value: unknown): NativeOrganizationExecutionProjection {
+  const item = record(value, 'organization execution projection');
+  const task = parseNativeWorkSnapshot({ revision: 0, tasks: [item.task], attempts: [], messages: [] }).tasks[0];
+  if (!task) throw new Error('organization execution projection task is missing');
+  return {
+    workItemId: stringField(item.workItemId, 'projection.workItemId'),
+    missionId: stringField(item.missionId, 'projection.missionId'),
+    organizationAgentId: stringField(item.organizationAgentId, 'projection.organizationAgentId'),
+    projectId: stringField(item.projectId, 'projection.projectId'),
+    runtimeSlotId: stringField(item.runtimeSlotId, 'projection.runtimeSlotId'),
+    managerTaskId: stringField(item.managerTaskId, 'projection.managerTaskId'),
+    task,
+  };
+}
+
 export async function projectNativeOrganizationWork(workItemId: string): Promise<NativeOrganizationExecutionProjection> {
-  return await sendNativeMutation('org-work.project-execution', { workItemId }) as NativeOrganizationExecutionProjection;
+  return parseNativeOrganizationExecutionProjection(await sendNativeMutation('org-work.project-execution', { workItemId }));
 }
 
 export interface AgentRuntimeReportInput {
@@ -429,7 +508,7 @@ export interface AgentRuntimeReportInput {
 async function sendNativeMutation(method: string, params: Record<string, unknown>): Promise<unknown> {
   const request = { id: crypto.randomUUID(), method, params };
   let response: NativeRpcResponse;
-  try { response = await chrome.runtime.sendNativeMessage(NATIVE_CONTROL_HOST, request) as NativeRpcResponse; }
+  try { response = await parseNativeRpcResponse(await chrome.runtime.sendNativeMessage(NATIVE_CONTROL_HOST, request)); }
   catch (error) { throw new Error(`Native control plane is unavailable: ${error instanceof Error ? error.message : String(error)}`); }
   return nativeResult(response, request.id, method);
 }

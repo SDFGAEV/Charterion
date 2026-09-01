@@ -42,6 +42,16 @@ describe('WorkAuthority', () => {
     expect(authority.snapshot().revision).toBe(0);
   });
 
+  it('supports idempotent single-document upserts without replacing unrelated records', () => {
+    const authority = harness();
+    const task = { id: 'task-1', kind: 'work', completionPolicy: 'reply', title: 'Task', project: 'project', instruction: 'Do work', targetRole: 'worker', dependsOn: [], attemptIds: [] };
+    expect(authority.upsert({ kind: 'task', expectedRevision: 0, ...transport(0, 'delta-1'), document: task }, 10)).toEqual({ revision: 1 });
+    const attempt = { attemptId: 'attempt-1', taskId: 'task-1', state: 'prepared' };
+    expect(authority.upsert({ kind: 'attempt', expectedRevision: 1, ...transport(1, 'delta-2'), document: attempt }, 11)).toEqual({ revision: 2 });
+    expect(authority.upsert({ kind: 'attempt', expectedRevision: 1, ...transport(1, 'delta-2'), document: attempt }, 12)).toEqual({ revision: 2 });
+    expect(authority.snapshot()).toMatchObject({ revision: 2, tasks: [task], attempts: [attempt] });
+  });
+
   it('rejects an attempt owned by both a task and a message', () => {
     const authority = harness();
     const broken = state();

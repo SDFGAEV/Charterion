@@ -16,16 +16,16 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22
           cache: npm
       - name: Install locked dependencies
         run: npm ci
       - name: TypeScript and architecture gates
-        run: npm run check && npm run check:control && npm run check:architecture
+        run: npm run check && npm run check:control && npm run check:architecture && npm run check:workflow-pinning
       - name: Full deterministic verification
         run: npm run verify
       - name: Production dependency audit
@@ -36,14 +36,14 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22
           cache: npm
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
         with:
           dotnet-version: 9.0.x
       - name: Install locked dependencies
@@ -52,7 +52,7 @@ jobs:
         run: npm run verify:full
       - name: Upload release smoke evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: windows-runtime-evidence
           path: |
@@ -66,6 +66,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Review dependency changes
-        uses: actions/dependency-review-action@v4
+        uses: actions/dependency-review-action@595b5aeba73380359d98a5e087f648dbb0edce1b
         with:
           fail-on-severity: high
