@@ -33,7 +33,8 @@ describe('evidence authority', () => {
       projectId: setup.project.id, taskId: setup.taskId, subject: setup.holder,
       resourceId: setup.resource.id, leaseEpoch: setup.lease.epoch, summary: 'done',
     }, 20);
-    expect(CONTROL_SCHEMA_VERSION).toBe(15);
+    const schema = h.plane.database.db.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get() as { value: string };
+    expect(Number(schema.value)).toBe(CONTROL_SCHEMA_VERSION);
     expect(claim.leaseId).toBe(setup.lease.id);
     expect(() => h.plane.evidence.submitClaim({
       projectId: setup.project.id, taskId: setup.taskId, subject: 'other',

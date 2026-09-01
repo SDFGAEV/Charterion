@@ -2,7 +2,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-export const CONTROL_SCHEMA_VERSION = 15;
+export const CONTROL_SCHEMA_VERSION = 21;
 
 export class ControlDatabase {
   readonly db: DatabaseSync;
@@ -83,6 +83,12 @@ export class ControlDatabase {
     if (version < 13) this.migrateV13();
     if (version < 14) this.migrateV14();
     if (version < 15) this.migrateV15();
+    if (version < 16) this.migrateV16();
+    if (version < 17) this.migrateV17();
+    if (version < 18) this.migrateV18();
+    if (version < 19) this.migrateV19();
+    if (version < 20) this.migrateV20();
+    if (version < 21) this.migrateV21();
     this.db.prepare(`
       INSERT INTO schema_meta(key, value) VALUES('schema_version', ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value
@@ -332,6 +338,263 @@ export class ControlDatabase {
       `);
     });
   }
+  private migrateV16(): void {
+    this.transaction(() => {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS organizations (
+          id TEXT PRIMARY KEY, name TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('active','paused','archived')),
+          purpose TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+        ) STRICT;
+        CREATE TABLE IF NOT EXISTS departments (
+          id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+          name TEXT NOT NULL, purpose TEXT NOT NULL DEFAULT '', status TEXT NOT NULL CHECK(status IN ('active','archived')),
+          created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, UNIQUE(organization_id,name)
+        ) STRICT;
+        CREATE TABLE IF NOT EXISTS organization_domains (
+          id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+          department_id TEXT NOT NULL REFERENCES departments(id) ON DELETE RESTRICT, name TEXT NOT NULL, purpose TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL CHECK(status IN ('active','archived')), created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+          UNIQUE(department_id,name)
+        ) STRICT;
+        CREATE TABLE IF NOT EXISTS organization_agents (
+          id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+          display_name TEXT NOT NULL, primary_department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,
+          runtime_slot_id TEXT UNIQUE REFERENCES agent_slots(id) ON DELETE SET NULL,
+          status TEXT NOT NULL CHECK(status IN ('active','suspended','retired')), created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+        ) STRICT;
+        CREATE INDEX IF NOT EXISTS idx_organization_agents_org_status ON organization_agents(organization_id,status,created_at);
+        CREATE TABLE IF NOT EXISTS agent_domain_assignments (
+          agent_id TEXT NOT NULL REFERENCES organization_agents(id) ON DELETE CASCADE,
+          domain_id TEXT NOT NULL REFERENCES organization_domains(id) ON DELETE CASCADE,
+          responsibility TEXT NOT NULL CHECK(responsibility IN ('primary','secondary')), assigned_at INTEGER NOT NULL,
+          PRIMARY KEY(agent_id,domain_id)
+        ) STRICT;
+        CREATE TABLE IF NOT EXISTS missions (
+          id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+          project_id TEXT REFERENCES projects(id) ON DELETE SET NULL, title TEXT NOT NULL, objective TEXT NOT NULL,
+          status TEXT NOT NULL CHECK(status IN ('proposed','active','blocked','completed','cancelled')),
+          dri_agent_id TEXT REFERENCES organization_agents(id) ON DELETE SET NULL, source_request_id TEXT,
+          created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+        ) STRICT;
+        CREATE INDEX IF NOT EXISTS idx_missions_org_status ON missions(organization_id,status,created_at);
+        CREATE TABLE IF NOT EXISTS mission_members (
+          mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+          agent_id TEXT NOT NULL REFERENCES organization_agents(id) ON DELETE CASCADE,
+          role TEXT NOT NULL CHECK(role IN ('contributor','reviewer','advisor','observer')), joined_at INTEGER NOT NULL,
+          PRIMARY KEY(mission_id,agent_id)
+        ) STRICT;
+        CREATE TABLE IF NOT EXISTS organization_work_items (
+          id TEXT PRIMARY KEY, mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+          title TEXT NOT NULL, objective TEXT NOT NULL, owner_agent_id TEXT REFERENCES organization_agents(id) ON DELETE SET NULL,
+          status TEXT NOT NULL CHECK(status IN ('proposed','ready','active','blocked','completed','cancelled')),
+          depends_on_json TEXT NOT NULL DEFAULT '[]', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+        ) STRICT;
+        CREATE INDEX IF NOT EXISTS idx_organization_work_mission_status ON organization_work_items(mission_id,status,created_at);
+        CREATE TABLE IF NOT EXISTS work_requests (
+          id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+          project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+          requester_kind TEXT NOT NULL CHECK(requester_kind IN ('human','external-ai','internal-agent','system')),
+          requester_identity TEXT NOT NULL, objective TEXT NOT NULL, context_refs_json TEXT NOT NULL,
+          constraints_json TEXT NOT NULL, desired_outputs_json TEXT NOT NULL,
+          priority TEXT NOT NULL CHECK(priority IN ('low','normal','high','urgent')), deadline INTEGER,
+          idempotency_key TEXT, request_digest TEXT NOT NULL,
+          status TEXT NOT NULL CHECK(status IN ('received','accepted','rejected','cancelled')),
+          mission_id TEXT REFERENCES missions(id) ON DELETE SET NULL, decision_by TEXT, decision_reason TEXT,
+          created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+        ) STRICT;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_work_requests_idempotency
+          ON work_requests(organization_id,requester_kind,requester_identity,idempotency_key) WHERE idempotency_key IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_work_requests_org_status ON work_requests(organization_id,status,created_at);
+        CREATE TABLE IF NOT EXISTS work_outcomes (
+          work_item_id TEXT PRIMARY KEY REFERENCES organization_work_items(id) ON DELETE CASCADE,
+          disposition TEXT NOT NULL CHECK(disposition IN ('completed','cancelled')), summary TEXT NOT NULL,
+          produced_refs_json TEXT NOT NULL, decision_refs_json TEXT NOT NULL, blocker_refs_json TEXT NOT NULL,
+          completed_at INTEGER NOT NULL
+        ) STRICT;
+      `);
+    });
+  }
+
+  private migrateV17(): void {
+    this.transaction(() => {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS agent_workspaces (
+          id TEXT PRIMARY KEY,
+          organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+          agent_id TEXT NOT NULL REFERENCES organization_agents(id) ON DELETE CASCADE,
+          generation INTEGER NOT NULL CHECK(generation > 0),
+          isolation_tier TEXT NOT NULL CHECK(isolation_tier IN ('c0-host','c1-container','c2-hypervisor','c3-ephemeral-vm')),
+          backend_kind TEXT CHECK(backend_kind IS NULL OR backend_kind IN ('host','container','hypervisor-vm','ephemeral-vm','remote-host')),
+          root_ref TEXT,
+          browser_profile_id TEXT,
+          tool_profile_ref TEXT,
+          endpoint_refs_json TEXT NOT NULL DEFAULT '[]',
+          mounted_resource_refs_json TEXT NOT NULL DEFAULT '[]',
+          status TEXT NOT NULL CHECK(status IN ('provisioning','ready','suspended','error','retired')),
+          error TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          UNIQUE(agent_id,generation)
+        ) STRICT;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_workspaces_one_live
+          ON agent_workspaces(agent_id) WHERE status IN ('provisioning','ready','suspended','error');
+        CREATE INDEX IF NOT EXISTS idx_agent_workspaces_org_status ON agent_workspaces(organization_id,status,created_at);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_workspaces_browser_profile_live
+          ON agent_workspaces(browser_profile_id) WHERE browser_profile_id IS NOT NULL AND status<>'retired';
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_workspaces_tool_profile_live
+          ON agent_workspaces(tool_profile_ref) WHERE tool_profile_ref IS NOT NULL AND status<>'retired';
+      `);
+    });
+  }
+  private migrateV18(): void {
+    const columns = this.db.prepare('PRAGMA table_info(agent_workspaces)').all() as Array<{ name: string }>;
+    if (columns.some((row) => row.name === 'security_mode')) return;
+    this.transaction(() => {
+      this.db.exec(`
+        ALTER TABLE agent_workspaces RENAME TO agent_workspaces_v17;
+        CREATE TABLE agent_workspaces (
+          id TEXT PRIMARY KEY,
+          organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+          agent_id TEXT NOT NULL REFERENCES organization_agents(id) ON DELETE CASCADE,
+          generation INTEGER NOT NULL CHECK(generation > 0),
+          security_mode TEXT NOT NULL CHECK(security_mode IN ('prompt-guarded','tool-scoped','sandboxed')),
+          root_ref TEXT,
+          browser_profile_id TEXT,
+          tool_profile_ref TEXT,
+          endpoint_refs_json TEXT NOT NULL DEFAULT '[]',
+          allowed_refs_json TEXT NOT NULL DEFAULT '[]',
+          forbidden_refs_json TEXT NOT NULL DEFAULT '[]',
+          workspace_charter_version TEXT NOT NULL,
+          workspace_charter_digest TEXT NOT NULL,
+          dangerous_action_policy TEXT NOT NULL CHECK(dangerous_action_policy IN ('approval-required','deny')),
+          tool_policy_state TEXT NOT NULL CHECK(tool_policy_state IN ('unconfigured','configured','unsupported')),
+          status TEXT NOT NULL CHECK(status IN ('configuring','ready','suspended','error','retired')),
+          error TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          UNIQUE(agent_id,generation)
+        ) STRICT;
+        INSERT INTO agent_workspaces(
+          id,organization_id,agent_id,generation,security_mode,root_ref,browser_profile_id,tool_profile_ref,
+          endpoint_refs_json,allowed_refs_json,forbidden_refs_json,workspace_charter_version,workspace_charter_digest,
+          dangerous_action_policy,tool_policy_state,status,error,created_at,updated_at
+        ) SELECT
+          id,organization_id,agent_id,generation,
+          CASE WHEN backend_kind IN ('container','hypervisor-vm','ephemeral-vm') THEN 'sandboxed' ELSE 'prompt-guarded' END,
+          root_ref,browser_profile_id,tool_profile_ref,endpoint_refs_json,mounted_resource_refs_json,'[]',
+          'workspace-charter-v2','', 'approval-required','unconfigured',
+          CASE WHEN status='provisioning' THEN 'configuring' ELSE status END,error,created_at,updated_at
+        FROM agent_workspaces_v17;
+        DROP TABLE agent_workspaces_v17;
+        CREATE UNIQUE INDEX idx_agent_workspaces_one_live
+          ON agent_workspaces(agent_id) WHERE status IN ('configuring','ready','suspended','error');
+        CREATE INDEX idx_agent_workspaces_org_status ON agent_workspaces(organization_id,status,created_at);
+        CREATE UNIQUE INDEX idx_agent_workspaces_browser_profile_live
+          ON agent_workspaces(browser_profile_id) WHERE browser_profile_id IS NOT NULL AND status<>'retired';
+        CREATE UNIQUE INDEX idx_agent_workspaces_tool_profile_live
+          ON agent_workspaces(tool_profile_ref) WHERE tool_profile_ref IS NOT NULL AND status<>'retired';
+      `);
+    });
+  }
+  private migrateV19(): void {
+    this.transaction(() => {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS organization_agent_conversations (
+          id TEXT PRIMARY KEY,
+          organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+          agent_id TEXT NOT NULL REFERENCES organization_agents(id) ON DELETE CASCADE,
+          generation INTEGER NOT NULL CHECK(generation > 0),
+          conversation_key TEXT NOT NULL UNIQUE,
+          status TEXT NOT NULL CHECK(status IN ('active','closed')),
+          predecessor_conversation_key TEXT,
+          runtime_slot_id TEXT REFERENCES agent_slots(id) ON DELETE SET NULL,
+          started_at INTEGER NOT NULL,
+          ended_at INTEGER,
+          close_reason TEXT,
+          UNIQUE(agent_id,generation)
+        ) STRICT;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_org_agent_conversations_one_active
+          ON organization_agent_conversations(agent_id) WHERE status='active';
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_org_agent_conversations_runtime_active
+          ON organization_agent_conversations(runtime_slot_id) WHERE runtime_slot_id IS NOT NULL AND status='active';
+        CREATE INDEX IF NOT EXISTS idx_org_agent_conversations_agent
+          ON organization_agent_conversations(agent_id,generation);
+      `);
+    });
+  }
+  private migrateV20(): void {
+    this.transaction(() => {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS findings (
+          id TEXT PRIMARY KEY,
+          organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+          project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+          scope_key TEXT NOT NULL,
+          domain_id TEXT REFERENCES organization_domains(id) ON DELETE SET NULL,
+          fingerprint TEXT NOT NULL,
+          title TEXT NOT NULL,
+          symptom TEXT NOT NULL,
+          locations_json TEXT NOT NULL DEFAULT '[]',
+          status TEXT NOT NULL CHECK(status IN ('open','owned','in-progress','resolved','rejected')),
+          owning_department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,
+          owning_agent_id TEXT REFERENCES organization_agents(id) ON DELETE SET NULL,
+          mission_id TEXT REFERENCES missions(id) ON DELETE SET NULL,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          UNIQUE(organization_id,scope_key,fingerprint)
+        ) STRICT;
+        CREATE INDEX IF NOT EXISTS idx_findings_org_status ON findings(organization_id,status,created_at);
+        CREATE INDEX IF NOT EXISTS idx_findings_owner ON findings(owning_agent_id,status,updated_at);
+        CREATE TABLE IF NOT EXISTS finding_evidence (
+          id TEXT PRIMARY KEY,
+          finding_id TEXT NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+          observer_subject TEXT NOT NULL,
+          evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+          note TEXT NOT NULL DEFAULT '',
+          created_at INTEGER NOT NULL
+        ) STRICT;
+        CREATE INDEX IF NOT EXISTS idx_finding_evidence_finding ON finding_evidence(finding_id,created_at);
+      `);
+    });
+  }
+
+  private migrateV21(): void {
+    this.transaction(() => {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS review_requests (
+          id TEXT PRIMARY KEY,
+          organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+          project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          change_request_id TEXT NOT NULL REFERENCES change_requests(id) ON DELETE CASCADE,
+          revision INTEGER NOT NULL CHECK(revision > 0),
+          head_sha TEXT NOT NULL,
+          author_subject TEXT NOT NULL,
+          risk TEXT NOT NULL CHECK(risk IN ('low','normal','high','critical')),
+          status TEXT NOT NULL CHECK(status IN ('open','approved','changes-requested','rejected','superseded')),
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          UNIQUE(change_request_id,revision)
+        ) STRICT;
+        CREATE INDEX IF NOT EXISTS idx_review_requests_org_status ON review_requests(organization_id,status,created_at);
+        CREATE TABLE IF NOT EXISTS review_slots (
+          id TEXT PRIMARY KEY,
+          review_request_id TEXT NOT NULL REFERENCES review_requests(id) ON DELETE CASCADE,
+          dimension TEXT NOT NULL,
+          required INTEGER NOT NULL CHECK(required IN (0,1)),
+          required_domain_id TEXT REFERENCES organization_domains(id) ON DELETE SET NULL,
+          state TEXT NOT NULL CHECK(state IN ('open','claimed','approved','changes-requested','rejected')),
+          reviewer_agent_id TEXT REFERENCES organization_agents(id) ON DELETE SET NULL,
+          claimed_at INTEGER,
+          decided_at INTEGER,
+          decision_note TEXT,
+          UNIQUE(review_request_id,dimension,required_domain_id)
+        ) STRICT;
+        CREATE INDEX IF NOT EXISTS idx_review_slots_state ON review_slots(state,review_request_id);
+        CREATE INDEX IF NOT EXISTS idx_review_slots_reviewer ON review_slots(reviewer_agent_id,state);
+      `);
+    });
+  }
+
   private createConversationContinuityTables(): void {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS agent_conversations (
