@@ -18,10 +18,19 @@ describe('ChatGPT adapter identity', () => {
     expect(extractConversationId('https://chatgpt.com/c/abc-123')).toBe('abc-123');
     expect(extractConversationId('https://chatgpt.com/g/g-123-helper/c/custom-1')).toBe('custom-1');
     expect(extractConversationId('https://chatgpt.com/')).toBeUndefined();
-    expect(conversationKey('https://chatgpt.com/c/a%20b')).toBe('conversation:a b');
+    expect(conversationKey('https://chatgpt.com/c/a%20b', 'provisional:test')).toBe('conversation:a b');
     expect(extractConversationId('https://chatgpt.com/c/WEB:temporary-1')).toBeUndefined();
     expect(extractConversationId('https://chatgpt.com/c/WEB%3Atemporary-2')).toBeUndefined();
-    expect(conversationKey('https://chatgpt.com/c/WEB:temporary-1')).toBe('url:https://chatgpt.com/c/WEB:temporary-1');
+    expect(conversationKey('https://chatgpt.com/c/WEB:temporary-1', 'provisional:test')).toBe('provisional:test');
+  });
+
+  it('isolates pre-canonical tabs with scoped provisional identities', () => {
+    const first = conversationKey('https://chatgpt.com/', 'provisional:content-a');
+    const second = conversationKey('https://chatgpt.com/', 'provisional:content-b');
+    expect(first).toBe('provisional:content-a');
+    expect(second).toBe('provisional:content-b');
+    expect(first).not.toBe(second);
+    expect(() => conversationKey('https://chatgpt.com/', 'url:https://chatgpt.com/')).toThrow(/scoped provisional/i);
   });
 
   it('normalizes the browser page title without inventing a role', () => {
@@ -36,7 +45,7 @@ describe('ChatGPT page observation', () => {
       <div data-message-author-role="assistant" data-message-id="m1">first</div>
       <div data-message-author-role="assistant" data-message-id="m2">latest result</div>
       <textarea id="prompt-textarea"></textarea>`);
-    const snapshot = snapshotFromDocument(dom.window.document, 'https://chatgpt.com/c/session-2');
+    const snapshot = snapshotFromDocument(dom.window.document, 'https://chatgpt.com/c/session-2', 'provisional:test');
     expect(snapshot.status).toBe('idle');
     expect(snapshot.confidence).toBe('direct');
     expect(snapshot.signals).toContain('composer-ready');
@@ -93,14 +102,14 @@ describe('ChatGPT page observation', () => {
 
   it('fails closed to unknown when the content script has no trusted readiness signal', () => {
     const dom = new JSDOM('<!doctype html><title>ChatGPT</title><main>loading</main>');
-    const snapshot = snapshotFromDocument(dom.window.document, 'https://chatgpt.com/');
+    const snapshot = snapshotFromDocument(dom.window.document, 'https://chatgpt.com/', 'provisional:test');
     expect(snapshot.status).toBe('unknown');
     expect(snapshot.confidence).toBe('unknown');
   });
 
   it('does not treat observedAt-only changes as semantic state changes', () => {
     const dom = new JSDOM('<!doctype html><title>ChatGPT</title><textarea id="prompt-textarea"></textarea>');
-    const first = snapshotFromDocument(dom.window.document, 'https://chatgpt.com/c/a');
+    const first = snapshotFromDocument(dom.window.document, 'https://chatgpt.com/c/a', 'provisional:test');
     const second = { ...first, observedAt: first.observedAt + 10_000 };
     expect(snapshotSemanticKey(first)).toBe(snapshotSemanticKey(second));
   });

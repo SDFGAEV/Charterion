@@ -11,21 +11,21 @@ function fixture(name: string): Document {
 
 describe('captured ChatGPT DOM fixtures', () => {
   it('observes a normal conversation as idle with durable message identity', () => {
-    const snapshot = snapshotFromDocument(fixture('idle.html'), 'https://chatgpt.com/c/session-2');
+    const snapshot = snapshotFromDocument(fixture('idle.html'), 'https://chatgpt.com/c/session-2', 'provisional:test');
     expect(snapshot.status).toBe('idle');
     expect(snapshot.latestAssistantMessageId).toBe('message:m2');
     expect(snapshot.latestAssistantText).toBe('latest result');
   });
 
   it('prefers generating and explicit failure surfaces over composer readiness', () => {
-    expect(snapshotFromDocument(fixture('generating.html'), 'https://chatgpt.com/c/live').status).toBe('generating');
-    expect(snapshotFromDocument(fixture('blocked.html'), 'https://chatgpt.com/').status).toBe('blocked');
-    expect(snapshotFromDocument(fixture('error.html'), 'https://chatgpt.com/c/error').status).toBe('error');
+    expect(snapshotFromDocument(fixture('generating.html'), 'https://chatgpt.com/c/live', 'provisional:test').status).toBe('generating');
+    expect(snapshotFromDocument(fixture('blocked.html'), 'https://chatgpt.com/', 'provisional:test').status).toBe('blocked');
+    expect(snapshotFromDocument(fixture('error.html'), 'https://chatgpt.com/c/error', 'provisional:test').status).toBe('error');
   });
 
   it('supports custom-GPT conversation routes and localized send controls', () => {
     const doc = fixture('custom-gpt.html');
-    const snapshot = snapshotFromDocument(doc, 'https://chatgpt.com/g/g-worker/c/custom-42');
+    const snapshot = snapshotFromDocument(doc, 'https://chatgpt.com/g/g-worker/c/custom-42', 'provisional:test');
     expect(snapshot.conversationId).toBe('custom-42');
     expect(snapshot.status).toBe('idle');
     expect(snapshot.latestAssistantMessageId).toBe('turn:turn-7');
@@ -34,7 +34,7 @@ describe('captured ChatGPT DOM fixtures', () => {
 
   it('recognizes the current mobile composer DOM as a ready ChatGPT page', () => {
     const doc = fixture('mobile-composer.html');
-    const snapshot = snapshotFromDocument(doc, 'https://chatgpt.com/');
+    const snapshot = snapshotFromDocument(doc, 'https://chatgpt.com/', 'provisional:test');
     expect(snapshot.status).toBe('idle');
     expect(snapshot.signals).toContain('composer-ready');
     expect(findSendButton(doc)).not.toBeNull();
@@ -42,13 +42,13 @@ describe('captured ChatGPT DOM fixtures', () => {
 
   it('treats a visible login surface as authentication-required even when a composer exists', () => {
     const doc = fixture('logged-out-mobile.html');
-    const snapshot = snapshotFromDocument(doc, 'https://chatgpt.com/');
+    const snapshot = snapshotFromDocument(doc, 'https://chatgpt.com/', 'provisional:test');
     expect(snapshot.status).toBe('unauthorized');
     expect(snapshot.signals).toContain('login-ui');
   });
 
   it('classifies the login route as unauthorized without trusting page text', () => {
-    const snapshot = snapshotFromDocument(fixture('idle.html'), 'https://chatgpt.com/auth/login');
+    const snapshot = snapshotFromDocument(fixture('idle.html'), 'https://chatgpt.com/auth/login', 'provisional:test');
     expect(snapshot.status).toBe('unauthorized');
   });
 });

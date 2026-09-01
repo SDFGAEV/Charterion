@@ -1,3 +1,4 @@
+import { normalizedRole, rolesAreCompatible } from '../shared/agentRole';
 import type { AgentTask, ManagedTab, ManagedTask } from './contracts';
 
 export interface DispatchDecision {
@@ -14,48 +15,37 @@ function attemptAllowsDispatch(task: AgentTask, tab: ManagedTab): boolean {
   return true;
 }
 
-function matchesTask(task: AgentTask, tab: ManagedTab): boolean {
-  return tab.snapshot.status === 'idle' &&
-    attemptAllowsDispatch(task, tab) &&
-    tab.binding.role.trim() === task.targetRole &&
-    (!task.project || tab.binding.project.trim() === task.project);
+function candidateScore(task: AgentTask, tab: ManagedTab): number | undefined {
+  if (tab.snapshot.status !== 'idle' || !attemptAllowsDispatch(task, tab)) return undefined;
+  if (task.project && tab.binding.project.trim() !== task.project) return undefined;
+  if (!rolesAreCompatible(task.targetRole, tab.binding.role)) return undefined;
+
+  let score = normalizedRole(task.targetRole) === normalizedRole(tab.binding.role) ? 100 : 50;
+  if (tab.snapshot.conversationKey.startsWith('conversation:')) score += 20;
+  if (tab.binding.agentSlotId) score += 10;
+  return score;
 }
-
 export function planReadyDispatches(tasks: readonly ManagedTask[], tabs: readonly ManagedTab[]): DispatchDecision[] {
-  const byRole = new Map<string, ManagedTab[]>();
-  const byRoleAndProject = new Map<string, ManagedTab[]>();
-  for (const tab of tabs) {
-    const role = tab.binding.role.trim();
-    const project = tab.binding.project.trim();
-    const roleTabs = byRole.get(role) ?? [];
-    roleTabs.push(tab);
-    byRole.set(role, roleTabs);
-    const scopedKey = `${role}|${project}`;
-    const scopedTabs = byRoleAndProject.get(scopedKey) ?? [];
-    scopedTabs.push(tab);
-    byRoleAndProject.set(scopedKey, scopedTabs);
-  }
-
   const claimedTabs = new Set<number>();
   const decisions: DispatchDecision[] = [];
   for (const managed of tasks) {
     if (managed.status !== 'ready') continue;
-    const task = managed.task;
-    const candidates = (task.project.trim()
-      ? byRoleAndProject.get(`${task.targetRole}|${task.project.trim()}`) ?? []
-      : byRole.get(task.targetRole) ?? [])
-      .filter((tab) => !claimedTabs.has(tab.tabId) && matchesTask(task, tab));
-    if (candidates.length === 0) {
-      decisions.push({ taskId: task.id, error: `No idle ChatGPT tab is uniquely bound to role ${task.targetRole}` });
+    const candidates = tabs
+      .filter((tab) => !claimedTabs.has(tab.tabId))
+      .map((tab) => ({ tab, score: candidateScore(managed.task, tab) }))
+      .filter((item): item is { tab: ManagedTab; score: number } => item.score !== undefined)
+      .sort((left, right) => right.score - left.score || left.tab.tabId - right.tab.tabId);
+
+    const selected = candidates[0];
+    if (!selected) {
+      decisions.push({
+        taskId: managed.task.id,
+        error: `No idle reusable ChatGPT agent is compatible with role ${managed.task.targetRole}`,
+      });
       continue;
     }
-    if (candidates.length > 1) {
-      decisions.push({ taskId: task.id, error: `Multiple idle ChatGPT tabs match role ${task.targetRole}; routing is ambiguous` });
-      continue;
-    }
-    const tabId = candidates[0]!.tabId;
-    claimedTabs.add(tabId);
-    decisions.push({ taskId: task.id, tabId });
+    claimedTabs.add(selected.tab.tabId);
+    decisions.push({ taskId: managed.task.id, tabId: selected.tab.tabId });
   }
   return decisions;
 }

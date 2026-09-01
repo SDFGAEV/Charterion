@@ -1,3 +1,4 @@
+import { roleAffinityKey, stableRoleLabel } from '../../shared/agentRole';
 import type { AgentSlot, ProjectCell } from './contracts';
 import type { KernelWorkSnapshot } from './workAuthority';
 
@@ -15,12 +16,17 @@ export interface ElasticFleetFacts {
 
 export type ElasticFleetDecision =
   | { kind: 'suspend'; slotId: string; reason: string }
-  | { kind: 'resume'; slotId: string; reason: string };
+  | { kind: 'resume'; slotId: string; reason: string }
+  | { kind: 'spawn'; role: string; affinityKey: string; reason: string; slotId?: string };
+
+interface RoleDemand {
+  required: number;
+  requestedRole: string;
+}
 
 function text(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
-
 function attemptById(work: KernelWorkSnapshot): Map<string, Record<string, unknown>> {
   return new Map(work.attempts.map((attempt) => [text(attempt.attemptId) ?? '', attempt]));
 }
@@ -58,19 +64,22 @@ function taskTerminal(task: Record<string, unknown>, attempts: ReadonlyMap<strin
   return false;
 }
 
-function roleDemand(project: ProjectCell, work: KernelWorkSnapshot): Map<string, number> {
+function roleDemand(project: ProjectCell, work: KernelWorkSnapshot): Map<string, RoleDemand> {
   const attempts = attemptById(work);
   const tasks = new Map(work.tasks.map((task) => [text(task.id) ?? '', task]));
   const terminal = new Set([...tasks].filter(([, task]) => taskTerminal(task, attempts)).map(([id]) => id));
-  const roles = new Map<string, number>();
+  const demand = new Map<string, RoleDemand>();
   for (const task of work.tasks) {
     if (text(task.project) !== project.name || taskTerminal(task, attempts)) continue;
     const dependencies = Array.isArray(task.dependsOn) ? task.dependsOn.filter((id): id is string => typeof id === 'string') : [];
     if (!dependencies.every((id) => terminal.has(id))) continue;
-    const role = text(task.targetRole);
-    if (role) roles.set(role, (roles.get(role) ?? 0) + 1);
+    const requestedRole = text(task.targetRole);
+    if (!requestedRole) continue;
+    const key = roleAffinityKey(requestedRole);
+    const current = demand.get(key);
+    demand.set(key, { required: (current?.required ?? 0) + 1, requestedRole: current?.requestedRole ?? requestedRole });
   }
-  return roles;
+  return demand;
 }
 function cleanupEligible(agent: AgentSlot, facts: ElasticFleetFacts, graceMs: number): boolean {
   if (agent.projectId !== facts.project.id || agent.desiredState !== 'active' || agent.status === 'retired') return false;
@@ -91,28 +100,45 @@ export function planElasticFleet(facts: ElasticFleetFacts): ElasticFleetDecision
   const decisions: ElasticFleetDecision[] = [];
 
   let remainingActive = active.length;
-  const roleActive = new Map<string, number>();
-  for (const agent of active) roleActive.set(agent.role, (roleActive.get(agent.role) ?? 0) + 1);
+  const affinityActive = new Map<string, number>();
+  for (const agent of active) {
+    const key = roleAffinityKey(agent.role);
+    affinityActive.set(key, (affinityActive.get(key) ?? 0) + 1);
+  }
   const cleanup = active.filter((agent) => cleanupEligible(agent, facts, graceMs))
     .sort((a, b) => (a.browserRuntimeObservedAt ?? facts.now) - (b.browserRuntimeObservedAt ?? facts.now) || a.id.localeCompare(b.id));
   for (const agent of cleanup) {
     if (remainingActive <= target) break;
-    const required = facts.project.status === 'active' ? (demand.get(agent.role) ?? 0) : 0;
-    if ((roleActive.get(agent.role) ?? 0) <= required) continue;
+    const key = roleAffinityKey(agent.role);
+    const required = facts.project.status === 'active' ? (demand.get(key)?.required ?? 0) : 0;
+    if ((affinityActive.get(key) ?? 0) <= required) continue;
     decisions.push({ kind: 'suspend', slotId: agent.id, reason: `idle beyond ${graceMs}ms and above target ${target}` });
     remainingActive -= 1;
-    roleActive.set(agent.role, (roleActive.get(agent.role) ?? 1) - 1);
+    affinityActive.set(key, (affinityActive.get(key) ?? 1) - 1);
   }
   if (facts.project.status !== 'active') return decisions;
-  const suspended = projectAgents.filter((agent) => agent.desiredState === 'suspended' && agent.status === 'suspended')
-    .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id));
 
-  for (const [role, required] of [...demand.entries()].sort(([a], [b]) => a.localeCompare(b))) {
-    while ((roleActive.get(role) ?? 0) < required && remainingActive < facts.project.maxSlots) {
-      const candidate = suspended.find((agent) => agent.role === role && !decisions.some((item) => item.kind === 'resume' && item.slotId === agent.id));
-      if (!candidate) break;
-      decisions.push({ kind: 'resume', slotId: candidate.id, reason: `ready work demands role ${role}` });
-      roleActive.set(role, (roleActive.get(role) ?? 0) + 1);
+  const suspended = projectAgents.filter((agent) => agent.desiredState === 'suspended' && agent.status === 'suspended')
+    .sort((a, b) => {
+      const conversationDelta = Number(Boolean(b.conversationKey)) - Number(Boolean(a.conversationKey));
+      return conversationDelta || b.updatedAt - a.updatedAt || a.id.localeCompare(b.id);
+    });
+  const reserved = new Set<string>();
+  const occupiedRoles = projectAgents.map((agent) => agent.role);
+  for (const [key, requested] of [...demand.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    while ((affinityActive.get(key) ?? 0) < requested.required && remainingActive < facts.project.maxSlots) {
+      const candidate = suspended.find((agent) => !reserved.has(agent.id) && roleAffinityKey(agent.role) === key);
+      if (candidate) {
+        reserved.add(candidate.id);
+        decisions.push({ kind: 'resume', slotId: candidate.id, reason: `ready work reuses ${key}` });
+        affinityActive.set(key, (affinityActive.get(key) ?? 0) + 1);
+        remainingActive += 1;
+        continue;
+      }
+      const role = stableRoleLabel(requested.requestedRole, occupiedRoles);
+      occupiedRoles.push(role);
+      decisions.push({ kind: 'spawn', role, affinityKey: key, reason: `ready work requires new ${key}; no reusable slot exists` });
+      affinityActive.set(key, (affinityActive.get(key) ?? 0) + 1);
       remainingActive += 1;
     }
   }

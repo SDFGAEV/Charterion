@@ -62,9 +62,14 @@ export function normalizePageTitle(title: string): string {
   return title.replace(/\s*[|-]\s*ChatGPT\s*$/i, '').replace(/^ChatGPT\s*[|-]\s*/i, '').trim() || 'ChatGPT';
 }
 
-export function conversationKey(url: string): string {
+export function conversationKey(url: string, provisionalIdentity: string): string {
   const id = extractConversationId(url);
-  return id ? `conversation:${id}` : `url:${url}`;
+  if (id) return `conversation:${id}`;
+  const provisional = provisionalIdentity.trim();
+  if (!/^provisional:[^\s]+$/i.test(provisional)) {
+    throw new Error('A scoped provisional conversation identity is required before ChatGPT assigns a canonical id');
+  }
+  return provisional;
 }
 
 function isUsableElement(element: Element): boolean {
@@ -210,13 +215,13 @@ export function setComposerText(composer: HTMLElement, text: string): void {
   composer.dispatchEvent(new EventCtor('change', { bubbles: true }));
 }
 
-export function snapshotFromDocument(doc: Document, url: string): ChatSnapshot {
+export function snapshotFromDocument(doc: Document, url: string, provisionalIdentity: string): ChatSnapshot {
   const observation = observePageStatus(doc, url);
   const id = extractConversationId(url);
   const assistants = assistantMessages(doc);
   const latestAssistant = assistants.at(-1);
   const snapshot: ChatSnapshot = {
-    conversationKey: conversationKey(url),
+    conversationKey: conversationKey(url, provisionalIdentity),
     title: normalizePageTitle(doc.title),
     url,
     status: observation.status,

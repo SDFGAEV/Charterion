@@ -42,10 +42,25 @@ describe('supervisor dispatch planning', () => {
       .toEqual([{ taskId: 'a', tabId: 1 }]);
   });
 
-  it('fails closed when role routing is ambiguous', () => {
-    const [decision] = planReadyDispatches([managed('a', 'worker')], [tab(1, 'worker'), tab(2, 'worker')]);
-    expect(decision?.tabId).toBeUndefined();
-    expect(decision?.error).toMatch(/Multiple/);
+  it('deterministically reuses an exact role when multiple idle agents are compatible', () => {
+    expect(planReadyDispatches([managed('a', 'worker')], [tab(2, 'worker'), tab(1, 'worker')]))
+      .toEqual([{ taskId: 'a', tabId: 1 }]);
+  });
+
+  it('reuses a compatible persistent agent when wave-specific role names change', () => {
+    const reused = tab(7, 'PAR_IMPL_DISPATCH_20260831', 'alpha');
+    reused.binding.agentSlotId = 'slot-7';
+    expect(planReadyDispatches([managed('a', 'W2_RECOVERY_IMPL_20260831', 'ready', 'alpha')], [reused]))
+      .toEqual([{ taskId: 'a', tabId: 7 }]);
+  });
+
+  it('prefers a canonical conversation over a provisional compatible tab', () => {
+    const provisional = tab(1, 'IMPLEMENTER_2', 'alpha');
+    provisional.snapshot.conversationKey = 'provisional:content-a';
+    const canonical = tab(2, 'IMPLEMENTER_3', 'alpha');
+    canonical.binding.agentSlotId = 'slot-2';
+    expect(planReadyDispatches([managed('a', 'PAR_IMPL_RECOVERY_20260831', 'ready', 'alpha')], [provisional, canonical]))
+      .toEqual([{ taskId: 'a', tabId: 2 }]);
   });
 
   it('respects exact project routing when a task names a project', () => {
