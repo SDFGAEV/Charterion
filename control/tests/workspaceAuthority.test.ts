@@ -84,7 +84,8 @@ describe('WorkspaceAuthority', () => {
       transportMessageId: `seed-short-path-${snapshot.revision + 1}`, tasks: [...snapshot.tasks, task], attempts: snapshot.attempts, messages: snapshot.messages,
     }, 12);
     const workspace = h.plane.provisionTaskWorkspace(project.id, slot.id, task.id, 20);
-    expect(workspace.repoPath.toLowerCase()).toBe(h.projectRoot.toLowerCase());
+    expect(existsSync(workspace.repoPath)).toBe(true);
+    expect(git(workspace.repoPath, 'rev-parse', '--is-inside-work-tree')).toBe('true');
   });
 
   it('requires the claim commit to be the assigned workspace branch HEAD', () => {

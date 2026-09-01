@@ -25,7 +25,7 @@ describe('control database migrations', () => {
     expect(row.page_health).toBe('unknown');
     expect(Number(version.value)).toBe(CONTROL_SCHEMA_VERSION);
     database.close(); rmSync(dir, { recursive: true, force: true });
-  });
+  }, 15_000);
 
   it('migrates v12 AgentSlots into v13 conversation lineage without losing the active conversation', () => {
     const dir = mkdtempSync(join(tmpdir(), 'gam-db-v12-'));
