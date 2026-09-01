@@ -54,6 +54,8 @@ export interface CapabilityProvider {
 export function validateCapabilityDescriptor(descriptor: CapabilityDescriptor): void {
   if (!descriptor.capabilityId.trim() || !descriptor.providerId.trim()) throw new Error('Capability identity is required');
   if (descriptor.operations.length === 0 || descriptor.operations.some((operation) => !operation.trim())) throw new Error('Capability operations must be non-empty');
+  if (new Set(descriptor.operations).size !== descriptor.operations.length) throw new Error('Capability operations must be unique');
+  if (descriptor.authorityRequirements.some((requirement) => !requirement.trim())) throw new Error('Capability authority requirements must be non-empty');
   if (!descriptor.inputSchema.name.trim() || !descriptor.outputSchema.name.trim()) throw new Error('Capability schemas are required');
   if (!Number.isInteger(descriptor.inputSchema.version) || descriptor.inputSchema.version < 1) throw new Error('Input schema version must be positive');
   if (!Number.isInteger(descriptor.outputSchema.version) || descriptor.outputSchema.version < 1) throw new Error('Output schema version must be positive');
@@ -62,6 +64,8 @@ export function validateCapabilityDescriptor(descriptor: CapabilityDescriptor): 
 export function validateOperationRequest(request: OperationRequest): void {
   if (!request.requestId.trim() || !request.capabilityId.trim() || !request.operationId.trim() || !request.actorId.trim()) throw new Error('Operation identity is required');
   if (!request.idempotencyKey.trim()) throw new Error('Operation idempotency key is required');
+  if (request.resourceRefs.some((ref) => !ref.trim())) throw new Error('Operation resource references must be non-empty');
+  if (request.authoritySnapshot.some((authority) => !authority.trim())) throw new Error('Operation authorities must be non-empty');
   if (!Number.isFinite(request.requestedAt)) throw new Error('Operation requestedAt must be finite');
 }
 export class CapabilityRegistry {
@@ -71,7 +75,14 @@ export class CapabilityRegistry {
     validateCapabilityDescriptor(provider.descriptor);
     const { capabilityId } = provider.descriptor;
     if (this.providers.has(capabilityId)) throw new Error(`Capability already registered: ${capabilityId}`);
-    this.providers.set(capabilityId, provider);
+    const immutableDescriptor: CapabilityDescriptor = Object.freeze({
+      ...provider.descriptor,
+      operations: Object.freeze([...provider.descriptor.operations]),
+      authorityRequirements: Object.freeze([...provider.descriptor.authorityRequirements]),
+      inputSchema: Object.freeze({ ...provider.descriptor.inputSchema }),
+      outputSchema: Object.freeze({ ...provider.descriptor.outputSchema }),
+    });
+    this.providers.set(capabilityId, { ...provider, descriptor: immutableDescriptor });
   }
 
   get(capabilityId: string): CapabilityProvider | undefined {

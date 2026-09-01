@@ -79,6 +79,20 @@ describe('capability contracts', () => {
     expect(persisted).toHaveLength(1);
   });
 
+  it('rejects duplicate operation declarations and blank resource references', () => {
+    const registry = new CapabilityRegistry();
+    expect(() => registry.register({ descriptor: { ...descriptor, operations: ['read', 'read'] }, invoke: async () => { throw new Error('unused'); } } as CapabilityProvider)).toThrow('unique');
+    expect(() => assertOperationAllowed(descriptor, request({ resourceRefs: [' '] }))).toThrow('resource references');
+  });
+
+  it('freezes registered descriptors so providers cannot mutate authority metadata', () => {
+    const registry = new CapabilityRegistry();
+    registry.register({ descriptor, invoke: async () => { throw new Error('unused'); } } as CapabilityProvider);
+    const registered = registry.get('filesystem')!.descriptor;
+    expect(() => { (registered.operations as string[]).push('write'); }).toThrow();
+    expect(registered.operations).toEqual(['read']);
+  });
+
   it('contains cold-path failures without changing a successful receipt', async () => {
     const registry = new CapabilityRegistry();
     registry.register({ descriptor, invoke: async () => ({ requestId: 'req-1', capabilityId: 'filesystem', operationId: 'read', outcome: 'completed' as const, retryable: false, evidenceRefs: [], artifactRefs: [], observedAt: 2 }) } as CapabilityProvider);
