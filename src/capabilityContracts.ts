@@ -110,3 +110,44 @@ export async function invokeCapability<TPayload, TOutput>(
   if (receipt.outcome === 'completed' && receipt.error) throw new Error('Completed capability receipt cannot contain an error');
   return receipt;
 }
+
+export interface ReceiptSink {
+  persist(receipt: OperationReceipt): Promise<void>;
+}
+
+export interface CapabilityRuntimeMetrics {
+  dispatched: number;
+  persistenceQueued: number;
+  persistenceFailures: number;
+}
+
+export class CapabilityRuntime {
+  private readonly metricsState: CapabilityRuntimeMetrics = { dispatched: 0, persistenceQueued: 0, persistenceFailures: 0 };
+
+  constructor(
+    private readonly registry: CapabilityRegistry,
+    private readonly receiptSink?: ReceiptSink,
+  ) {}
+
+  metrics(): CapabilityRuntimeMetrics {
+    return { ...this.metricsState };
+  }
+
+  async invoke<TPayload, TOutput>(
+    request: OperationRequest<TPayload>,
+  ): Promise<OperationReceipt<TOutput>> {
+    const provider = this.registry.get(request.capabilityId);
+    if (!provider) throw new Error(`Capability is not registered: ${request.capabilityId}`);
+    const receipt = await invokeCapability<TPayload, TOutput>(provider, request);
+    this.metricsState.dispatched += 1;
+    if (this.receiptSink) {
+      this.metricsState.persistenceQueued += 1;
+      queueMicrotask(() => {
+        void this.receiptSink!.persist(receipt).catch(() => {
+          this.metricsState.persistenceFailures += 1;
+        });
+      });
+    }
+    return receipt;
+  }
+}
