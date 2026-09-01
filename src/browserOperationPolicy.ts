@@ -34,3 +34,26 @@ export function browserOperationPolicy(operation: BrowserOperation): BrowserOper
 export function browserOperationPolicies(): BrowserOperationPolicy[] {
   return Object.values(policies);
 }
+
+import type { CapabilityDescriptor } from './capabilityContracts';
+
+export function browserCapabilityDescriptor(operation: BrowserOperation): CapabilityDescriptor {
+  const policy = browserOperationPolicy(operation);
+  const effectClass = policy.operationClass === 'read'
+    ? 'read-only'
+    : operation === 'prompt.send' ? 'uncertain' : 'reversible';
+  const recoverability = policy.retryPolicy === 'always'
+    ? 'idempotent'
+    : policy.retryPolicy === 'if-proven-not-started' ? 'replay-safe' : 'non-replayable';
+  return {
+    capabilityId: 'browser',
+    providerId: 'chatgpt-web',
+    operations: [operation],
+    inputSchema: { name: `Browser.${operation}.Input`, version: 1 },
+    outputSchema: { name: `Browser.${operation}.Receipt`, version: 1 },
+    effectClass,
+    authorityRequirements: [policy.operationClass === 'read' ? 'browser.observe' : 'browser.write'],
+    recoverability,
+    observability: 'receipt-and-evidence',
+  };
+}

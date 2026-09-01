@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { browserOperationPolicies, browserOperationPolicy } from '../src/browserOperationPolicy';
+import { browserOperationPolicies, browserOperationPolicy, browserCapabilityDescriptor } from '../src/browserOperationPolicy';
 
 describe('browser operation policy', () => {
   it('classifies every supported operation exactly once', () => {
@@ -19,5 +19,14 @@ describe('browser operation policy', () => {
   it('allows tab lifecycle retry only after proving the physical effect did not happen', () => {
     expect(browserOperationPolicy('tab.open').retryPolicy).toBe('if-proven-not-started');
     expect(browserOperationPolicy('tab.close').retryPolicy).toBe('if-proven-not-started');
+  });
+  it('projects browser policy into the generic capability contract without losing retry semantics', () => {
+    expect(browserCapabilityDescriptor('page.snapshot')).toMatchObject({
+      capabilityId: 'browser', providerId: 'chatgpt-web', effectClass: 'read-only',
+      authorityRequirements: ['browser.observe'], recoverability: 'idempotent',
+    });
+    expect(browserCapabilityDescriptor('prompt.send')).toMatchObject({
+      effectClass: 'uncertain', authorityRequirements: ['browser.write'], recoverability: 'non-replayable',
+    });
   });
 });
