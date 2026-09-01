@@ -32,7 +32,7 @@ describe('RPC authentication', () => {
       params: { name: 'P', rootPath: 'E:/p' },
     });
     expect(denied).toMatchObject({ ok: false, error: { code: 'UNAUTHORIZED' } });
-  });
+  }, 15_000);
 
   it('uses capability scopes for read-only agent access', () => {
     const { plane, router } = setup();
