@@ -36,14 +36,19 @@ export class OrganizationExecutionBridge {
 
     const agent = this.organization.getAgent(workItem.ownerAgentId);
     if (agent.status !== 'active') throw new Error('Executable Organization Work owner must be active');
-    const runtimeSlotId = required(agent.runtimeSlotId, 'Organization Agent runtime slot');
+    const acquisition = this.database.db.prepare(
+      "SELECT runtime_slot_id,role FROM organization_runtime_acquisitions WHERE agent_id=? AND project_id=? AND status='acquired' ORDER BY updated_at DESC LIMIT 1",
+    ).get(agent.id, mission.projectId) as { runtime_slot_id?: string | null; role?: string } | undefined;
+    const runtimeSlotId = required(acquisition?.runtime_slot_id ?? undefined, 'Acquired Organization Agent runtime');
     const workspace = this.organization.activeAgentWorkspace(agent.id);
     if (!workspace || workspace.status !== 'ready') throw new Error('Executable Organization Work owner requires one ready AgentWorkspace');
     const slot = this.database.db.prepare('SELECT project_id,role,desired_state,status FROM agent_slots WHERE id=?').get(runtimeSlotId) as {
       project_id?: string; role?: string; desired_state?: string; status?: string;
     } | undefined;
     if (!slot?.project_id || !slot.role) throw new Error('Organization Agent runtime slot does not exist');
+    if (acquisition?.role !== slot.role) throw new Error('Organization Agent runtime role does not match acquired role');
     if (slot.project_id !== mission.projectId) throw new Error('Organization Agent runtime slot belongs to another Project');
+    if (agent.runtimeSlotId !== runtimeSlotId) throw new Error('Organization Agent runtime binding does not match acquired runtime');
     if (slot.desired_state !== 'active' || slot.status === 'retired') throw new Error('Organization Agent runtime slot is not active');
     const project = this.database.db.prepare('SELECT name,root_path,status FROM projects WHERE id=?').get(mission.projectId) as {
       name?: string; root_path?: string; status?: string;

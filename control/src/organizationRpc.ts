@@ -42,7 +42,7 @@ function enumParam<T extends string>(params: Params, key: string, allowed: reado
 const METHODS = new Set([
   'organization.create','organization.list','organization.snapshot',
   'department.create','department.list','domain.create','domain.list',
-  'org-agent.create','org-agent.list','org-agent.bind-runtime','org-agent.unbind-runtime','org-agent.assign-domain',
+  'org-agent.create','org-agent.list','org-agent.assign-domain',
   'org-agent.runtime-request','org-agent.runtime-acquire','org-agent.runtime-release','org-agent.runtime-retry','org-agent.runtime-get','org-agent.runtime-list',
   'org-agent.workspace-list','org-agent.workspace-request','org-agent.workspace-configure','org-agent.workspace-prompt','org-agent.workspace-fail','org-agent.workspace-retire',
   'mission.create','mission.list','mission.assign-dri','mission.add-member','mission.status',
@@ -66,8 +66,6 @@ export class OrganizationRpcController {
       case 'domain.list': this.auth.requireBrowserOrAdmin(request); return this.plane.organization.listDomains(stringParam(params,'organizationId',true));
       case 'org-agent.create': return this.agentCreate(request, params);
       case 'org-agent.list': this.auth.requireBrowserOrAdmin(request); return this.plane.organization.listAgents(stringParam(params,'organizationId',true));
-      case 'org-agent.bind-runtime': this.auth.requireAdmin(request); return this.plane.organization.bindRuntimeSlot(stringParam(params,'agentId')!, stringParam(params,'slotId')!);
-      case 'org-agent.unbind-runtime': this.auth.requireAdmin(request); return this.plane.organization.unbindRuntimeSlot(stringParam(params,'agentId')!);
       case 'org-agent.runtime-request': this.auth.requireAdmin(request); return this.runtimeRequest(request, params);
       case 'org-agent.runtime-acquire': this.auth.requireAdmin(request); return this.plane.organizationRuntime.acquire(stringParam(params,'acquisitionId')!);
       case 'org-agent.runtime-release': this.auth.requireAdmin(request); return this.plane.organizationRuntime.release(stringParam(params,'acquisitionId')!);

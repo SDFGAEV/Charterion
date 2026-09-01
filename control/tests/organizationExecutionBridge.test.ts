@@ -34,7 +34,7 @@ function harness() {
     workspaceId: workspace.id, rootRef: `E:/agents/${agent.id}`, browserProfileId: `profile-${agent.id}`,
     toolProfileRef: `tools-${agent.id}`, allowedRefs: [repo], forbiddenRefs: ['kernel://authority'],
   }, 6);
-  plane.organization.bindRuntimeSlot(agent.id, slot.id, 7);
+  plane.organizationRuntime.requestAndAcquire({ organizationId: org.id, agentId: agent.id, projectId: project.id, role: slot.role, idempotencyKey: 'execution-harness' }, 7);
   const mission = plane.organization.createMission({ organizationId: org.id, projectId: project.id, title: 'Self improve execution', objective: 'Improve Charterion safely through evidence-backed changes.', driAgentId: agent.id }, 8);
   plane.organization.setMissionStatus(mission.id, 'active', 9);
   cleanups.push(() => { database.close(); rmSync(dir, { recursive: true, force: true }); });

@@ -22,7 +22,7 @@ function harness() {
     workspaceId: workspace.id, rootRef: 'workspace://control-a', browserProfileId: 'profile-control-a',
     toolProfileRef: 'tools-control-a', allowedRefs: ['project://charterion'], forbiddenRefs: ['authority://parent'],
   }, 6);
-  plane.organization.bindRuntimeSlot(agent.id, slot.id, 7);
+  plane.organizationRuntime.requestAndAcquire({ organizationId: org.id, agentId: agent.id, projectId: project.id, role: slot.role, idempotencyKey: 'execution-rpc-harness' }, 7);
   const mission = plane.organization.createMission({
     organizationId: org.id, projectId: project.id, title: 'Self evolve', objective: 'Improve dispatch safely.', driAgentId: agent.id,
   }, 8);
@@ -55,7 +55,7 @@ describe('Organization execution RPC', () => {
     expect(h.plane.work.snapshot().revision).toBe(revision);
   });
 
-  it('fails closed when the persistent Agent runtime slot belongs to another Project', () => {
+  it('fails closed when the persistent Agent runtime binding differs from the acquired runtime', () => {
     const h = harness();
     const other = h.plane.createProject({ name: 'Other', rootPath: 'E:/other' }, 12);
     const wrongSlot = h.plane.createAgentSlot(other.id, 'CONTROL_ENGINEER_A', 13);
@@ -63,7 +63,7 @@ describe('Organization execution RPC', () => {
     h.plane.organization.bindRuntimeSlot(h.agent.id, wrongSlot.id, 15);
     const response = h.router.handle({ id: 'wrong-project', method: 'org-work.project-execution', auth: { browserToken: 'browser' }, params: { workItemId: h.work.id } });
     expect(response.ok).toBe(false);
-    if (!response.ok) expect(response.error.message).toContain('another Project');
+    if (!response.ok) expect(response.error.message).toContain('does not match acquired runtime');
     expect(h.plane.work.getTask(`org-work-${h.work.id}`)).toBeUndefined();
   });
 });

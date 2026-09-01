@@ -84,6 +84,8 @@ if (!fleet.includes("agent.browserState === 'opening'") || !fleet.includes("kind
 const controlPlane = await readFile(resolve(root, 'control/src/controlPlane.ts'), 'utf8');
 if (!controlPlane.includes('canonicalConversationKey(input.conversationKey)') || !controlPlane.includes("/^WEB:/i.test(id)")) throw new Error('Kernel canonical conversation authority fence is missing');
 const rpcParams = await readFile(resolve(root, 'control/src/rpcParams.ts'), 'utf8');
+const organizationRpc = await readFile(resolve(root, 'control/src/organizationRpc.ts'), 'utf8');
+if (organizationRpc.includes("'org-agent.bind-runtime'") || organizationRpc.includes("'org-agent.unbind-runtime'")) throw new Error('Organization runtime binding must go through acquisition authority');
 const rpc = await readFile(resolve(root, 'control/src/rpc.ts'), 'utf8');
 if (rpcParams.includes('ControlPlane') || rpcParams.includes('OrganizationRpcController')) throw new Error('RPC parameter contracts must remain independent of business controllers');
 for (const helper of ['record', 'stringParam', 'numberParam', 'objectParam', 'objectArrayParam', 'enumParam']) {
