@@ -155,14 +155,16 @@ export class OrganizationRuntimeAcquisitionAuthority {
   }
 
   retry(id: string, now = Date.now()): OrganizationRuntimeAcquisitionRecord {
-    const current = this.get(id);
-    if (current.status !== 'failed') throw new Error('Only a failed runtime acquisition can be retried');
     return this.database.transaction(() => {
-      this.database.db.prepare(
+      const current = this.get(id);
+      if (current.status !== 'failed') throw new Error('Only a failed runtime acquisition can be retried');
+      const result = this.database.db.prepare(
         "UPDATE organization_runtime_acquisitions SET status='requested',error=NULL,updated_at=? WHERE id=? AND status='failed'",
       ).run(now, current.id);
+      const next = this.get(current.id);
+      if (Number(result.changes) !== 1) return next;
       this.event(current.projectId, 'ORGANIZATION_RUNTIME_ACQUISITION_RETRIED', current.id, {}, now);
-      return this.get(current.id);
+      return next;
     });
   }
 
@@ -202,21 +204,25 @@ export class OrganizationRuntimeAcquisitionAuthority {
   private markFailed(current: OrganizationRuntimeAcquisitionRecord, error: unknown, now: number): OrganizationRuntimeAcquisitionRecord {
     const message = error instanceof Error ? error.message : String(error);
     return this.database.transaction(() => {
-      this.database.db.prepare(
+      const result = this.database.db.prepare(
         "UPDATE organization_runtime_acquisitions SET status='failed',error=?,updated_at=? WHERE id=? AND status='acquiring'",
       ).run(message, now, current.id);
+      const next = this.get(current.id);
+      if (Number(result.changes) !== 1) return next;
       this.event(current.projectId, 'ORGANIZATION_RUNTIME_ACQUISITION_FAILED', current.id, { error: message }, now);
-      return this.get(current.id);
+      return next;
     });
   }
 
   private markAcquired(current: OrganizationRuntimeAcquisitionRecord, slotId: string, now: number): OrganizationRuntimeAcquisitionRecord {
     return this.database.transaction(() => {
-      this.database.db.prepare(
+      const result = this.database.db.prepare(
         "UPDATE organization_runtime_acquisitions SET status='acquired',runtime_slot_id=?,error=NULL,updated_at=? WHERE id=? AND status='acquiring'",
       ).run(slotId, now, current.id);
+      const next = this.get(current.id);
+      if (Number(result.changes) !== 1) return next;
       this.event(current.projectId, 'ORGANIZATION_RUNTIME_ACQUIRED', current.id, { agentId: current.agentId, runtimeSlotId: slotId }, now);
-      return this.get(current.id);
+      return next;
     });
   }  acquire(id: string, now = Date.now()): OrganizationRuntimeAcquisitionRecord {
     const current = this.get(id);
