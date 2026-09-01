@@ -83,6 +83,12 @@ if (!fleet.includes("agent.browserState === 'opening'") || !fleet.includes("kind
 }
 const controlPlane = await readFile(resolve(root, 'control/src/controlPlane.ts'), 'utf8');
 if (!controlPlane.includes('canonicalConversationKey(input.conversationKey)') || !controlPlane.includes("/^WEB:/i.test(id)")) throw new Error('Kernel canonical conversation authority fence is missing');
+const rpcParams = await readFile(resolve(root, 'control/src/rpcParams.ts'), 'utf8');
+const rpc = await readFile(resolve(root, 'control/src/rpc.ts'), 'utf8');
+if (rpcParams.includes('ControlPlane') || rpcParams.includes('OrganizationRpcController')) throw new Error('RPC parameter contracts must remain independent of business controllers');
+for (const helper of ['record', 'stringParam', 'numberParam', 'objectParam', 'objectArrayParam', 'enumParam']) {
+  if (rpc.includes('function ' + helper)) throw new Error('RPC parameter helper leaked back into router: ' + helper);
+}
 for (const fence of ['Stale agent browser observation', 'Stale browser runtime observation']) {
   if (!controlPlane.includes(fence)) throw new Error(`Kernel observation fence missing: ${fence}`);
 }

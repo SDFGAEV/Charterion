@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import type { ControlPlane } from './controlPlane';
 import { OrganizationRpcController } from './organizationRpc';
+import { enumParam, numberParam, objectArrayParam, objectParam, record, stringParam } from './rpcParams';
 import type {
   AcquireLeaseInput,
   ArtifactKind,
@@ -39,41 +40,6 @@ const AGENT_PAGE_STATUSES = ['idle','generating','blocked','unauthorized','error
 const BROWSER_OPERATION_OUTCOMES = ['acknowledged','reply-observed','failed','uncertain'] as const;
 const INCIDENT_SEVERITIES = ['warning','error','critical'] as const;
 const WORKER_REQUEST_TYPES = ['suggestion','blocker','question','resource-request','scope-change','dependency-request','cross-system-request','review-request','risk-alert','worker-request'] as const;
-
-function record(value: unknown, label = 'params'): Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} must be an object`);
-  return value as Record<string, unknown>;
-}
-
-function stringParam(params: Record<string, unknown>, key: string, optional = false): string | undefined {
-  const value = params[key];
-  if (value === undefined && optional) return undefined;
-  if (typeof value !== 'string' || !value.trim()) throw new Error(`${key} must be a non-empty string`);
-  return value.trim();
-}
-function numberParam(params: Record<string, unknown>, key: string, optional = false): number | undefined {
-  const value = params[key];
-  if (value === undefined && optional) return undefined;
-  if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error(`${key} must be a number`);
-  return value;
-}
-
-function objectParam(params: Record<string, unknown>, key: string, optional = false): Record<string, unknown> | undefined {
-  const value = params[key]; if (value === undefined && optional) return undefined; return record(value, key);
-}
-
-function objectArrayParam(params: Record<string, unknown>, key: string): Record<string, unknown>[] {
-  const value = params[key];
-  if (!Array.isArray(value)) throw new Error(`${key} must be an array`);
-  return value.map((item, index) => record(item, `${key}[${index}]`));
-}
-
-function enumParam<T extends string>(params: Record<string, unknown>, key: string, allowed: readonly T[], optional = false): T | undefined {
-  const value = stringParam(params, key, optional);
-  if (value === undefined) return undefined;
-  if (!allowed.includes(value as T)) throw new Error(`${key} is invalid`);
-  return value as T;
-}
 
 function safeEqual(left: string, right: string): boolean {
   const a = createHash('sha256').update(left).digest();
