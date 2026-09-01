@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   CapabilityRegistry,
+  CapabilityRuntime,
   assertOperationAllowed,
   invokeCapability,
   type CapabilityProvider,
@@ -56,5 +57,31 @@ describe('capability contracts', () => {
     await expect(invokeCapability(failed, request())).rejects.toThrow('requires an error');
     const uncertain: CapabilityProvider = { descriptor, invoke: async () => ({ requestId: 'req-1', capabilityId: 'filesystem', operationId: 'read', outcome: 'uncertain', retryable: true, evidenceRefs: [], artifactRefs: [], observedAt: 2 }) };
     await expect(invokeCapability(uncertain, request())).resolves.toMatchObject({ outcome: 'uncertain', retryable: true });
+  });
+
+  it('keeps cold-path persistence off the hot execution path', async () => {
+    const registry = new CapabilityRegistry();
+    const provider = {
+      descriptor,
+      invoke: async () => ({ requestId: 'req-1', capabilityId: 'filesystem', operationId: 'read', outcome: 'completed' as const, retryable: false, evidenceRefs: [], artifactRefs: [], observedAt: 2 }),
+    } as CapabilityProvider;
+    registry.register(provider);
+    const persisted: unknown[] = [];
+    const runtime = new CapabilityRuntime(registry, { persist: async (receipt) => { persisted.push(receipt); } });
+    const receipt = await runtime.invoke(request());
+    expect(receipt.outcome).toBe('completed');
+    expect(runtime.metrics()).toMatchObject({ dispatched: 1, persistenceQueued: 1, persistenceFailures: 0 });
+    expect(persisted).toHaveLength(0);
+    await new Promise((resolve) => queueMicrotask(resolve));
+    expect(persisted).toHaveLength(1);
+  });
+
+  it('contains cold-path failures without changing a successful receipt', async () => {
+    const registry = new CapabilityRegistry();
+    registry.register({ descriptor, invoke: async () => ({ requestId: 'req-1', capabilityId: 'filesystem', operationId: 'read', outcome: 'completed' as const, retryable: false, evidenceRefs: [], artifactRefs: [], observedAt: 2 }) } as CapabilityProvider);
+    const runtime = new CapabilityRuntime(registry, { persist: async () => { throw new Error('disk unavailable'); } });
+    await expect(runtime.invoke(request())).resolves.toMatchObject({ outcome: 'completed' });
+    await new Promise((resolve) => queueMicrotask(resolve));
+    expect(runtime.metrics().persistenceFailures).toBe(1);
   });
 });
