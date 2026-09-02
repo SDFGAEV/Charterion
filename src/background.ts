@@ -654,7 +654,7 @@ async function reconcileAgentFleetOnce(): Promise<void> {
         await reportNativeAgentBrowser({ slotId: agent.id, profileId: 'gam-default', browserState: 'opening', tabId: tab.id, observedAt: Date.now() });
         try { await chrome.tabs.update(tab.id, { url: action.url, active: false }); } catch (error) {
           await clearFleetBinding(undefined, tab.id); delete mapping[agent.id]; await saveFleetTabMap(mapping);
-          try { await chrome.tabs.remove(tab.id); } catch { /* failed launch tab may already be gone */ }
+          try { await chrome.tabs.remove(tab.id); } catch (cleanupError) { await reportIncident('fleet-tab-close-failed', agent.id, { tabId: tab.id, phase: 'launch-compensation', error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError) }); }
           await reportNativeAgentBrowser({ slotId: agent.id, profileId: 'gam-default', browserState: 'absent', observedAt: Date.now() });
           throw error;
         }
