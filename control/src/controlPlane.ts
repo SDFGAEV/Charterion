@@ -17,6 +17,7 @@ import { ReviewPoolAuthority } from './reviewPoolAuthority';
 import { OrganizationExecutionBridge } from './organizationExecutionBridge';
 import { OrganizationRuntimeAcquisitionAuthority } from './organizationRuntimeAcquisitionAuthority';
 import { AutonomousIntakeAuthority } from './autonomousIntakeAuthority';
+import { OrganizationWorkflowCoordinator } from './organizationWorkflowCoordinator';
 import { parseJsonRecord, parseJsonStringArray } from './persistenceCodec';
 import { planElasticFleet, type ElasticFleetDecision } from './elasticFleet';
 import { projectRootIdentity } from './projectIdentity';
@@ -184,6 +185,7 @@ export class ControlPlane {
   readonly organizationExecution: OrganizationExecutionBridge;
   readonly organizationRuntime: OrganizationRuntimeAcquisitionAuthority;
   readonly autonomousIntake: AutonomousIntakeAuthority;
+  readonly organizationWorkflow: OrganizationWorkflowCoordinator;
   constructor(readonly database: ControlDatabase, gitPath = 'git') {
     this.evidence = new EvidenceAuthority(database, gitPath);
     this.changes = new ChangeRequestAuthority(database, gitPath);
@@ -201,6 +203,7 @@ export class ControlPlane {
     this.organizationExecution = new OrganizationExecutionBridge(database, this.organization, this.work);
     this.organizationRuntime = new OrganizationRuntimeAcquisitionAuthority(database, this.organization, (projectId, role, now) => this.createAgentSlot(projectId, role, now));
     this.autonomousIntake = new AutonomousIntakeAuthority(this);
+    this.organizationWorkflow = new OrganizationWorkflowCoordinator(database, this.changes, this.reviewPool, gitPath);
   }
 
   provisionTaskWorkspace(projectId: string, slotId: string, taskId: string, now = Date.now()) {
@@ -292,6 +295,9 @@ export class ControlPlane {
         throw new Error('Verified claim does not match the task workspace authority');
       }
       this.work.completeVerifiedClaim({ taskId: claim.taskId, claimId: claim.id, verificationId: verification.id, commitSha: claim.commitSha }, verification.completedAt);
+      if (claim.taskId.startsWith('org-work-')) {
+        this.organizationWorkflow.reconcileVerifiedWork(claim, verification, workspace, now);
+      }
       this.finalizeVerifiedTaskWorkspace(workspace.id, now);
     }
     return verification;
