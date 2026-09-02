@@ -15,26 +15,28 @@ export async function dispatchReadyManagedTasks(
 ): Promise<TaskDispatchResult[]> {
   const dispatchTabs = filterFleetTaskTabs(tabs, control.agents, mappedTabs);
   const byTaskId = new Map(tasks.map((managed) => [managed.task.id, managed]));
-  const results: TaskDispatchResult[] = [];
-  for (const decision of planReadyDispatches(tasks, dispatchTabs)) {
+  const decisions = planReadyDispatches(tasks, dispatchTabs);
+  return Promise.all(decisions.map(async (decision): Promise<TaskDispatchResult> => {
     if (decision.tabId === undefined) {
-      results.push({ taskId: decision.taskId, ok: false, error: decision.error ?? 'Task is not dispatchable' });
-      continue;
+      return { taskId: decision.taskId, ok: false, error: decision.error ?? 'Task is not dispatchable' };
     }
     const managed = byTaskId.get(decision.taskId);
-    if (!managed) continue;
-    const dependencies = managed.task.dependsOn.map((id) => byTaskId.get(id))
-      .filter((item): item is ManagedTask => item !== undefined);
-    const workspace = await provisionTaskWorkspaceForDispatch(managed.task, decision.tabId, dispatchTabs, control);
-    const lastAttempt = managed.lastAttempt;
-    const structuredRetry = managed.task.completionPolicy === 'structured-result' &&
-      lastAttempt && managed.task.retryAfterAttemptId === lastAttempt.attemptId && managed.structuredResultError
-      ? { attemptId: lastAttempt.attemptId, error: managed.structuredResultError }
-      : undefined;
-    const sent = await dispatch(decision.tabId, buildTaskDispatchPrompt(managed.task, dependencies, workspace, structuredRetry), batchId, managed.task.id);
-    const result: TaskDispatchResult = { taskId: managed.task.id, ok: sent.ok, attemptId: sent.attemptId };
-    if (sent.error) result.error = sent.error;
-    results.push(result);
-  }
-  return results;
+    if (!managed) return { taskId: decision.taskId, ok: false, error: 'Task disappeared after dispatch planning' };
+    try {
+      const dependencies = managed.task.dependsOn.map((id) => byTaskId.get(id))
+        .filter((item): item is ManagedTask => item !== undefined);
+      const workspace = await provisionTaskWorkspaceForDispatch(managed.task, decision.tabId, dispatchTabs, control);
+      const lastAttempt = managed.lastAttempt;
+      const structuredRetry = managed.task.completionPolicy === 'structured-result' &&
+        lastAttempt && managed.task.retryAfterAttemptId === lastAttempt.attemptId && managed.structuredResultError
+        ? { attemptId: lastAttempt.attemptId, error: managed.structuredResultError }
+        : undefined;
+      const sent = await dispatch(decision.tabId, buildTaskDispatchPrompt(managed.task, dependencies, workspace, structuredRetry), batchId, managed.task.id);
+      const result: TaskDispatchResult = { taskId: managed.task.id, ok: sent.ok, attemptId: sent.attemptId };
+      if (sent.error) result.error = sent.error;
+      return result;
+    } catch (error) {
+      return { taskId: managed.task.id, ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  }));
 }

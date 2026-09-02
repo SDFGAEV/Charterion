@@ -214,7 +214,14 @@ async function prepareAttempt(
   return record;
 }
 
-async function dispatchToTabOnce(tabId: number, text: string, batchId: string, taskId?: string, messageId?: string): Promise<SendResult> {
+async function dispatchToTabOnce(
+  tabId: number,
+  text: string,
+  batchId: string,
+  taskId?: string,
+  messageId?: string,
+  sharedActiveGenerations?: number,
+): Promise<SendResult> {
   let record: SendAttemptRecord | undefined;
   let physicalWriteRequested = false;
   const fallbackAttemptId = crypto.randomUUID();
@@ -232,8 +239,13 @@ async function dispatchToTabOnce(tabId: number, text: string, batchId: string, t
       await transitionAttempt(record, 'failed', error);
       return { tabId, attemptId: record.attemptId, ok: false, error };
     }
-    const control = await readNativeControlSnapshot();
-    const activeGenerations = control.agents.filter((agent) => agent.desiredState === 'active' && agent.browserState === 'open' && agent.browserPageStatus === 'generating').length;
+    const activeGenerations = sharedActiveGenerations !== undefined
+      ? sharedActiveGenerations
+      : (await readNativeControlSnapshot()).agents.filter((agent) =>
+        agent.desiredState === 'active' &&
+        agent.browserState === 'open' &&
+        agent.browserPageStatus === 'generating',
+      ).length;
     const permit = await promptDispatchGovernor.acquire({ project: binding.project, ...(binding.agentSlotId ? { slotId: binding.agentSlotId } : {}), activeGenerations });
     if (!permit.allowed) return { tabId, attemptId: fallbackAttemptId, ok: false, error: `Prompt dispatch deferred by rate governor: ${permit.reason}; retry after ${permit.retryAfterMs}ms` };
     record = await prepareAttempt(tabId, snapshot, recovery.state.observation.contentEpoch, text, batchId, taskId, messageId);
@@ -285,17 +297,40 @@ async function dispatchToTabOnce(tabId: number, text: string, batchId: string, t
   }
 }
 
-async function dispatchToTab(tabId: number, text: string, batchId: string, taskId?: string, messageId?: string): Promise<SendResult> {
-  return tabOperations.run(tabId, () => dispatchToTabOnce(tabId, text, batchId, taskId, messageId));
+async function dispatchToTab(
+  tabId: number,
+  text: string,
+  batchId: string,
+  taskId?: string,
+  messageId?: string,
+  sharedActiveGenerations?: number,
+): Promise<SendResult> {
+  return tabOperations.run(tabId, () => dispatchToTabOnce(tabId, text, batchId, taskId, messageId, sharedActiveGenerations));
+}
+
+async function activeGenerationsForBatch(): Promise<number | undefined> {
+  try {
+    const control = await readNativeControlSnapshot();
+    return control.agents.filter((agent) =>
+      agent.desiredState === 'active' &&
+      agent.browserState === 'open' &&
+      agent.browserPageStatus === 'generating',
+    ).length;
+  } catch {
+    return undefined;
+  }
 }
 
 async function sendToTabs(tabIds: number[], text: string): Promise<SendResult[]> {
   const batchId = crypto.randomUUID();
   const uniqueTabIds = [...new Set(tabIds)];
+  const activeGenerations = activeGenerationsForBatch();
   // Each tab is independently serialized by TabOperationQueue; dispatching the
   // independent lanes together removes avoidable cross-tab latency while keeping
   // same-tab writes and their uncertain outcomes strictly ordered.
-  return Promise.all(uniqueTabIds.map((tabId) => dispatchToTab(tabId, text, batchId)));
+  return Promise.all(uniqueTabIds.map(async (tabId) =>
+    dispatchToTab(tabId, text, batchId, undefined, undefined, await activeGenerations),
+  ));
 }
 
 async function createTask(input: CreateTaskInput): Promise<AgentTask> {
@@ -377,11 +412,10 @@ async function dispatchMessage(messageId: string): Promise<SendResult[]> {
   if (plan.tabIds.length === 0) return [];
   const prompt = buildSemanticMessagePrompt(message);
   const batchId = crypto.randomUUID();
-  const results: SendResult[] = [];
-  for (const tabId of plan.tabIds) {
-    results.push(await dispatchToTab(tabId, prompt, batchId, undefined, message.id));
-  }
-  return results;
+  const activeGenerations = activeGenerationsForBatch();
+  return Promise.all(plan.tabIds.map(async (tabId) =>
+    dispatchToTab(tabId, prompt, batchId, undefined, message.id, await activeGenerations),
+  ));
 }
 
 async function requestTaskRetry(taskId: string): Promise<AgentTask> {

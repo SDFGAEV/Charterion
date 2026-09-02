@@ -58,3 +58,73 @@ describe('structured-result retry dispatch', () => {
     expect(prompt.trim().endsWith('Do not place any text after the closing tag.')).toBe(true);
   });
 });
+
+describe('parallel task dispatch', () => {
+  const secondTask: AgentTask = (() => {
+    const copy: AgentTask = { ...task, id: 'audit-2', title: 'Audit 2', attemptIds: [] };
+    delete copy.retryAfterAttemptId;
+    return copy;
+  })();
+
+  const secondManaged: ManagedTask = {
+    task: secondTask,
+    status: 'ready',
+    attemptHistory: [],
+  };
+
+  const secondTab: ManagedTab = {
+    ...tab,
+    tabId: 8,
+    binding: { ...tab.binding, agentSlotId: 'slot-2' },
+  };
+
+  const twoAgentControl: NativeControlSnapshot = {
+    ...control,
+    agents: [...control.agents, {
+      ...control.agents[0]!,
+      id: 'slot-2',
+      role: 'auditor',
+    }],
+  };
+
+  it('runs independent tab decisions concurrently', async () => {
+    let active = 0;
+    let maximumActive = 0;
+    const results = await dispatchReadyManagedTasks(
+      [managed, secondManaged],
+      [tab, secondTab],
+      twoAgentControl,
+      { 'slot-1': 7, 'slot-2': 8 },
+      'batch-parallel',
+      async (tabId) => {
+        active += 1;
+        maximumActive = Math.max(maximumActive, active);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        active -= 1;
+        return { tabId, attemptId: 'attempt-' + tabId, ok: true };
+      },
+    );
+
+    expect(maximumActive).toBe(2);
+    expect(results.map((result) => result.taskId)).toEqual(['audit', 'audit-2']);
+  });
+
+  it('isolates one tab failure from other independent decisions', async () => {
+    const results = await dispatchReadyManagedTasks(
+      [managed, secondManaged],
+      [tab, secondTab],
+      twoAgentControl,
+      { 'slot-1': 7, 'slot-2': 8 },
+      'batch-isolated',
+      async (tabId) => {
+        if (tabId === 7) throw new Error('tab 7 failed');
+        return { tabId, attemptId: 'attempt-8', ok: true };
+      },
+    );
+
+    expect(results).toEqual([
+      { taskId: 'audit', ok: false, error: 'tab 7 failed' },
+      { taskId: 'audit-2', ok: true, attemptId: 'attempt-8' },
+    ]);
+  });
+});
