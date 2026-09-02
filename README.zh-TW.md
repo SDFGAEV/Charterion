@@ -120,7 +120,7 @@ DAG edge 只表示真實 dependency，不拿來做人為限流。不同 AgentSlo
 
 Prompt Dispatch Governor 在實際送進 ChatGPT composer 前套用全域間隔、rolling-window budget、Project/AgentSlot spacing、concurrent-generation capacity 與平台 rate-limit backoff。`uncertain` delivery 不會自動重送。
 
-Exact Task Dispatch planner 只選指定的 ready task，不順帶選其他 ProjectCell 的工作。
+Exact Task Dispatch planner 只選指定的 ready task，不順帶選其他 ProjectCell 的工作。同一個 ready wave 會採用最少候選優先、角色專長匹配、持久會話優先與確定性 tie-break，先為約束更強的工作保留稀缺相容 Agent。
 
 <!-- readme-section:browser-lifecycle -->
 ## 瀏覽器生命週期與恢復

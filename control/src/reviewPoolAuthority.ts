@@ -135,17 +135,26 @@ export class ReviewPoolAuthority {
   }
   queueForAgent(agentId: string, now = Date.now()): ReviewQueueItem[] {
     const reviewer = this.reviewer(agentId);
-    const rows = this.database.db.prepare(`SELECT s.*, r.organization_id,r.project_id,r.change_request_id,r.revision,r.head_sha,r.author_subject,r.risk,r.status AS request_status,r.created_at AS request_created_at,r.updated_at AS request_updated_at
-      FROM review_slots s JOIN review_requests r ON r.id=s.review_request_id
-      WHERE s.state='open' AND r.status='open' AND r.organization_id=?`).all(reviewer.organizationId) as Row[];
-    const items = rows.flatMap((row) => {
+    // Candidate discovery is a read-only set operation; claim() revalidates authority inside its transaction.
+    const selfReviewFilter = reviewer.runtimeSlotId
+      ? 'AND r.author_subject<>? AND r.author_subject<>?'
+      : 'AND r.author_subject<>?';
+    const query = `SELECT s.*, r.organization_id,r.project_id,r.change_request_id,r.revision,r.head_sha,r.author_subject,r.risk,r.status AS request_status,r.created_at AS request_created_at,r.updated_at AS request_updated_at
+      FROM review_slots s
+      JOIN review_requests r ON r.id=s.review_request_id
+      LEFT JOIN agent_domain_assignments a ON a.agent_id=? AND a.domain_id=s.required_domain_id
+      WHERE s.state='open' AND r.status='open' AND r.organization_id=?
+        AND (s.required_domain_id IS NULL OR a.agent_id IS NOT NULL)
+        ${selfReviewFilter}`;
+    const selfReviewParams = reviewer.runtimeSlotId ? [reviewer.id, reviewer.runtimeSlotId] : [reviewer.id];
+    const rows = this.database.db.prepare(query).all(reviewer.id, reviewer.organizationId, ...selfReviewParams) as Row[];
+    const items = rows.map((row) => {
       const request = requestFrom({
         id: row.review_request_id, organization_id: row.organization_id, project_id: row.project_id, change_request_id: row.change_request_id,
         revision: row.revision, head_sha: row.head_sha, author_subject: row.author_subject, risk: row.risk,
         status: row.request_status, created_at: row.request_created_at, updated_at: row.request_updated_at,
       });
-      const slot = slotFrom(row);
-      return this.eligible(request, slot, reviewer.id) ? [{ request, slot, ageMs: Math.max(0, now - request.createdAt) }] : [];
+      return { request, slot: slotFrom(row), ageMs: Math.max(0, now - request.createdAt) };
     });
     return items.sort((a, b) => RISK_WEIGHT[b.request.risk] - RISK_WEIGHT[a.request.risk] || b.ageMs - a.ageMs || a.slot.id.localeCompare(b.slot.id));
   }

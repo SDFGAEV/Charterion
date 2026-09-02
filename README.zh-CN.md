@@ -120,7 +120,7 @@ DAG 只表示**真实依赖关系**，不再为了限流把无关任务强行串
 
 真正的消息压力由 Prompt Dispatch Governor 控制：全局发送间隔、滚动时间窗预算、Project/AgentSlot 间隔、并发 generation 容量，以及检测到 ChatGPT rate-limit UI 后的持久指数退避。`uncertain` 投递不会自动重发，必须先消除不确定性。
 
-Exact Task Dispatch 模块提供 fail-closed 的单任务选择核心：指定 taskId 时只允许选中该 ready task，不会顺带选择其他 ProjectCell 的 ready task；后续物理发送仍必须经过原有 workspace authority 与 prompt governor。
+Exact Task Dispatch 模块提供 fail-closed 的单任务选择核心：指定 taskId 时只允许选中该 ready task，不会顺带选择其他 ProjectCell 的 ready task。在同一 ready wave 中，分配采用最少候选优先、角色专长匹配、持久会话优先与确定性 tie-break，优先为约束更强的任务保留稀缺兼容 Agent；后续物理发送仍必须经过原有 workspace authority 与 prompt governor。
 
 <!-- readme-section:browser-lifecycle -->
 ## 浏览器生命周期与恢复

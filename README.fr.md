@@ -120,7 +120,7 @@ Les DAG edges représentent des dependencies réelles, pas un throttling artific
 
 Prompt Dispatch Governor applique global spacing, rolling-window budget, Project/AgentSlot spacing, concurrent-generation capacity et rate-limit backoff avant l’envoi au composer. Une livraison `uncertain` n’est jamais renvoyée automatiquement.
 
-Exact Task Dispatch planner sélectionne uniquement le ready task demandé et n’embarque pas les tâches d’autres ProjectCells.
+Exact Task Dispatch planner sélectionne uniquement le ready task demandé et n’embarque pas les tâches d’autres ProjectCells. Dans une même ready wave, il privilégie les tâches ayant le moins de candidats, l’affinité de spécialité, la conversation persistante et des départages déterministes, afin de réserver les Agents compatibles rares au travail le plus contraint.
 
 <!-- readme-section:browser-lifecycle -->
 ## Cycle de vie du navigateur et récupération

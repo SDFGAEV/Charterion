@@ -120,7 +120,7 @@ DAG edge는 실제 dependency만 표현하며 throttling을 위해 독립 task�
 
 Prompt Dispatch Governor는 composer에 실제 전송하기 직전에 global spacing, rolling-window budget, Project/AgentSlot spacing, concurrent-generation capacity, rate-limit backoff를 적용합니다. `uncertain` delivery는 자동 재전송하지 않습니다.
 
-Exact Task Dispatch planner는 지정된 ready task 하나만 선택하며 다른 ProjectCell의 ready task를 함께 선택하지 않습니다.
+Exact Task Dispatch planner는 지정된 ready task 하나만 선택하며 다른 ProjectCell의 ready task를 함께 선택하지 않습니다. 같은 ready wave에서는 후보가 적은 task, role specialty, 영속 conversation, 결정적 tie-break를 우선해 제약이 큰 작업에 희소한 호환 Agent를 남깁니다.
 
 <!-- readme-section:browser-lifecycle -->
 ## 브라우저 수명주기와 복구
