@@ -3,7 +3,7 @@ $Root = Split-Path $PSScriptRoot -Parent
 $Id = [guid]::NewGuid().ToString('N')
 $SmokeRoot = Join-Path $Root ".build-cache\runtime-install-smoke\$Id"
 $GamTestHome = Join-Path $SmokeRoot 'home'
-$HostName = 'com.gpt_agent_manager.control'
+$HostName = 'com.charterion.control'
 $RegistryPaths = @(
   "HKCU:\Software\Google\Chrome\NativeMessagingHosts\$HostName",
   "HKCU:\Software\Microsoft\Edge\NativeMessagingHosts\$HostName"

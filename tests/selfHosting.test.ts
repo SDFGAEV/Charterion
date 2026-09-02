@@ -5,7 +5,7 @@ const parent: SelfHostingRuntimeBoundary = {
   repoPath: 'C:\\GAM\\parent',
   gamHome: 'C:\\GAM-State\\parent',
   databasePath: 'C:\\GAM-State\\parent\\gam.sqlite3',
-  pipeName: 'gpt-agent-manager-parent',
+  pipeName: 'charterion-parent',
   browserProfilePath: 'C:\\GAM-State\\parent\\browser-profile',
 };
 
@@ -13,7 +13,7 @@ const candidate: SelfHostingRuntimeBoundary = {
   repoPath: 'D:\\GAM\\candidate',
   gamHome: 'D:\\GAM-State\\candidate',
   databasePath: 'D:\\GAM-State\\candidate\\gam.sqlite3',
-  pipeName: 'gpt-agent-manager-candidate',
+  pipeName: 'charterion-candidate',
   browserProfilePath: 'D:\\GAM-State\\candidate\\browser-profile',
 };
 

@@ -1,6 +1,6 @@
 import { nativeResult, parseNativeRpcResponse, type NativeRpcResponse } from './nativeRpcContract';
 
-export const NATIVE_CONTROL_HOST = 'com.gpt_agent_manager.control';
+export const NATIVE_CONTROL_HOST = 'com.charterion.control';
 const PROJECT_STATUSES = new Set(['active', 'draining', 'paused', 'archived']);
 const AGENT_STATUSES = new Set(['idle', 'assigned', 'suspended', 'retired']);
 const AGENT_DESIRED_STATES = new Set(['active','suspended','retired']);

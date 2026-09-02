@@ -1,9 +1,9 @@
 param(
-  [string]$GamHome = (Join-Path $env:USERPROFILE '.gpt-agent-manager'),
+  [string]$GamHome = (Join-Path $env:USERPROFILE '.charterion'),
   [switch]$KeepInstalledFiles
 )
 $ErrorActionPreference = 'Stop'
-$HostName = 'com.gpt_agent_manager.control'
+$HostName = 'com.charterion.control'
 $registryPaths = @(
   "HKCU:\Software\Google\Chrome\NativeMessagingHosts\$HostName",
   "HKCU:\Software\Microsoft\Edge\NativeMessagingHosts\$HostName"

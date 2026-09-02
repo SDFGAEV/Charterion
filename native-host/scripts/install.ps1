@@ -2,11 +2,11 @@ param(
   [Parameter(Mandatory = $true)][string]$ExtensionId,
   [Parameter(Mandatory = $true)][string]$PipeName,
   [Parameter(Mandatory = $true)][string]$InstanceId,
-  [string]$GamHome = (Join-Path $env:USERPROFILE '.gpt-agent-manager'),
+  [string]$GamHome = (Join-Path $env:USERPROFILE '.charterion'),
   [string]$PublishDir = (Join-Path (Split-Path $PSScriptRoot -Parent | Split-Path -Parent) 'dist-native-host')
 )
 $ErrorActionPreference = 'Stop'
-$HostName = 'com.gpt_agent_manager.control'
+$HostName = 'com.charterion.control'
 if ($ExtensionId -notmatch '^[a-p]{32}$') { throw 'ExtensionId must be a 32-character Chromium extension id.' }
 if ($InstanceId -notmatch '^[0-9a-f]{16}$') { throw 'InstanceId must be a 16-character lowercase hex id.' }
 if ([string]::IsNullOrWhiteSpace($PipeName)) { throw 'PipeName is required.' }

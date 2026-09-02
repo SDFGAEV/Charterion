@@ -17,12 +17,12 @@ export function deriveInstanceId(homeDir: string, platform = process.platform): 
 export function derivePipeName(homeDir: string, platform = process.platform): string {
   const instanceId = deriveInstanceId(homeDir, platform);
   return platform === 'win32'
-    ? `\\\\.\\pipe\\gpt-agent-manager-${instanceId}`
+    ? `\\\\.\\pipe\\charterion-${instanceId}`
     : join(resolve(homeDir), `gamd-${instanceId}.sock`);
 }
 
 export function resolveDaemonConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
-  const homeDir = resolve(env.GAM_HOME?.trim() || join(homedir(), '.gpt-agent-manager'));
+  const homeDir = resolve(env.GAM_HOME?.trim() || join(homedir(), '.charterion'));
   const instanceId = deriveInstanceId(homeDir);
   return {
     homeDir,

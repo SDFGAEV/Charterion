@@ -1,5 +1,5 @@
 param(
-  [string]$GamHome = (Join-Path $env:USERPROFILE '.gpt-agent-manager'),
+  [string]$GamHome = (Join-Path $env:USERPROFILE '.charterion'),
   [string]$ExtensionId = '',
   [switch]$CreateDesktopShortcut,
   [switch]$NoStart

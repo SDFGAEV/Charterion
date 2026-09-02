@@ -9,7 +9,7 @@ SQLite database, browser token, named pipe, browser profile, and logs.
 Default home:
 
 ~~~text
-%USERPROFILE%\\.gpt-agent-manager
+%USERPROFILE%\\.charterion
 ~~~
 
 Custom home example:
@@ -83,7 +83,7 @@ Do not use -SkipVerify as a release substitute.
 Start through the generated wrapper:
 
 ~~~powershell
-& "$env:USERPROFILE\\.gpt-agent-manager\\GAM.cmd" start --json
+& "$env:USERPROFILE\\.charterion\\GAM.cmd" start --json
 ~~~
 
 The launcher starts gamd, creates a dedicated Chromium profile under
@@ -143,8 +143,8 @@ $repo = "E:\\Agent-Research-Workspace\\projects\\charterion"
 Set-Location $repo
 npm ci
 powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\setup-windows.ps1 -NoStart
-& "$env:USERPROFILE\\.gpt-agent-manager\\GAM.cmd" doctor --json
-& "$env:USERPROFILE\\.gpt-agent-manager\\GAM.cmd" start --json
+& "$env:USERPROFILE\\.charterion\\GAM.cmd" doctor --json
+& "$env:USERPROFILE\\.charterion\\GAM.cmd" start --json
 ~~~
 
 For portable Git, use its explicit executable path:
@@ -218,8 +218,8 @@ GAM.cmd start --json
 Close the managed browser, rerun setup, and inspect:
 
 ~~~text
-%USERPROFILE%\\.gpt-agent-manager\\native-host\\gam-native-host.json
-%USERPROFILE%\\.gpt-agent-manager\\native-host\\com.gpt_agent_manager.control.json
+%USERPROFILE%\\.charterion\\native-host\\gam-native-host.json
+%USERPROFILE%\\.charterion\\native-host\\com.charterion.control.json
 ~~~
 
 allowed_origins must contain the extension origin derived from the current
@@ -254,8 +254,8 @@ evidence or database files that are still needed.
 Native Host registration is stored in the current user's registry:
 
 ~~~text
-HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\com.gpt_agent_manager.control
-HKCU\\Software\\Microsoft\\Edge\\NativeMessagingHosts\\com.gpt_agent_manager.control
+HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\com.charterion.control
+HKCU\\Software\\Microsoft\\Edge\\NativeMessagingHosts\\com.charterion.control
 ~~~
 
 Remove only those two exact registry values and the exact runtime home after

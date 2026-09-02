@@ -3,8 +3,8 @@ import { deriveInstanceId, derivePipeName, resolveDaemonConfig } from '../src/co
 
 describe('GAM runtime identity', () => {
   it('derives a stable Windows identity from the canonical GAM_HOME', () => {
-    const upper = deriveInstanceId('C:\\Users\\Alice\\.gpt-agent-manager', 'win32');
-    const lower = deriveInstanceId('c:/users/alice/.gpt-agent-manager', 'win32');
+    const upper = deriveInstanceId('C:\\Users\\Alice\\.charterion', 'win32');
+    const lower = deriveInstanceId('c:/users/alice/.charterion', 'win32');
     expect(upper).toBe(lower);
     expect(upper).toMatch(/^[0-9a-f]{16}$/);
   });

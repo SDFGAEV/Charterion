@@ -4,7 +4,7 @@
 [![Chromium](https://img.shields.io/badge/Chromium-Manifest%20V3-4285F4.svg)](manifest.json)
 [![Version](https://img.shields.io/badge/version-0.5.0-2ea44f.svg)](manifest.json)
 [![ChatGPT Web](https://img.shields.io/badge/target-ChatGPT%20Web-111111.svg)](https://chatgpt.com/)
-[![Latest Release](https://img.shields.io/github/v/release/SDFGAEV/Charterion?display_name=tag)](https://github.com/SDFGAEV/Charterion/releases/latest)
+[![Latest Release](https://img.shields.io/github/v/release/Xalzeroph/Charterion?display_name=tag)](https://github.com/Xalzeroph/Charterion/releases/latest)
 
 <!-- readme-i18n:navigation:start -->
 <p align="center"><a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.ja.md">日本語</a> · <a href="README.ko.md">한국어</a> · <a href="README.es.md">Español</a> · <a href="README.pt-BR.md">Português (Brasil)</a> · <a href="README.fr.md">Français</a> · <strong>Deutsch</strong> · <a href="README.ru.md">Русский</a></p>
@@ -161,7 +161,7 @@ GAM.cmd doctor --json
 
 `GAM.cmd` verwendet ein dediziertes Chromium profile und startet den local Kernel idempotent. Der Benutzer meldet sich direkt auf `chatgpt.com` an; GAM speichert weder password, MFA secret, cookie noch account token und benötigt keinen OpenAI API key.
 
-For the complete local, source, release, and Remote Desktop Commander deployment procedure, see [Deployment Guide](https://github.com/SDFGAEV/Charterion/blob/main/docs/DEPLOYMENT.md).
+For the complete local, source, release, and Remote Desktop Commander deployment procedure, see [Deployment Guide](https://github.com/Xalzeroph/Charterion/blob/main/docs/DEPLOYMENT.md).
 
 <!-- readme-section:security -->
 ## Sicherheitsgrenzen

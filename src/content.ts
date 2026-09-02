@@ -2,8 +2,8 @@ import { PromptSubmissionError, sendPrompt, snapshotFromDocument, snapshotSemant
 import { hasNewAssistantReply } from './replyCorrelation';
 import type { ContentRecoveryState, ContentRequest, PendingPromptEvidence, RuntimeNotice } from './contracts';
 
-const DELIVERED_ATTEMPTS_KEY = 'gpt-agent-manager.delivered-attempts.v1';
-const PENDING_PROMPT_KEY = 'gpt-agent-manager.pending-prompt.v1';
+const DELIVERED_ATTEMPTS_KEY = 'charterion.delivered-attempts.v1';
+const PENDING_PROMPT_KEY = 'charterion.pending-prompt.v1';
 const MAX_DELIVERED_ATTEMPTS = 100;
 const contentEpoch = crypto.randomUUID();
 let observationRevision = 0;
