@@ -134,10 +134,20 @@ async function ensureDaemon(): Promise<'started' | 'already-running'> {
   }
   throw new Error(`gamd did not become healthy for instance ${config.instanceId} on ${config.pipeName}`);
 }
+function browserProfileIsRunning(profile: string): boolean {
+  if (process.platform !== 'win32') return false;
+  const escaped = profile.replace(/'/g, "''");
+  const probe = spawnSync('powershell.exe', [
+    '-NoProfile', '-Command',
+    `$profile = '${escaped}'; Get-CimInstance Win32_Process | Where-Object { $_.Name -in @('chrome.exe', 'msedge.exe') -and $_.CommandLine -like \"*$profile*\" } | Select-Object -First 1 -ExpandProperty ProcessId`,
+  ], { encoding: 'utf8', windowsHide: true });
+  return probe.status === 0 && Boolean(probe.stdout?.trim());
+}
+
 function launchBrowser(noBrowser: boolean): { browser: 'launched' | 'skipped' | 'unavailable'; chromeProfile: string; chromePath?: string } {
   const config = resolveDaemonConfig();
   const profile = join(config.homeDir, 'chrome-profile');
-  if (noBrowser || process.env.GAM_NO_BROWSER === '1') return { browser: 'skipped', chromeProfile: profile };
+  if (noBrowser || process.env.GAM_NO_BROWSER === '1' || browserProfileIsRunning(profile)) return { browser: 'skipped', chromeProfile: profile };
   const chrome = findChrome();
   if (!chrome) return { browser: 'unavailable', chromeProfile: profile };
   mkdirSync(profile, { recursive: true });
