@@ -720,22 +720,21 @@ async function reconcileAgentFleetOnce(): Promise<void> {
       }
     }
     await deliverWorkerRequestMessages(snapshot);
-    const organizationTasks = (await workState()).tasks; if (hasOrganizationExecutionTask(organizationTasks)) { if (markOrganizationExecutionObserved(organizationTasks)) void reportIncident('organization-auto-dispatch-observed', 'organization-runtime', {}); await runReadyTasks().then((results) => { if (results.some((result) => !result.ok)) retryOrganizationExecution(); }).catch((error) => { retryOrganizationExecution(); void reportIncident('organization-auto-dispatch-failed', 'organization-runtime', { error: error instanceof Error ? error.message : String(error) }); }); }
+    void dispatchOrganizationTasks();
     kickSupervisor();
   });
 }
-
 let organizationRetryTimer: number | undefined;
 function retryOrganizationExecution(): void { if (organizationRetryTimer !== undefined) return; organizationRetryTimer = setTimeout(() => { organizationRetryTimer = undefined; scheduleFleetReconcile(0); }, 1000) as unknown as number; }
-
+async function dispatchOrganizationTasks(): Promise<void> { const tasks = (await workState()).tasks; if (!hasOrganizationExecutionTask(tasks)) return; if (markOrganizationExecutionObserved(tasks)) void reportIncident('organization-auto-dispatch-observed', 'organization-runtime', {}); const results = await runReadyTasks(); if (results.some((result) => !result.ok)) retryOrganizationExecution(); }
 const fleetReconcileRunner = new CoalescingRunner(reconcileAgentFleetOnce, (error) => {
   void reportIncident('fleet-reconcile-failed', 'fleet-runtime', { error: error instanceof Error ? error.message : String(error) });
 });
-
 function scheduleFleetReconcile(delayMs = 150): void {
   if (fleetReconcileTimer !== undefined) clearTimeout(fleetReconcileTimer);
   fleetReconcileTimer = setTimeout(() => { fleetReconcileTimer = undefined; fleetReconcileRunner.kick(); }, delayMs) as unknown as number;
 }
+async function closeOrphanBlankTabs(): Promise<void> { const tabs = await chrome.tabs.query({ url: 'about:blank' }); await Promise.all(tabs.flatMap((tab) => tab.id === undefined ? [] : [chrome.tabs.remove(tab.id).catch(() => undefined)])); }
 
 async function notifyManagerChanged(): Promise<void> {
   const notice: RuntimeNotice = { type: 'manager:changed' };
@@ -750,8 +749,8 @@ chrome.runtime.onMessage.addListener((message: ManagerRequest | RuntimeNotice, s
       .then(async (binding) => { await reconcileGenerationReservation(tabId, binding, message.snapshot); scheduleFleetReconcile(0); await requestAutomaticConversationRollover(tabId, binding, message.snapshot); await bootstrapPendingConversationRollover(tabId, binding, message.snapshot, (id, text) => dispatchToTab(id, text, crypto.randomUUID())); const bootstrapAttempt = await bootstrapReplyAttemptId(binding, message.snapshot); if (bootstrapAttempt) { const persisted = await markReplyObserved(bootstrapAttempt, message.observation.contentEpoch, message.snapshot, tabId); if (persisted) await completeConversationRolloverForReply(binding, bootstrapAttempt); } })
       .catch((error) => reportIncident('agent-runtime-report-failed', String(tabId), { error: error instanceof Error ? error.message : String(error), contentEpoch: message.observation.contentEpoch }));
     void notifyManagerChanged();
-    scheduleBrowserRuntimeReport();
-    scheduleFleetReconcile();
+    scheduleBrowserRuntimeReport(); scheduleFleetReconcile();
+    if (message.snapshot.status === 'idle') void dispatchOrganizationTasks().then(() => scheduleFleetReconcile(0)).catch((error) => reportIncident('organization-auto-dispatch-failed', 'organization-runtime', { error: error instanceof Error ? error.message : String(error) }));
     kickSupervisor();
     return false;
   }
@@ -898,8 +897,7 @@ void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch((
 chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
   if (tab.url?.startsWith('https://chatgpt.com/') && (changeInfo.status === 'complete' || changeInfo.url !== undefined)) {
     void notifyManagerChanged();
-    scheduleBrowserRuntimeReport();
-    scheduleFleetReconcile();
+    scheduleBrowserRuntimeReport(); scheduleFleetReconcile(); void dispatchOrganizationTasks().then(() => scheduleFleetReconcile(0)).catch((error) => reportIncident('organization-auto-dispatch-failed', 'organization-runtime', { error: error instanceof Error ? error.message : String(error) }));
   }
 });
 chrome.tabs.onRemoved.addListener((tabId) => {
@@ -932,18 +930,19 @@ void migrateLegacyWorkStateOnce().then(() => reconcileAfterRestart()).then(() =>
 }).catch((error) => {
   void reportIncident('restart-reconciliation-failed', 'service-worker', { error: error instanceof Error ? error.message : String(error) }, 'critical');
 });
-const FLEET_RECONCILE_ALARM = 'gam:fleet-reconcile';
-async function ensureFleetReconcileAlarm(): Promise<void> {
-  const existing = await chrome.alarms.get(FLEET_RECONCILE_ALARM);
-  if (!existing) await chrome.alarms.create(FLEET_RECONCILE_ALARM, { periodInMinutes: 1 });
+const FLEET_RECONCILE_ALARM = 'gam:fleet-reconcile'; const ORGANIZATION_DISPATCH_ALARM = 'gam:organization-dispatch';
+async function ensureAutomationAlarms(): Promise<void> {
+  const alarms = await Promise.all([chrome.alarms.get(FLEET_RECONCILE_ALARM), chrome.alarms.get(ORGANIZATION_DISPATCH_ALARM)]);
+  if (!alarms[0]) await chrome.alarms.create(FLEET_RECONCILE_ALARM, { periodInMinutes: 1 }); if (!alarms[1]) await chrome.alarms.create(ORGANIZATION_DISPATCH_ALARM, { periodInMinutes: 1 });
 }
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name !== FLEET_RECONCILE_ALARM) return;
+  if (alarm.name !== FLEET_RECONCILE_ALARM && alarm.name !== ORGANIZATION_DISPATCH_ALARM) return;
   scheduleBrowserRuntimeReport();
   scheduleFleetReconcile(0);
+  void dispatchOrganizationTasks().catch((error) => reportIncident('organization-auto-dispatch-failed', 'organization-runtime', { error: error instanceof Error ? error.message : String(error) }));
 });
-chrome.runtime.onInstalled.addListener(() => { void ensureFleetReconcileAlarm().catch((error) => reportIncident('fleet-alarm-configuration-failed', 'extension', { error: String(error) })); scheduleBrowserRuntimeReport(); scheduleFleetReconcile(0); });
-chrome.runtime.onStartup.addListener(() => { void ensureFleetReconcileAlarm().catch((error) => reportIncident('fleet-alarm-configuration-failed', 'extension', { error: String(error) })); scheduleBrowserRuntimeReport(); scheduleFleetReconcile(0); });
+chrome.runtime.onInstalled.addListener(() => { void ensureAutomationAlarms().catch((error) => reportIncident('automation-alarm-configuration-failed', 'extension', { error: String(error) })); scheduleBrowserRuntimeReport(); scheduleFleetReconcile(0); });
+chrome.runtime.onStartup.addListener(() => { void ensureAutomationAlarms().catch((error) => reportIncident('automation-alarm-configuration-failed', 'extension', { error: String(error) })); scheduleBrowserRuntimeReport(); scheduleFleetReconcile(0); });
 void reportBrowserRuntimeFromTabs([]).catch((error) => reportIncident('browser-runtime-report-failed', 'startup', { error: error instanceof Error ? error.message : String(error) }));
 scheduleBrowserRuntimeReport();
-void ensureFleetReconcileAlarm().catch((error) => reportIncident('fleet-alarm-configuration-failed', 'extension', { error: String(error) }));
+void ensureAutomationAlarms().catch((error) => reportIncident('automation-alarm-configuration-failed', 'extension', { error: String(error) })); void closeOrphanBlankTabs().catch((error) => reportIncident('orphan-blank-tab-cleanup-failed', 'extension', { error: String(error) })); void dispatchOrganizationTasks().catch((error) => reportIncident('organization-auto-dispatch-failed', 'organization-runtime', { error: error instanceof Error ? error.message : String(error) }));

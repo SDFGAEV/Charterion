@@ -72,8 +72,8 @@ export class OrganizationExecutionBridge {
       `Work item id: ${workItem.id}`,
       `Project root: ${project.root_path}`,
       '',
-      'Operate as an autonomous senior engineer. Inspect the repository and shared engineering state directly, choose the implementation approach, run the relevant tests, and produce exact Git/evidence-backed results.',
-      'Do not wait for micro-instructions. Respect Workspace Charter, ownership, authority, Change/worktree, evidence, review, and promotion boundaries.',
+      'Use only tools and capabilities actually visible in this ChatGPT Web session. Never claim terminal, filesystem, Git, Remote Desktop, or GAMCTL access unless it is explicitly available.',
+      'If external tools are unavailable, complete this browser-only work by returning a concise factual report and the exact machine-readable status requested by the Work item; never fabricate execution evidence.',
     ].join('\n');
     const task: WorkDocument = {
       id: managerTaskId,
