@@ -720,10 +720,13 @@ async function reconcileAgentFleetOnce(): Promise<void> {
       }
     }
     await deliverWorkerRequestMessages(snapshot);
-    if (hasOrganizationExecutionTask((await workState()).tasks)) await runReadyTasks();
+    if (hasOrganizationExecutionTask((await workState()).tasks)) await runReadyTasks().then((results) => { if (results.some((result) => !result.ok)) retryOrganizationExecution(); }).catch((error) => { retryOrganizationExecution(); void reportIncident('organization-auto-dispatch-failed', 'organization-runtime', { error: error instanceof Error ? error.message : String(error) }); });
     kickSupervisor();
   });
 }
+
+let organizationRetryTimer: number | undefined;
+function retryOrganizationExecution(): void { if (organizationRetryTimer !== undefined) return; organizationRetryTimer = setTimeout(() => { organizationRetryTimer = undefined; scheduleFleetReconcile(0); }, 1000) as unknown as number; }
 
 const fleetReconcileRunner = new CoalescingRunner(reconcileAgentFleetOnce, (error) => {
   void reportIncident('fleet-reconcile-failed', 'fleet-runtime', { error: error instanceof Error ? error.message : String(error) });
