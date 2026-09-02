@@ -93,6 +93,7 @@ export function deriveManagedTasks(
   tasks: readonly AgentTask[],
   attempts: readonly SendAttemptRecord[],
 ): ManagedTask[] {
+  const tasksById = new Map(tasks.map((task) => [task.id, task]));
   const attemptsById = new Map(attempts.map((attempt) => [attempt.attemptId, attempt]));
   const result = new Map<string, ManagedTask>();
 
@@ -127,8 +128,8 @@ export function deriveManagedTasks(
       status = 'error';
     } else {
       const dependencies = task.dependsOn
-        .map((id) => tasks.find((candidate) => candidate.id === id))
-        .filter(Boolean) as AgentTask[];
+        .map((id) => tasksById.get(id))
+        .filter((dependency): dependency is AgentTask => dependency !== undefined);
       const dependencyStates = dependencies.map((dependency) => derive(dependency).status);
       if (dependencyStates.some((state) => ['error', 'attention', 'blocked', 'cancelled', 'rejected'].includes(state))) {
         status = 'blocked';

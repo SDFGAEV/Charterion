@@ -16,8 +16,27 @@ export function agentConversationUrl(conversationKey?: string): string {
   return `https://chatgpt.com/c/${encodeURIComponent(id)}`;
 }
 
-function ownedTabForAgent(agent: ControlAgentView, tabs: readonly ManagedTab[], mappedTabId?: number): ManagedTab | undefined {
-  const owned = tabs.filter((tab) => tab.binding.agentSlotId === agent.id);
+interface FleetTabIndex {
+  byAgentSlotId: Map<string, ManagedTab[]>;
+  byTabId: Map<number, ManagedTab>;
+}
+
+function indexFleetTabs(tabs: readonly ManagedTab[]): FleetTabIndex {
+  const byAgentSlotId = new Map<string, ManagedTab[]>();
+  const byTabId = new Map<number, ManagedTab>();
+  for (const tab of tabs) {
+    if (!byTabId.has(tab.tabId)) byTabId.set(tab.tabId, tab);
+    const agentSlotId = tab.binding.agentSlotId;
+    if (!agentSlotId) continue;
+    const owned = byAgentSlotId.get(agentSlotId);
+    if (owned) owned.push(tab);
+    else byAgentSlotId.set(agentSlotId, [tab]);
+  }
+  return { byAgentSlotId, byTabId };
+}
+
+function ownedTabForAgent(agent: ControlAgentView, index: FleetTabIndex, mappedTabId?: number): ManagedTab | undefined {
+  const owned = index.byAgentSlotId.get(agent.id) ?? [];
   if (mappedTabId !== undefined) {
     const mapped = owned.find((tab) => tab.tabId === mappedTabId);
     if (mapped) return mapped;
@@ -26,13 +45,13 @@ function ownedTabForAgent(agent: ControlAgentView, tabs: readonly ManagedTab[], 
   return undefined;
 }
 
-function reconciliationTabForAgent(agent: ControlAgentView, tabs: readonly ManagedTab[], mappedTabId?: number): ManagedTab | undefined {
-  const owned = ownedTabForAgent(agent, tabs, mappedTabId);
+function reconciliationTabForAgent(agent: ControlAgentView, index: FleetTabIndex, mappedTabId?: number): ManagedTab | undefined {
+  const owned = ownedTabForAgent(agent, index, mappedTabId);
   if (owned) return owned;
   const reservedTabId = mappedTabId ?? agent.browserTabId;
   if (reservedTabId === undefined || agent.browserTabId !== reservedTabId || !agent.browserLeaseId ||
       !['opening', 'open'].includes(agent.browserState)) return undefined;
-  const reserved = tabs.find((tab) => tab.tabId === reservedTabId);
+  const reserved = index.byTabId.get(reservedTabId);
   return reserved && !reserved.binding.agentSlotId ? reserved : undefined;
 }
 export function planFleetReconciliation(
@@ -43,8 +62,9 @@ export function planFleetReconciliation(
   openingGraceMs = 30_000,
 ): FleetAction[] {
   const actions: FleetAction[] = [];
+  const tabIndex = indexFleetTabs(tabs);
   for (const agent of agents) {
-    const tab = reconciliationTabForAgent(agent, tabs, mappedTabs[agent.id]);
+    const tab = reconciliationTabForAgent(agent, tabIndex, mappedTabs[agent.id]);
     if (agent.desiredState === 'active' && agent.rolloverState === 'requested') {
       if (!agent.activeRolloverId) throw new Error(`AgentSlot ${agent.id} requested rollover without an id`);
       if (tab && tab.snapshot.status !== 'generating') actions.push({ kind: 'rollover-close', slotId: agent.id, rolloverId: agent.activeRolloverId, tabId: tab.tabId });
@@ -79,9 +99,10 @@ export function filterFleetTaskTabs(
   mappedTabs: Readonly<Record<string, number>>,
 ): ManagedTab[] {
   const allowed = new Set<number>();
+  const tabIndex = indexFleetTabs(tabs);
   for (const agent of agents) {
     if (agent.desiredState !== 'active' || agent.browserQuarantined || agent.rolloverState !== 'idle') continue;
-    const tab = ownedTabForAgent(agent, tabs, mappedTabs[agent.id]);
+    const tab = ownedTabForAgent(agent, tabIndex, mappedTabs[agent.id]);
     if (tab) allowed.add(tab.tabId);
   }
   return tabs.filter((tab) => allowed.has(tab.tabId));
