@@ -901,6 +901,7 @@ void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch((
 chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
   if (tab.url?.startsWith('https://chatgpt.com/') && (changeInfo.status === 'complete' || changeInfo.url !== undefined)) {
     void notifyManagerChanged();
+    scheduleBrowserRuntimeReport();
     scheduleFleetReconcile();
   }
 });
@@ -944,6 +945,8 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   scheduleBrowserRuntimeReport();
   scheduleFleetReconcile(0);
 });
-chrome.runtime.onInstalled.addListener(() => { void ensureFleetReconcileAlarm().catch((error) => reportIncident('fleet-alarm-configuration-failed', 'extension', { error: String(error) })); scheduleFleetReconcile(0); });
-chrome.runtime.onStartup.addListener(() => { void ensureFleetReconcileAlarm().catch((error) => reportIncident('fleet-alarm-configuration-failed', 'extension', { error: String(error) })); scheduleFleetReconcile(0); });
+chrome.runtime.onInstalled.addListener(() => { void ensureFleetReconcileAlarm().catch((error) => reportIncident('fleet-alarm-configuration-failed', 'extension', { error: String(error) })); scheduleBrowserRuntimeReport(); scheduleFleetReconcile(0); });
+chrome.runtime.onStartup.addListener(() => { void ensureFleetReconcileAlarm().catch((error) => reportIncident('fleet-alarm-configuration-failed', 'extension', { error: String(error) })); scheduleBrowserRuntimeReport(); scheduleFleetReconcile(0); });
+void reportBrowserRuntimeFromTabs([]).catch((error) => reportIncident('browser-runtime-report-failed', 'startup', { error: error instanceof Error ? error.message : String(error) }));
+scheduleBrowserRuntimeReport();
 void ensureFleetReconcileAlarm().catch((error) => reportIncident('fleet-alarm-configuration-failed', 'extension', { error: String(error) }));
