@@ -276,6 +276,26 @@ export class ControlPlane {
     }
   }
 
+  reconcilePersistedOrganizationWorkflows(now = Date.now()): number {
+    const rows = this.database.db.prepare(`
+      SELECT c.id AS claim_id, v.id AS verification_id
+      FROM claims c JOIN verifications v ON v.claim_id=c.id
+      WHERE c.status='verified' AND c.task_id LIKE 'org-work-%' AND v.status='passed'
+        AND v.id=(SELECT latest.id FROM verifications latest WHERE latest.claim_id=c.id ORDER BY latest.completed_at DESC LIMIT 1)
+      ORDER BY c.updated_at,c.id
+    `).all() as Array<{ claim_id: string; verification_id: string }>;
+    let reconciled = 0;
+    for (const row of rows) {
+      const claim = this.evidence.getClaim(row.claim_id);
+      const verification = this.evidence.getVerification(row.verification_id);
+      const workspace = this.workspaces.find(claim.projectId, claim.taskId);
+      if (!workspace) continue;
+      this.organizationWorkflow.reconcileVerifiedWork(claim, verification, workspace, now);
+      reconciled += 1;
+    }
+    return reconciled;
+  }
+
   verifyClaimAndCompleteTask(claimId: string, now = Date.now()) {
     const claim = this.evidence.getClaim(claimId);
     const verification = this.evidence.verifyClaim(claimId, now);
