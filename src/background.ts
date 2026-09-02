@@ -220,6 +220,15 @@ async function prepareAttempt(
   return record;
 }
 
+function generationReservationKey(tabId: number, binding: RoleBinding): string {
+  return binding.agentSlotId ? 'slot:' + binding.agentSlotId : 'tab:' + tabId;
+}
+
+async function reconcileGenerationReservation(tabId: number, binding: RoleBinding, snapshot: ChatSnapshot): Promise<void> {
+  if (snapshot.status === 'generating' || snapshot.status === 'unknown') return;
+  await promptDispatchGovernor.releaseGenerationReservationsForKey(generationReservationKey(tabId, binding));
+}
+
 async function dispatchToTabOnce(
   tabId: number,
   text: string,
@@ -229,6 +238,7 @@ async function dispatchToTabOnce(
   sharedActiveGenerations?: number,
 ): Promise<SendResult> {
   let record: SendAttemptRecord | undefined;
+  let generationReservationId: string | undefined;
   let physicalWriteRequested = false;
   const fallbackAttemptId = crypto.randomUUID();
   try {
@@ -238,6 +248,7 @@ async function dispatchToTabOnce(
     if (!contentRuntimeFence.observe(tabId, recovery.state.observation, true)) throw new Error('Stale content runtime observation before dispatch');
     const snapshot = recovery.state.snapshot;
     const binding = await reportSlotRuntime(tabId, recovery.state.observation, snapshot, bindingFor);
+    await reconcileGenerationReservation(tabId, binding, snapshot);
     if (snapshot.signals.includes('message-rate-limit')) await promptDispatchGovernor.noteRateLimit();
     if (snapshot.status !== 'idle') {
       record = await prepareAttempt(tabId, snapshot, recovery.state.observation.contentEpoch, text, batchId, taskId, messageId);
@@ -252,8 +263,9 @@ async function dispatchToTabOnce(
         agent.browserState === 'open' &&
         agent.browserPageStatus === 'generating',
       ).length;
-    const permit = await promptDispatchGovernor.acquire({ project: binding.project, ...(binding.agentSlotId ? { slotId: binding.agentSlotId } : {}), activeGenerations });
+    const permit = await promptDispatchGovernor.acquire({ project: binding.project, ...(binding.agentSlotId ? { slotId: binding.agentSlotId } : {}), reservationKey: generationReservationKey(tabId, binding), activeGenerations });
     if (!permit.allowed) return { tabId, attemptId: fallbackAttemptId, ok: false, error: `Prompt dispatch deferred by rate governor: ${permit.reason}; retry after ${permit.retryAfterMs}ms` };
+    generationReservationId = permit.generationReservationId;
     record = await prepareAttempt(tabId, snapshot, recovery.state.observation.contentEpoch, text, batchId, taskId, messageId);
 
     const policy = browserOperationPolicy('prompt.send');
@@ -281,6 +293,7 @@ async function dispatchToTabOnce(
       const nextState = response?.outcome === 'proved-not-started' ? 'failed' : 'uncertain';
       await transitionAttempt(record, nextState, error);
       await settleNativeBrowserOperation(record.attemptId, nextState === 'failed' ? 'failed' : 'uncertain', { reason: response?.outcome ?? 'unknown', detail: error }).catch(() => reportIncident('browser-operation-settle-failed', record!.attemptId, { outcome: nextState, error }));
+      if (nextState === 'failed' && generationReservationId) await promptDispatchGovernor.releaseGenerationReservation(generationReservationId);
       return { tabId, attemptId: record.attemptId, ok: false, error: nextState === 'uncertain' ? `Delivery outcome is uncertain: ${error}` : error };
     }
     if (response.contentEpoch !== record.contentEpoch) {
@@ -291,12 +304,15 @@ async function dispatchToTabOnce(
     }
     await transitionAttempt(record, 'acknowledged');
     await settleNativeBrowserOperation(record.attemptId, 'acknowledged', { duplicate: response.duplicate === true, contentEpoch: response.contentEpoch });
+    if (response.duplicate && generationReservationId) await promptDispatchGovernor.releaseGenerationReservation(generationReservationId);
     return { tabId, attemptId: record.attemptId, ok: true, duplicate: response.duplicate === true };
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     if (record) {
       const state: SendAttemptState = physicalWriteRequested ? 'uncertain' : 'failed';
       await transitionAttempt(record, state, reason).catch(() => undefined);
+      if (!physicalWriteRequested && generationReservationId) await promptDispatchGovernor.releaseGenerationReservation(generationReservationId);
+
       await settleNativeBrowserOperation(record.attemptId, state === 'uncertain' ? 'uncertain' : 'failed', { reason: 'dispatch-pipeline-error', detail: reason }).catch(() => reportIncident('browser-operation-settle-failed', record!.attemptId, { outcome: state, reason }));
     }
     return { tabId, attemptId: record?.attemptId ?? fallbackAttemptId, ok: false, error: physicalWriteRequested ? `Delivery outcome is uncertain: ${reason}` : reason };
@@ -734,7 +750,7 @@ chrome.runtime.onMessage.addListener((message: ManagerRequest | RuntimeNotice, s
     const tabId = sender.tab?.id;
     if (tabId === undefined || !contentRuntimeFence.observe(tabId, message.observation)) return false;
     void reportSlotRuntime(tabId, message.observation, message.snapshot, bindingFor)
-      .then(async (binding) => { scheduleFleetReconcile(0); await requestAutomaticConversationRollover(tabId, binding, message.snapshot); await bootstrapPendingConversationRollover(tabId, binding, message.snapshot, (id, text) => dispatchToTab(id, text, crypto.randomUUID())); const bootstrapAttempt = await bootstrapReplyAttemptId(binding, message.snapshot); if (bootstrapAttempt) { const persisted = await markReplyObserved(bootstrapAttempt, message.observation.contentEpoch, message.snapshot, tabId); if (persisted) await completeConversationRolloverForReply(binding, bootstrapAttempt); } })
+      .then(async (binding) => { await reconcileGenerationReservation(tabId, binding, message.snapshot); scheduleFleetReconcile(0); await requestAutomaticConversationRollover(tabId, binding, message.snapshot); await bootstrapPendingConversationRollover(tabId, binding, message.snapshot, (id, text) => dispatchToTab(id, text, crypto.randomUUID())); const bootstrapAttempt = await bootstrapReplyAttemptId(binding, message.snapshot); if (bootstrapAttempt) { const persisted = await markReplyObserved(bootstrapAttempt, message.observation.contentEpoch, message.snapshot, tabId); if (persisted) await completeConversationRolloverForReply(binding, bootstrapAttempt); } })
       .catch((error) => reportIncident('agent-runtime-report-failed', String(tabId), { error: error instanceof Error ? error.message : String(error), contentEpoch: message.observation.contentEpoch }));
     void notifyManagerChanged();
     scheduleBrowserRuntimeReport();
@@ -749,7 +765,7 @@ chrome.runtime.onMessage.addListener((message: ManagerRequest | RuntimeNotice, s
       return false;
     }
     void reportSlotRuntime(tabId, message.observation, message.snapshot, bindingFor)
-      .then(async (binding) => { const persisted = await markReplyObserved(message.attemptId, message.observation.contentEpoch, message.snapshot, tabId); if (persisted) await completeConversationRolloverForReply(binding, message.attemptId); return persisted; })
+      .then(async (binding) => { await reconcileGenerationReservation(tabId, binding, message.snapshot); const persisted = await markReplyObserved(message.attemptId, message.observation.contentEpoch, message.snapshot, tabId); if (persisted) await completeConversationRolloverForReply(binding, message.attemptId); return persisted; })
       .then(async (persisted) => {
         if (persisted) {
           await notifyManagerChanged();

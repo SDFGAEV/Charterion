@@ -61,6 +61,29 @@ describe('PromptDispatchGovernor', () => {
     expect(plan).toEqual({ allowed: false, reason: 'slot-gap', retryAfterMs: 11_000 });
   });
 
+  it('reserves local generation capacity before native status catches up', async () => {
+    const h = harness();
+    const first = await h.governor.acquire({ reservationKey: 'slot:s1', activeGenerations: 1 });
+    expect(first).toMatchObject({ allowed: true, generationReservationId: 'generation-reservation:1' });
+    const blocked = await h.governor.acquire({ reservationKey: 'slot:s2', activeGenerations: 1 });
+    expect(blocked).toEqual({ allowed: false, reason: 'generation-capacity', retryAfterMs: 5_000 });
+    if (!first.allowed || !first.generationReservationId) throw new Error('first reservation missing');
+    await h.governor.releaseGenerationReservation(first.generationReservationId);
+    h.advance(DEFAULT_PROMPT_DISPATCH_POLICY.globalMinIntervalMs);
+    const second = await h.governor.acquire({ reservationKey: 'slot:s2', activeGenerations: 1 });
+    expect(second).toMatchObject({ allowed: true, generationReservationId: 'generation-reservation:2' });
+  });
+
+  it('releases all reservations for a page key after a direct non-generating observation', async () => {
+    const h = harness();
+    const first = await h.governor.acquire({ reservationKey: 'tab:7', activeGenerations: 0 });
+    expect(first.allowed).toBe(true);
+    await h.governor.releaseGenerationReservationsForKey('tab:7');
+    h.advance(DEFAULT_PROMPT_DISPATCH_POLICY.globalMinIntervalMs);
+    const second = await h.governor.acquire({ reservationKey: 'tab:8', activeGenerations: 0 });
+    expect(second).toMatchObject({ allowed: true, generationReservationId: 'generation-reservation:2' });
+  });
+
   it('defers immediately when too many GAM workers are already generating', async () => {
     const h = harness();
     const permit = await h.governor.acquire({ activeGenerations: DEFAULT_PROMPT_DISPATCH_POLICY.maxConcurrentGenerations });

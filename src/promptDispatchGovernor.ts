@@ -52,11 +52,12 @@ export interface PromptDispatchGovernorState {
 export interface PromptDispatchScope {
   project?: string;
   slotId?: string;
+  reservationKey?: string;
   activeGenerations: number;
 }
 
 export type PromptDispatchPermit =
-  | { allowed: true; reservedAt: number; waitedMs: number }
+  | { allowed: true; reservedAt: number; waitedMs: number; generationReservationId?: string }
   | { allowed: false; reason: PromptDispatchDeferReason; retryAfterMs: number };
 
 export interface PromptDispatchGovernorStore {
@@ -177,6 +178,8 @@ function defaultSleep(ms: number): Promise<void> {
 }
 export class PromptDispatchGovernor {
   private tail: Promise<void> = Promise.resolve();
+  private readonly generationReservations = new Map<string, string>();
+  private reservationSequence = 0;
 
   constructor(
     private readonly store: PromptDispatchGovernorStore,
@@ -198,22 +201,51 @@ export class PromptDispatchGovernor {
     return run;
   }
 
+  releaseGenerationReservation(reservationId: string): Promise<void> {
+    const run = this.tail.then(() => {
+      this.generationReservations.delete(reservationId);
+    }, () => {
+      this.generationReservations.delete(reservationId);
+    });
+    this.tail = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  releaseGenerationReservationsForKey(reservationKey: string): Promise<void> {
+    const run = this.tail.then(() => {
+      for (const [reservationId, key] of this.generationReservations) {
+        if (key === reservationKey) this.generationReservations.delete(reservationId);
+      }
+    }, () => {
+      for (const [reservationId, key] of this.generationReservations) {
+        if (key === reservationKey) this.generationReservations.delete(reservationId);
+      }
+    });
+    this.tail = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
   private async acquireSerialized(scope: PromptDispatchScope): Promise<PromptDispatchPermit> {
     const startedAt = this.clock();
+    const scopedForCapacity = { ...scope, activeGenerations: scope.activeGenerations + this.generationReservations.size };
     let state = normalizePromptDispatchState(await this.store.read(), startedAt, this.policy);
-    let plan = planPromptDispatch(state, scope, startedAt, this.policy);
+    let plan = planPromptDispatch(state, scopedForCapacity, startedAt, this.policy);
     if (!plan.allowed) {
       if (plan.reason === 'generation-capacity' || plan.reason === 'rate-limit-backoff' || plan.retryAfterMs > this.policy.maxInlineWaitMs) return plan;
       const jitter = Math.max(0, Math.floor(this.random() * this.policy.jitterMs));
       await this.sleep(plan.retryAfterMs + jitter);
       const now = this.clock();
       state = normalizePromptDispatchState(await this.store.read(), now, this.policy);
-      plan = planPromptDispatch(state, scope, now, this.policy);
+      plan = planPromptDispatch(state, { ...scope, activeGenerations: scope.activeGenerations + this.generationReservations.size }, now, this.policy);
       if (!plan.allowed) return plan;
     }
     const reservedAt = this.clock();
     await this.store.write(reserveDispatch(state, scope, reservedAt, this.policy));
-    return { allowed: true, reservedAt, waitedMs: Math.max(0, reservedAt - startedAt) };
+    const generationReservationId = scope.reservationKey
+      ? `generation-reservation:${++this.reservationSequence}`
+      : undefined;
+    if (generationReservationId && scope.reservationKey) this.generationReservations.set(generationReservationId, scope.reservationKey);
+    return { allowed: true, reservedAt, waitedMs: Math.max(0, reservedAt - startedAt), ...(generationReservationId ? { generationReservationId } : {}) };
   }
   private async noteRateLimitSerialized(): Promise<number> {
     const now = this.clock();
