@@ -12,12 +12,13 @@ export function retainAttemptLedger(
   for (const task of tasks) for (const id of task.attemptIds) linkedIds.add(id);
   for (const message of messages) for (const id of message.attemptIds) linkedIds.add(id);
 
-  const unlinked = attempts.filter((attempt) =>
-    !linkedIds.has(attempt.attemptId) && !attempt.taskId && !attempt.messageId,
-  );
-  const retainedUnlinked = new Set(
-    unlinked.slice(-Math.max(0, maxUnlinked)).map((attempt) => attempt.attemptId),
-  );
+  const unlinkedIds = attempts
+    .filter((attempt) =>
+      !linkedIds.has(attempt.attemptId) && !attempt.taskId && !attempt.messageId,
+    )
+    .slice(-Math.max(0, maxUnlinked))
+    .map((attempt) => attempt.attemptId);
+  const retainedUnlinked = new Set(unlinkedIds);
 
   return attempts.filter((attempt) =>
     linkedIds.has(attempt.attemptId) ||
