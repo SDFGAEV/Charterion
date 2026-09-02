@@ -74,6 +74,24 @@ describe('supervisor dispatch planning', () => {
     expect(decisions[1]?.tabId).toBeUndefined();
   });
 
+  it('allocates constrained tasks before flexible tasks to preserve maximum throughput', () => {
+    const flexible = managed('flexible', 'worker');
+    const constrained = managed('constrained', 'worker', 'ready', 'alpha');
+    const alpha = tab(1, 'worker', 'alpha');
+    const beta = tab(2, 'worker', 'beta');
+    expect(planReadyDispatches([flexible, constrained], [alpha, beta])).toEqual([
+      { taskId: 'flexible', tabId: 2 },
+      { taskId: 'constrained', tabId: 1 },
+    ]);
+  });
+
+  it('prefers role-specialty affinity over a generic compatible role', () => {
+    const specialized = tab(9, 'PLATFORM_DEVELOPER');
+    const generic = tab(1, 'SECURITY_ENGINEER');
+    expect(planReadyDispatches([managed('a', 'PLATFORM_ENGINEER')], [generic, specialized]))
+      .toEqual([{ taskId: 'a', tabId: 9 }]);
+  });
+
   it('ignores non-ready tasks and non-idle tabs', () => {
     expect(planReadyDispatches([managed('a', 'worker', 'pending')], [tab(1, 'worker')])).toEqual([]);
     expect(planReadyDispatches([managed('a', 'worker')], [tab(1, 'worker', '', 'generating')])[0]?.error).toMatch(/No idle/);

@@ -51,6 +51,18 @@ describe('organization policy', () => {
     expect(prompt).toContain('do not implement the Worker change while reviewing it');
   });
 
+  it('keeps capability, ownership, DRI, and review routing orthogonal', () => {
+    const prompt = buildOrganizationSystemPrompt({
+      project: 'GAM', targetRole: 'ENGINEER', taskKind: 'work', completionPolicy: 'verified-claim',
+    });
+    expect(prompt).toContain('capability, authority, and protocol orthogonal');
+    expect(prompt).toContain('not ceilings on Agent capability');
+    expect(prompt).toContain('one accountable DRI with many contributors');
+    expect(prompt).toContain('pull-based review by risk dimension');
+    expect(prompt).toContain('Share peer artifacts and evidence by reference');
+    expect(prompt).toContain('Route ordinary work directly through ownership');
+  });
+
   it('gives testers an independent adversarial charter', () => {
     const prompt = buildOrganizationSystemPrompt({
       project: 'GAM', targetRole: 'BLACK_BOX_TESTER', taskKind: 'work', completionPolicy: 'structured-result',

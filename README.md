@@ -120,7 +120,7 @@ DAG edges represent **real dependencies**, not artificial throttling. Independen
 
 Before a physical prompt reaches the ChatGPT composer, the persistent dispatch governor applies account-level pacing: global spacing, rolling-window budget, Project/AgentSlot spacing, concurrent-generation capacity, and persisted exponential backoff after visible rate-limit signals. Ambiguous delivery never causes an automatic duplicate resend.
 
-The exact-task dispatch module provides a fail-closed typed planner for selecting one requested ready task without selecting unrelated ready tasks. It remains subject to the standard prompt governor and workspace authority.
+The exact-task dispatch module provides a fail-closed typed planner for selecting one requested ready task without selecting unrelated ready tasks. Within a ready wave, allocation uses minimum-remaining-values ordering, role-specialty affinity, persistent-conversation preference, and deterministic tie-breaks so scarce compatible Agents are preserved for constrained work. It remains subject to the standard prompt governor and workspace authority.
 
 <!-- readme-section:browser-lifecycle -->
 ## Browser lifecycle and recovery
