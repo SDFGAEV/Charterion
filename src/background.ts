@@ -4,7 +4,7 @@ import { retainAttemptLedger } from './attemptLedger';
 import { deriveManagedTasks, isRetryableTaskAttempt, validateTaskGraph } from './taskGraph';
 import { markReplyObserved, persistAttempt, readWorkState, replaceWorkState, serializeStateMutation, transitionAttempt, workState, type WorkState } from './backgroundWorkState';
 import { dispatchReadyManagedTasks } from './taskDispatchRuntime';
-import { hasOrganizationExecutionTask } from './organizationWorkAutomation';
+import { hasOrganizationExecutionTask, markOrganizationExecutionObserved } from './organizationWorkAutomation';
 import { attemptBelongsToTab } from './tabAttempt';
 import { applyHumanDecision, applyTaskDisposition } from './taskLifecycle';
 import { applyReviewRemediation } from './reviewLoop';
@@ -720,7 +720,7 @@ async function reconcileAgentFleetOnce(): Promise<void> {
       }
     }
     await deliverWorkerRequestMessages(snapshot);
-    if (hasOrganizationExecutionTask((await workState()).tasks)) await runReadyTasks().then((results) => { if (results.some((result) => !result.ok)) retryOrganizationExecution(); }).catch((error) => { retryOrganizationExecution(); void reportIncident('organization-auto-dispatch-failed', 'organization-runtime', { error: error instanceof Error ? error.message : String(error) }); });
+    const organizationTasks = (await workState()).tasks; if (hasOrganizationExecutionTask(organizationTasks)) { if (markOrganizationExecutionObserved(organizationTasks)) void reportIncident('organization-auto-dispatch-observed', 'organization-runtime', {}); await runReadyTasks().then((results) => { if (results.some((result) => !result.ok)) retryOrganizationExecution(); }).catch((error) => { retryOrganizationExecution(); void reportIncident('organization-auto-dispatch-failed', 'organization-runtime', { error: error instanceof Error ? error.message : String(error) }); }); }
     kickSupervisor();
   });
 }
