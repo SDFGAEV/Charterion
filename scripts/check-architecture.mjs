@@ -28,11 +28,11 @@ const background = textByFile.get(resolve(srcRoot, 'background.ts')) ?? '';
 const backgroundLines = background.split(/\r?\n/).length;
 if (backgroundLines > 950) throw new Error(`src/background.ts exceeded 950-line coordinator budget: ${backgroundLines}`);
 
-const blankCreate = background.indexOf("chrome.tabs.create({ url: 'about:blank', active: false })");
-const fleetBind = background.indexOf('await updateBinding(tab.id', blankCreate);
-const fleetNavigate = background.indexOf("chrome.tabs.update(tab.id, { url: action.url, active: false })", fleetBind);
-if (blankCreate < 0 || fleetBind < 0 || fleetNavigate < 0 || !(blankCreate < fleetBind && fleetBind < fleetNavigate)) {
-  throw new Error('Fleet tab ownership must be persisted before ChatGPT navigation');
+const directCreate = background.indexOf("chrome.tabs.create({ url: action.url, active: false })");
+const placeholderCreate = background.indexOf("chrome.tabs.create({ url: 'about:blank', active: false })");
+const fleetBind = background.indexOf('await updateBinding(tab.id', directCreate);
+if (directCreate < 0 || fleetBind < 0 || placeholderCreate >= 0 || !(directCreate < fleetBind)) {
+  throw new Error('Fleet tabs must navigate directly to ChatGPT without an untracked about:blank placeholder');
 }
 
 const tabCreateOwners = locations('chrome.tabs.create(');
