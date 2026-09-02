@@ -35,6 +35,9 @@ let messages: ManagedMessage[] = [];
 let supervisorEnabled = false;
 let controlSnapshot: NativeControlSnapshot | undefined;
 let lastControlRefresh = 0;
+let controlRefreshInFlight: Promise<void> | undefined;
+let controlRefreshPending = false;
+let controlRefreshPendingForce = false;
 let refreshTimer: number | undefined;
 
 function required<T extends HTMLElement>(id: string): T {
@@ -420,7 +423,7 @@ function renderControl(): void {
   controlSummary.textContent = ['ChatGPT ' + auth, tabs + ' tab(s)', controlSnapshot.projects.length + ' project(s)', controlSnapshot.agents.length + ' agent slot(s)', activeLeases + ' active lease(s)', controlSnapshot.mergeQueue.filter((x) => x.status === 'validating').length + ' validating merge(s)'].join(' · ');
 }
 
-async function refreshControl(force = false): Promise<void> {
+async function refreshControlOnce(force = false): Promise<void> {
   const now = Date.now();
   if (!force && now - lastControlRefresh < 2000) return;
   lastControlRefresh = now;
@@ -434,6 +437,26 @@ async function refreshControl(force = false): Promise<void> {
     controlSummary.textContent = error instanceof Error ? error.message : String(error);
   }
   renderControl();
+}
+
+function refreshControl(force = false): Promise<void> {
+  const now = Date.now();
+  if (!force && !controlRefreshInFlight && now - lastControlRefresh < 2000) return Promise.resolve();
+  controlRefreshPending = true;
+  controlRefreshPendingForce ||= force;
+  if (controlRefreshInFlight) return controlRefreshInFlight;
+
+  controlRefreshInFlight = (async () => {
+    do {
+      controlRefreshPending = false;
+      const nextForce = controlRefreshPendingForce;
+      controlRefreshPendingForce = false;
+      await refreshControlOnce(nextForce);
+    } while (controlRefreshPending);
+  })().finally(() => {
+    controlRefreshInFlight = undefined;
+  });
+  return controlRefreshInFlight;
 }
 
 function render(): void {

@@ -1,9 +1,12 @@
+import { mapWithConcurrency } from './asyncPool';
 import { filterFleetTaskTabs } from './fleet';
 import { planReadyDispatches } from './supervisor';
 import { buildTaskDispatchPrompt } from './taskPrompt';
 import { provisionTaskWorkspaceForDispatch } from './taskWorkspaceDispatch';
 import type { ManagedTab, ManagedTask, SendResult, TaskDispatchResult } from './contracts';
 import type { NativeControlSnapshot } from './nativeControl';
+
+export const MAX_PARALLEL_TASK_DISPATCHES = 4;
 
 export async function dispatchReadyManagedTasks(
   tasks: readonly ManagedTask[],
@@ -16,7 +19,7 @@ export async function dispatchReadyManagedTasks(
   const dispatchTabs = filterFleetTaskTabs(tabs, control.agents, mappedTabs);
   const byTaskId = new Map(tasks.map((managed) => [managed.task.id, managed]));
   const decisions = planReadyDispatches(tasks, dispatchTabs);
-  return Promise.all(decisions.map(async (decision): Promise<TaskDispatchResult> => {
+  return mapWithConcurrency(decisions, MAX_PARALLEL_TASK_DISPATCHES, async (decision): Promise<TaskDispatchResult> => {
     if (decision.tabId === undefined) {
       return { taskId: decision.taskId, ok: false, error: decision.error ?? 'Task is not dispatchable' };
     }
@@ -38,5 +41,5 @@ export async function dispatchReadyManagedTasks(
     } catch (error) {
       return { taskId: managed.task.id, ok: false, error: error instanceof Error ? error.message : String(error) };
     }
-  }));
+  });
 }

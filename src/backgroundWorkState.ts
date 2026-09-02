@@ -3,6 +3,7 @@ import { retainAttemptLedger } from './attemptLedger';
 import { normalizeTask } from './taskPolicy';
 import { mutateNativeWorkDocument, readNativeWorkSnapshot, replaceNativeWorkState, settleNativeBrowserOperation } from './nativeControl';
 import { reportIncident } from './browserRuntimeReporting';
+import { MutationLane } from './mutationLane';
 import type { AgentMessage, AgentTask, ChatSnapshot, SendAttemptRecord, SendAttemptState } from './contracts';
 
 export interface WorkState {
@@ -12,7 +13,7 @@ export interface WorkState {
   messages: AgentMessage[];
 }
 
-let mutationTail: Promise<void> = Promise.resolve();
+const mutationLane = new MutationLane();
 
 export async function readWorkState(): Promise<WorkState> {
   const state = await readNativeWorkSnapshot();
@@ -24,13 +25,11 @@ export async function replaceWorkState(current: WorkState, patch: Partial<Pick<W
   return { revision: next.revision, attempts: next.attempts, tasks: next.tasks.map(normalizeTask), messages: next.messages };
 }
 export function serializeStateMutation<T>(operation: () => Promise<T>): Promise<T> {
-  const run = mutationTail.then(operation, operation);
-  mutationTail = run.then(() => undefined, () => undefined);
-  return run;
+  return mutationLane.run(operation);
 }
 
 export async function workState(): Promise<WorkState> {
-  await mutationTail;
+  await mutationLane.waitForIdle();
   return readWorkState();
 }
 

@@ -1,3 +1,4 @@
+import { mapWithConcurrency } from './asyncPool';
 import { advanceAttempt } from './attempts';
 import { retainAttemptLedger } from './attemptLedger';
 import { deriveManagedTasks, isRetryableTaskAttempt, validateTaskGraph } from './taskGraph';
@@ -17,6 +18,7 @@ import { bootstrapPendingConversationRollover, bootstrapReplyAttemptId, complete
 import { deriveBrowserRuntimeObservation, fleetExpansionAllowed } from './browserRuntime';
 import { CoalescingRunner } from './coalescingRunner';
 import { TabOperationQueue } from './tabOperationQueue';
+import { MutationLane } from './mutationLane';
 import { controlFeedbackMessages } from './controlFeedback';
 import { ContentRuntimeFence } from './contentRuntimeFence';
 import { browserOperationPolicy } from './browserOperationPolicy';
@@ -48,8 +50,10 @@ const MESSAGES_KEY = 'messages.v1';
 const SUPERVISOR_KEY = 'supervisor.v1';
 const FLEET_TABS_KEY = 'fleetTabs.v1';
 const CONTROL_REQUEST_MESSAGE_PREFIX = 'control-request:';
-let stateMutationTail: Promise<void> = Promise.resolve();
-let bindingMutationTail: Promise<void> = Promise.resolve();
+const MAX_PARALLEL_BROWSER_PROBES = 6;
+const MAX_PARALLEL_TAB_DISPATCHES = 4;
+const bindingMutationLane = new MutationLane();
+const fleetTabMapMutationLane = new MutationLane();
 const tabOperations = new TabOperationQueue();
 const contentRuntimeFence = new ContentRuntimeFence();
 const promptDispatchGovernor = new PromptDispatchGovernor({
@@ -57,9 +61,7 @@ const promptDispatchGovernor = new PromptDispatchGovernor({
   write: async (state) => { await chrome.storage.local.set({ [PROMPT_DISPATCH_GOVERNOR_KEY]: state }); },
 });
 function serializeBindingMutation<T>(operation: () => Promise<T>): Promise<T> {
-  const run = bindingMutationTail.then(operation);
-  bindingMutationTail = run.then(() => undefined, () => undefined);
-  return run;
+  return bindingMutationLane.run(operation);
 }
 
 const bindingStore = createBindingStore(
@@ -81,6 +83,10 @@ async function fleetTabMap(): Promise<Record<string, number>> {
 async function saveFleetTabMap(value: Record<string, number>): Promise<void> {
   await chrome.storage.session.set({ [FLEET_TABS_KEY]: value });
 }
+
+function serializeFleetTabMapMutation<T>(operation: () => Promise<T>): Promise<T> {
+  return fleetTabMapMutationLane.run(operation);
+}
 async function reconcileAfterRestart(): Promise<void> {
   const state = await workState();
   const active = state.attempts.filter((attempt) =>
@@ -89,7 +95,7 @@ async function reconcileAfterRestart(): Promise<void> {
   if (active.length === 0) return;
 
   const tabs = await chrome.tabs.query({ url: ['https://chatgpt.com/*'] });
-  const observations = (await Promise.all(tabs.map(recoveryStateForTab))).filter(
+  const observations = (await mapWithConcurrency(tabs, MAX_PARALLEL_BROWSER_PROBES, recoveryStateForTab)).filter(
     (value): value is AttemptRecoveryObservation => value !== undefined,
   );
   const control = await readNativeControlSnapshot().catch(() => undefined); if (control) for (const observation of observations) { const key = control.agents.find((agent) => agent.browserTabId === observation.tabId)?.conversationKey; if (key) observation.authoritativeConversationKey = key; }
@@ -130,10 +136,10 @@ async function managedTabs(attempts?: readonly SendAttemptRecord[]): Promise<Man
   const candidates = tabs.filter((tab): tab is chrome.tabs.Tab & { id: number } => tab.id !== undefined);
   if (candidates.length === 0) return [];
   const ledger = attempts ?? currentState?.attempts ?? [];
-  const observed = await Promise.all(candidates.map(async (tab) => ({
+  const observed = await mapWithConcurrency(candidates, MAX_PARALLEL_BROWSER_PROBES, async (tab) => ({
     tab,
     snapshot: await snapshotForTab(tab),
-  })));
+  }));
   return serializeBindingMutation(async () => {
     const stores = await bindingStore.read();
     const managed = observed
@@ -328,9 +334,9 @@ async function sendToTabs(tabIds: number[], text: string): Promise<SendResult[]>
   // Each tab is independently serialized by TabOperationQueue; dispatching the
   // independent lanes together removes avoidable cross-tab latency while keeping
   // same-tab writes and their uncertain outcomes strictly ordered.
-  return Promise.all(uniqueTabIds.map(async (tabId) =>
+  return mapWithConcurrency(uniqueTabIds, MAX_PARALLEL_TAB_DISPATCHES, async (tabId) =>
     dispatchToTab(tabId, text, batchId, undefined, undefined, await activeGenerations),
-  ));
+  );
 }
 
 async function createTask(input: CreateTaskInput): Promise<AgentTask> {
@@ -639,6 +645,7 @@ async function deliverWorkerRequestMessages(snapshot: import('./nativeControl').
 }
 
 async function reconcileAgentFleetOnce(): Promise<void> {
+  return serializeFleetTabMapMutation(async () => {
     await reconcileNativeElasticFleet();
     const snapshot = await readNativeControlSnapshot();
     const state = await workState();
@@ -705,6 +712,7 @@ async function reconcileAgentFleetOnce(): Promise<void> {
     // Fleet bindings may become usable only after the content event that triggered this reconcile.
     // Give Auto Supervisor a second scheduling opportunity against the reconciled binding state.
     kickSupervisor();
+  });
 }
 
 const fleetReconcileRunner = new CoalescingRunner(reconcileAgentFleetOnce, (error) => {
@@ -882,7 +890,7 @@ chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
 });
 chrome.tabs.onRemoved.addListener((tabId) => {
   contentRuntimeFence.remove(tabId);
-  void (async () => {
+  void serializeFleetTabMapMutation(async () => {
     const [mapping, bindingChanged] = await Promise.all([
       fleetTabMap(),
       serializeBindingMutation(async () => {
@@ -900,7 +908,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
     if (mappingChanged) await saveFleetTabMap(mapping);
     await notifyManagerChanged();
     scheduleFleetReconcile(0);
-  })().catch((error) => reportIncident('tab-removal-reconciliation-failed', String(tabId), { error: error instanceof Error ? error.message : String(error) }));
+  }).catch((error) => reportIncident('tab-removal-reconciliation-failed', String(tabId), { error: error instanceof Error ? error.message : String(error) }));
 });
 
 void migrateLegacyWorkStateOnce().then(() => reconcileAfterRestart()).then(() => {
