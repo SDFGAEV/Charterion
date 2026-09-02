@@ -73,6 +73,23 @@ describe('named-pipe transport', () => {
     await expect(sendRpc(pipe, { id: 'still-alive', method: 'health' })).resolves.toMatchObject({ id: 'still-alive', ok: true });
   });
 
+  it('rejects malformed request envelopes before routing', async () => {
+    const { router } = setup();
+    const pipe = process.platform === 'win32'
+      ? `\\\\.\\pipe\\gam-test-${randomUUID()}`
+      : join(tmpdir(), `gam-test-${randomUUID()}.sock`);
+    const server = await startIpcServer(pipe, router);
+    cleanups.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
+    const response = await new Promise<string>((resolve, reject) => {
+      const socket = createConnection(pipe);
+      socket.setEncoding('utf8');
+      socket.once('error', reject);
+      socket.once('connect', () => socket.write(JSON.stringify({ id: 'bad', method: 'health', params: [] }) + String.fromCharCode(10)));
+      socket.once('data', (data) => { resolve(String(data)); socket.destroy(); });
+    });
+    expect(JSON.parse(response.trim())).toMatchObject({ id: 'unknown', ok: false, error: { code: 'INVALID_REQUEST' } });
+  });
+
   it('round-trips one RPC request over the daemon transport', async () => {
     const { router } = setup();
     const pipe = process.platform === 'win32'

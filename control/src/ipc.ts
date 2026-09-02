@@ -44,12 +44,28 @@ export function startIpcServer(pipeName: string, router: RpcRouter): Promise<Ser
     server.listen(pipeName, () => { server.off('error', reject); resolve(server); });
   });
 }
+function parseRequest(value: unknown): RpcRequest | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const request = value as Record<string, unknown>;
+  if (typeof request.id !== 'string' || !request.id.trim()) return undefined;
+  if (typeof request.method !== 'string' || !request.method.trim()) return undefined;
+  if (request.instanceId !== undefined && typeof request.instanceId !== 'string') return undefined;
+  if (request.params !== undefined && (!request.params || typeof request.params !== 'object' || Array.isArray(request.params))) return undefined;
+  if (request.auth !== undefined && (!request.auth || typeof request.auth !== 'object' || Array.isArray(request.auth))) return undefined;
+  return request as unknown as RpcRequest;
+}
+
 function handleLine(socket: Socket, line: string, router: RpcRouter): void {
-  let request: RpcRequest;
+  let parsed: unknown;
   try {
-    request = JSON.parse(line) as RpcRequest;
+    parsed = JSON.parse(line);
   } catch {
     writeResponse(socket, { id: 'unknown', ok: false, error: { code: 'INVALID_JSON', message: 'RPC request is not valid JSON' } });
+    return;
+  }
+  const request = parseRequest(parsed);
+  if (!request) {
+    writeResponse(socket, { id: 'unknown', ok: false, error: { code: 'INVALID_REQUEST', message: 'RPC request envelope is invalid' } });
     return;
   }
   writeResponse(socket, router.handle(request));
