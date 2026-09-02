@@ -2,7 +2,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { dirname, relative, resolve, isAbsolute } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-export const CONTROL_SCHEMA_VERSION = 26;
+export const CONTROL_SCHEMA_VERSION = 27;
 
 export class ControlDatabase {
   readonly db: DatabaseSync;
@@ -102,6 +102,7 @@ export class ControlDatabase {
     if (version < 24) this.migrateV24();
     if (version < 25) this.migrateV25();
     if (version < 26) this.migrateV26();
+    if (version < 27) this.migrateV27();
     this.db.prepare(`
       INSERT INTO schema_meta(key, value) VALUES('schema_version', ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value
@@ -778,6 +779,30 @@ export class ControlDatabase {
       if (!columns.some((column) => column.name === 'completion_policy')) {
         this.db.exec("ALTER TABLE organization_work_items ADD COLUMN completion_policy TEXT NOT NULL DEFAULT 'verified-claim' CHECK(completion_policy IN ('structured-result','verified-claim'))");
       }
+    });
+  }
+
+  private migrateV27(): void {
+    this.transaction(() => {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS organization_review_work_items (
+          id TEXT PRIMARY KEY,
+          organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+          project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+          review_request_id TEXT NOT NULL REFERENCES review_requests(id) ON DELETE CASCADE,
+          review_slot_id TEXT NOT NULL REFERENCES review_slots(id) ON DELETE CASCADE,
+          work_item_id TEXT NOT NULL REFERENCES organization_work_items(id) ON DELETE CASCADE,
+          reviewer_agent_id TEXT NOT NULL REFERENCES organization_agents(id) ON DELETE CASCADE,
+          runtime_acquisition_id TEXT NOT NULL REFERENCES organization_runtime_acquisitions(id) ON DELETE RESTRICT,
+          status TEXT NOT NULL CHECK(status IN ('materialized','claimed','decided','completed','blocked')),
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          UNIQUE(review_slot_id), UNIQUE(work_item_id)
+        ) STRICT;
+        CREATE INDEX IF NOT EXISTS idx_org_review_work_items_request ON organization_review_work_items(review_request_id,status);
+        CREATE INDEX IF NOT EXISTS idx_org_review_work_items_reviewer ON organization_review_work_items(reviewer_agent_id,status);
+      `);
     });
   }
 

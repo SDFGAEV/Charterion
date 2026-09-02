@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import type { ControlDatabase } from './database';
 import type { ChangeRequestAuthority } from './changeRequestAuthority';
 import type { ReviewPoolAuthority } from './reviewPoolAuthority';
@@ -92,6 +93,9 @@ export class OrganizationWorkflowCoordinator {
     now: number,
   ): void {
     const marker = `Review request ${request.id} slot ${slot.id}`;
+    const existingBinding = this.database.db.prepare('SELECT id FROM organization_review_work_items WHERE review_slot_id=?').get(slot.id) as { id?: string } | undefined;
+    if (existingBinding?.id) return;
+    // Compatibility recovery for review work materialized before the typed binding existed.
     if (this.organization.listWorkItems(identity.missionId).some((item) => item.objective.includes(marker))) return;
     const reviewer = this.reviewerFor(identity.organizationId, authorSubject, now);
     this.organization.addMissionMember(identity.missionId, reviewer.id, 'reviewer', now);
@@ -107,8 +111,16 @@ export class OrganizationWorkflowCoordinator {
     }, now);
     this.organization.setWorkStatus(work.id, 'ready', now);
     this.organizationExecution.materialize(work.id, now);
+    const bindingId = randomUUID();
+    this.database.db.prepare(`INSERT INTO organization_review_work_items(
+      id,organization_id,project_id,mission_id,review_request_id,review_slot_id,work_item_id,
+      reviewer_agent_id,runtime_acquisition_id,status,created_at,updated_at
+    ) VALUES(?,?,?,?,?,?,?,?,?,'materialized',?,?)`).run(
+      bindingId, identity.organizationId, identity.projectId, identity.missionId, request.id, slot.id,
+      work.id, reviewer.id, runtime.id, now, now,
+    );
     this.event(identity.projectId, 'REVIEW_WORK_MATERIALIZED', work.id, {
-      reviewRequestId: request.id, reviewSlotId: slot.id, reviewerAgentId: reviewer.id, runtimeAcquisitionId: runtime.id,
+      bindingId, reviewRequestId: request.id, reviewSlotId: slot.id, reviewerAgentId: reviewer.id, runtimeAcquisitionId: runtime.id,
     }, now);
   }
 
@@ -158,6 +170,8 @@ export class OrganizationWorkflowCoordinator {
       promotionId: decided.id, authoritySubject: 'system:release-governor',
     }, now) : decided;
     const integrated = this.changes.observeIntegration(prepared.id, now);
+    this.database.db.prepare("UPDATE organization_review_work_items SET status='completed',updated_at=? WHERE review_request_id=? AND status='decided'")
+      .run(now, request.id);
     this.event(current.projectId, 'ORGANIZATION_WORK_PROMOTED', request.id, {
       reviewRequestId: request.id, changeRequestId: current.id, queueEntryId: prepared.id,
       promotionId: applied.id, integratedSha: integrated.integratedSha ?? null,
