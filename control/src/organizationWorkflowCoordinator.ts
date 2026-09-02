@@ -3,7 +3,12 @@ import type { ControlDatabase } from './database';
 import type { ChangeRequestAuthority } from './changeRequestAuthority';
 import type { ReviewPoolAuthority } from './reviewPoolAuthority';
 import type { WorkClaim, VerificationRecord, TaskWorkspace, ChangeRequest } from './contracts';
-import type { ReviewRequestRecord } from './reviewPoolContracts';
+import type { ReviewRequestRecord, ReviewSlotRecord } from './reviewPoolContracts';
+import type { OrganizationAuthority } from './organizationAuthority';
+import type { OrganizationRuntimeAcquisitionAuthority } from './organizationRuntimeAcquisitionAuthority';
+import type { OrganizationExecutionBridge } from './organizationExecutionBridge';
+import type { OrganizationAgentRecord } from './organizationContracts';
+import type { PromotionAuthority } from './promotionAuthority';
 
 export interface OrganizationWorkflowReconciliation {
   organizationId: string;
@@ -25,6 +30,10 @@ export class OrganizationWorkflowCoordinator {
     private readonly database: ControlDatabase,
     private readonly changes: ChangeRequestAuthority,
     private readonly reviewPool: ReviewPoolAuthority,
+    private readonly organization: OrganizationAuthority,
+    private readonly organizationRuntime: OrganizationRuntimeAcquisitionAuthority,
+    private readonly organizationExecution: OrganizationExecutionBridge,
+    private readonly promotions: PromotionAuthority,
     private readonly gitPath = 'git',
   ) {}
 
@@ -33,11 +42,11 @@ export class OrganizationWorkflowCoordinator {
       .run(projectId, type, subject, JSON.stringify(payload), now);
   }
 
-  private organizationFor(workItemId: string): { organizationId?: string; projectId?: string } | undefined {
+  private organizationFor(workItemId: string): { organizationId?: string; projectId?: string; missionId?: string } | undefined {
     return this.database.db.prepare(`
-      SELECT m.organization_id AS organization_id,m.project_id AS project_id
+      SELECT m.organization_id AS organization_id,m.project_id AS project_id,m.id AS mission_id
       FROM organization_work_items w JOIN missions m ON m.id=w.mission_id WHERE w.id=?
-    `).get(workItemId) as { organizationId?: string; projectId?: string } | undefined;
+    `).get(workItemId) as { organizationId?: string; projectId?: string; missionId?: string } | undefined;
   }
 
   private targetBranch(root: string, baseSha: string): string {
@@ -46,6 +55,114 @@ export class OrganizationWorkflowCoordinator {
       if (result.status === 0 && result.stdout.trim().toLowerCase() === baseSha.toLowerCase()) return branch;
     }
     throw new Error('No main or master target branch matches the workspace base SHA');
+  }
+
+  private reviewerFor(organizationId: string, authorSubject: string, now: number): OrganizationAgentRecord {
+    const reusable = this.organization.listAgents(organizationId)
+      .filter((agent) => agent.status === 'active' && agent.id !== authorSubject && !agent.runtimeSlotId)
+      .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id))[0];
+    if (reusable) return reusable;
+    const department = this.organization.listDepartments(organizationId)[0] ?? this.organization.createDepartment({
+      organizationId, name: 'Verification & Quality', purpose: 'Independent evidence and change review',
+    }, now);
+    return this.organization.registerAgent({
+      organizationId, displayName: 'Autonomous Review Agent', primaryDepartmentId: department.id,
+    }, now);
+  }
+
+  private configureReviewer(agent: OrganizationAgentRecord, projectId: string, root: string, now: number): void {
+    let workspace = this.organization.activeAgentWorkspace(agent.id);
+    if (!workspace) workspace = this.organization.requestAgentWorkspace({ agentId: agent.id }, now);
+    if (workspace.status === 'ready') return;
+    if (workspace.status !== 'configuring' && workspace.status !== 'error') throw new Error('Reviewer workspace is not configurable');
+    this.organization.configureAgentWorkspace({
+      workspaceId: workspace.id, rootRef: root, browserProfileId: `charterion-review-${agent.id}`,
+      toolProfileRef: 'default', allowedRefs: [root], forbiddenRefs: [], securityMode: 'prompt-guarded',
+      dangerousActionPolicy: 'approval-required', toolPolicyState: 'unconfigured',
+    }, now);
+    void projectId;
+  }
+
+  private materializeReviewSlot(
+    identity: { organizationId: string; projectId: string; missionId: string },
+    request: ReviewRequestRecord,
+    slot: ReviewSlotRecord,
+    authorSubject: string,
+    root: string,
+    now: number,
+  ): void {
+    const marker = `Review request ${request.id} slot ${slot.id}`;
+    if (this.organization.listWorkItems(identity.missionId).some((item) => item.objective.includes(marker))) return;
+    const reviewer = this.reviewerFor(identity.organizationId, authorSubject, now);
+    this.organization.addMissionMember(identity.missionId, reviewer.id, 'reviewer', now);
+    this.configureReviewer(reviewer, identity.projectId, root, now);
+    const runtime = this.organizationRuntime.requestAndAcquire({
+      organizationId: identity.organizationId, agentId: reviewer.id, projectId: identity.projectId,
+      role: `Review:${slot.dimension}`, idempotencyKey: `review-runtime:${request.id}:${slot.id}`,
+    }, now);
+    const work = this.organization.createWorkItem({
+      missionId: identity.missionId, title: `Review ${slot.dimension}`,
+      objective: `${marker}. Inspect the exact Change Request head and record an evidence-backed decision.`,
+      ownerAgentId: reviewer.id, completionPolicy: 'structured-result',
+    }, now);
+    this.organization.setWorkStatus(work.id, 'ready', now);
+    this.organizationExecution.materialize(work.id, now);
+    this.event(identity.projectId, 'REVIEW_WORK_MATERIALIZED', work.id, {
+      reviewRequestId: request.id, reviewSlotId: slot.id, reviewerAgentId: reviewer.id, runtimeAcquisitionId: runtime.id,
+    }, now);
+  }
+
+  private materializeReviewWorks(
+    identity: { organizationId: string; projectId: string; missionId: string },
+    request: ReviewRequestRecord,
+    authorSubject: string,
+    root: string,
+    now: number,
+  ): void {
+    for (const slot of this.reviewPool.listSlots(request.id)) {
+      if (slot.state === 'open' && slot.required) this.materializeReviewSlot(identity, request, slot, authorSubject, root, now);
+    }
+  }
+
+  reconcileReviewDecision(reviewRequestId: string, now = Date.now()): Record<string, unknown> {
+    const request = this.reviewPool.getRequest(required(reviewRequestId, 'Review request id'));
+    if (request.status !== 'approved') return { reviewRequestId: request.id, status: request.status };
+    const change = this.changes.getChangeRequest(request.changeRequestId);
+    const slots = this.reviewPool.listSlots(request.id);
+    const reviewer = slots.find((slot) => slot.reviewerAgentId)?.reviewerAgentId;
+    if (!reviewer) throw new Error('Approved Review Request has no reviewer identity');
+    if (change.status === 'open') {
+      this.changes.review({
+        changeRequestId: change.id, reviewerSubject: reviewer, headSha: change.headSha, verdict: 'approve',
+        body: slots.map((slot) => `${slot.dimension}: ${slot.decisionNote ?? 'approved'}`).join('\\n'),
+      }, now);
+    }
+    const current = this.changes.getChangeRequest(change.id);
+    const queued = this.changes.listQueue(change.projectId).find((entry) => entry.changeRequestId === current.id && ['queued','validating','integrated'].includes(entry.status))
+      ?? this.changes.queue(current.id, now);
+    const prepared = queued.status === 'queued' ? this.changes.prepareMergeCandidate(queued.id, now) : queued;
+    if (prepared.status !== 'validating' || !prepared.candidateSha || !prepared.candidateBaseSha) {
+      throw new Error('Approved Change Request did not produce a merge candidate');
+    }
+    const targetRef = `refs/heads/${current.targetBranch}`;
+    const promotion = this.promotions.request({
+      projectId: current.projectId, idempotencyKey: `organization-promotion:${request.id}:${request.revision}`,
+      claimId: current.claimId, candidateSha: prepared.candidateSha, targetRef,
+      expectedParentSha: prepared.candidateBaseSha, requestedBy: 'system:release-governor',
+    }, now);
+    const decided = promotion.status === 'pending' ? this.promotions.decide({
+      promotionId: promotion.id, authoritySubject: 'system:release-governor', decision: 'approve',
+      reason: 'All required Review Pool dimensions approved and machine evidence is exact-head valid',
+    }, now) : promotion;
+    const applied = decided.status === 'approved' ? this.promotions.apply({
+      promotionId: decided.id, authoritySubject: 'system:release-governor',
+    }, now) : decided;
+    const integrated = this.changes.observeIntegration(prepared.id, now);
+    this.event(current.projectId, 'ORGANIZATION_WORK_PROMOTED', request.id, {
+      reviewRequestId: request.id, changeRequestId: current.id, queueEntryId: prepared.id,
+      promotionId: applied.id, integratedSha: integrated.integratedSha ?? null,
+    }, now);
+    return { reviewRequestId: request.id, status: 'promoted', changeRequest: current, queue: integrated, promotion: applied };
   }
 
   reconcileVerifiedWork(
@@ -73,6 +190,8 @@ export class OrganizationWorkflowCoordinator {
         organizationId: identity.organizationId, changeRequestId: changeRequest.id, risk: 'normal',
         slots: [{ dimension: 'architecture', required: true }, { dimension: 'correctness', required: true }],
       }, now);
+      const fullIdentity = { organizationId: identity.organizationId, projectId: identity.projectId, missionId: required(identity.missionId, 'Mission id') };
+      this.materializeReviewWorks(fullIdentity, reviewRequest, claim.subject, root, now);
       this.event(identity.projectId, 'ORGANIZATION_WORK_REVIEW_READY', workItemId, { claimId: claim.id, changeRequestId: changeRequest.id, reviewRequestId: reviewRequest.id, headSha: claim.commitSha }, now);
       return { organizationId: identity.organizationId, workItemId, changeRequest, reviewRequest, status: 'review-ready' };
     } catch (error) {

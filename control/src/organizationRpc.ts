@@ -4,6 +4,7 @@ import type { AgentWorkspaceDangerousActionPolicy, AgentWorkspaceSecurityMode, A
 import type { WorkPriority, WorkRequesterKind, WorkRequestStatus } from './workIngressContracts';
 import type { RequestOrganizationRuntimeAcquisitionInput } from './organizationRuntimeAcquisitionAuthority';
 import type { AutonomousIntakeInput } from './autonomousIntakeAuthority';
+import type { ReviewDecision } from './reviewPoolContracts';
 
 type Params = Record<string, unknown>;
 export interface OrganizationRpcAuth {
@@ -50,6 +51,7 @@ const METHODS = new Set([
   'org-work.create','org-work.list','org-work.assign-owner','org-work.status','org-work.complete','org-work.outcome','org-work.project-execution',
   'work-request.submit','work-request.get','work-request.list','work-request.accept','work-request.reject','work-request.cancel',
   'intake.submit',
+  'org-review.list','org-review.claim','org-review.decide',
 ]);
 
 export class OrganizationRpcController {
@@ -100,8 +102,49 @@ export class OrganizationRpcController {
       case 'work-request.reject': return this.requestReject(request, params);
       case 'work-request.cancel': return this.requestCancel(request, params);
       case 'intake.submit': return this.intakeSubmit(request, params);
+      case 'org-review.list': return this.reviewList(request, params);
+      case 'org-review.claim': return this.reviewClaim(request, params);
+      case 'org-review.decide': return this.reviewDecide(request, params);
       default: throw new Error(`Unknown organization RPC method ${request.method}`);
     }
+  }
+
+  private reviewAgent(request: RpcRequest, params: Params, scope: string): { agentId: string; projectId: string } {
+    const projectId = stringParam(params,'projectId')!;
+    const slotId = stringParam(params,'agentSlotId')!;
+    if (request.auth?.adminToken) {
+      this.auth.requireAdmin(request);
+      const agentId = stringParam(params,'reviewerAgentId')!;
+      return { agentId, projectId };
+    }
+    const grant = this.auth.requireCapability(request, scope, { projectId });
+    if (grant.subject !== slotId) throw new Error('Review capability subject does not match AgentSlot');
+    const row = this.plane.database.db.prepare('SELECT id FROM organization_agents WHERE runtime_slot_id=? AND status=\'active\'').get(slotId) as { id?: string } | undefined;
+    if (!row?.id) throw new Error('AgentSlot is not bound to an active Organization Agent');
+    return { agentId: row.id, projectId };
+  }
+
+  private reviewList(request: RpcRequest, params: Params): unknown {
+    const identity = this.reviewAgent(request, params, 'review:read');
+    return this.plane.reviewPool.queueForAgent(identity.agentId);
+  }
+
+  private reviewClaim(request: RpcRequest, params: Params): unknown {
+    const identity = this.reviewAgent(request, params, 'review:claim');
+    return this.plane.reviewPool.claim({ slotId: stringParam(params,'reviewSlotId')!, reviewerAgentId: identity.agentId });
+  }
+
+  private reviewDecide(request: RpcRequest, params: Params): unknown {
+    const identity = this.reviewAgent(request, params, 'review:decide');
+    const result = this.plane.reviewPool.decide({
+      slotId: stringParam(params,'reviewSlotId')!, reviewerAgentId: identity.agentId,
+      decision: enumParam<ReviewDecision>(params,'decision',['approve','request-changes','reject'] as const)!,
+      note: stringParam(params,'note')!,
+    });
+    const workflow = result.request.status === 'approved'
+      ? this.plane.organizationWorkflow.reconcileReviewDecision(result.request.id)
+      : undefined;
+    return { ...result, workflow };
   }
 
   private intakeSubmit(request: RpcRequest, params: Params): unknown {

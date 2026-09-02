@@ -203,7 +203,7 @@ export class ControlPlane {
     this.organizationExecution = new OrganizationExecutionBridge(database, this.organization, this.work);
     this.organizationRuntime = new OrganizationRuntimeAcquisitionAuthority(database, this.organization, (projectId, role, now) => this.createAgentSlot(projectId, role, now));
     this.autonomousIntake = new AutonomousIntakeAuthority(this);
-    this.organizationWorkflow = new OrganizationWorkflowCoordinator(database, this.changes, this.reviewPool, gitPath);
+    this.organizationWorkflow = new OrganizationWorkflowCoordinator(database, this.changes, this.reviewPool, this.organization, this.organizationRuntime, this.organizationExecution, this.promotions, gitPath);
   }
 
   provisionTaskWorkspace(projectId: string, slotId: string, taskId: string, now = Date.now()) {
@@ -232,7 +232,7 @@ export class ControlPlane {
         if (active.holderId !== slot.id || active.taskId !== taskId || active.mode !== 'exclusive') throw new Error('Task workspace resource already has an incompatible active lease');
         lease = active;
       } else lease = this.acquireLease({ resourceId: resource.id, projectId: project.id, holderId: slot.id, taskId, mode: 'exclusive' }, now);
-      capability = this.issueCapability({ subject: slot.id, projectId: project.id, agentSlotId: slot.id, taskId, leaseEpoch: lease.epoch, scopes: ['claim:submit','artifact:register','claim:read','claim:verify','org-work:create','org-work:status'], resourceIds: [resource.id], ttlMs: 7 * 24 * 60 * 60 * 1000 }, now);
+      capability = this.issueCapability({ subject: slot.id, projectId: project.id, agentSlotId: slot.id, taskId, leaseEpoch: lease.epoch, scopes: ['claim:submit','artifact:register','claim:read','claim:verify','org-work:create','org-work:status','review:read','review:claim','review:decide'], resourceIds: [resource.id], ttlMs: 7 * 24 * 60 * 60 * 1000 }, now);
       workspace = this.workspaces.record({ ...materialized, projectId: project.id, taskId, slotId: slot.id, resourceId: resource.id, leaseId: lease.id, leaseEpoch: lease.epoch, capabilityId: capability.id, capabilityToken: capability.token }, now);
       this.event(project.id, 'TASK_WORKSPACE_PROVISIONED', workspace.id, { taskId, slotId: slot.id, branch: workspace.branch, path: workspace.path, resourceId: resource.id, leaseId: lease.id }, now);
       return workspace!;
