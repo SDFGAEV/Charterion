@@ -45,7 +45,7 @@ export class OrganizationWorkflowCoordinator {
 
   private organizationFor(workItemId: string): { organizationId?: string; projectId?: string; missionId?: string } | undefined {
     return this.database.db.prepare(`
-      SELECT m.organization_id AS organization_id,m.project_id AS project_id,m.id AS mission_id
+      SELECT m.organization_id AS organizationId,m.project_id AS projectId,m.id AS missionId
       FROM organization_work_items w JOIN missions m ON m.id=w.mission_id WHERE w.id=?
     `).get(workItemId) as { organizationId?: string; projectId?: string; missionId?: string } | undefined;
   }
@@ -78,7 +78,7 @@ export class OrganizationWorkflowCoordinator {
     if (workspace.status !== 'configuring' && workspace.status !== 'error') throw new Error('Reviewer workspace is not configurable');
     this.organization.configureAgentWorkspace({
       workspaceId: workspace.id, rootRef: root, browserProfileId: `charterion-review-${agent.id}`,
-      toolProfileRef: 'default', allowedRefs: [root], forbiddenRefs: [], securityMode: 'prompt-guarded',
+      toolProfileRef: `charterion-review-tools-${agent.id}`, allowedRefs: [root], forbiddenRefs: [], securityMode: 'prompt-guarded',
       dangerousActionPolicy: 'approval-required', toolPolicyState: 'unconfigured',
     }, now);
     void projectId;
