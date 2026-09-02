@@ -11,6 +11,7 @@ let lastSemanticKey = '';
 let publishTimer: number | undefined;
 const inflightAttempts = new Set<string>();
 const deliveredInMemory = new Set<string>();
+let pendingInMemory: PendingPromptEvidence | undefined;
 
 function snapshot() {
   return snapshotFromDocument(document, location.href, `provisional:${contentEpoch}`);
@@ -35,7 +36,9 @@ function rememberDelivered(attemptId: string): void {
 
 function readPendingPrompt(): PendingPromptEvidence | undefined {
   try {
-    const parsed: unknown = JSON.parse(sessionStorage.getItem(PENDING_PROMPT_KEY) ?? 'null');
+    const raw = sessionStorage.getItem(PENDING_PROMPT_KEY);
+    if (raw === null) return pendingInMemory;
+    const parsed: unknown = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
     const item = parsed as Record<string, unknown>;
     if (typeof item.attemptId !== 'string' || typeof item.baselineAssistantMessageCount !== 'number') return undefined;
@@ -48,16 +51,20 @@ function readPendingPrompt(): PendingPromptEvidence | undefined {
     };
     if (typeof item.baselineAssistantMessageId === 'string') pending.baselineAssistantMessageId = item.baselineAssistantMessageId;
     return pending;
-  } catch { return undefined; }
+  } catch { return pendingInMemory; }
 }
 
 function writePendingPrompt(pending: PendingPromptEvidence): void {
-  sessionStorage.setItem(PENDING_PROMPT_KEY, JSON.stringify(pending));
+  pendingInMemory = pending;
+  try { sessionStorage.setItem(PENDING_PROMPT_KEY, JSON.stringify(pending)); } catch { /* memory remains the live-session fallback */ }
 }
 
 function clearPendingPrompt(attemptId: string): void {
   const pending = readPendingPrompt();
-  if (!pending || pending.attemptId === attemptId) sessionStorage.removeItem(PENDING_PROMPT_KEY);
+  if (!pending || pending.attemptId === attemptId) {
+    pendingInMemory = undefined;
+    try { sessionStorage.removeItem(PENDING_PROMPT_KEY); } catch { /* storage may be unavailable */ }
+  }
 }
 
 function observationIdentity(snapshotValue: ReturnType<typeof snapshot>, semanticSignature: string) {
