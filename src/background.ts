@@ -661,12 +661,12 @@ async function reconcileAgentFleetOnce(): Promise<void> {
       } else if (action.kind === 'rollover-start') {
         await beginNativeAgentRollover(agent.id, action.rolloverId); scheduleFleetReconcile(0);
       } else if (action.kind === 'rollover-close') {
-        await tabOperations.run(action.tabId, async () => { await beginNativeAgentRollover(agent.id, action.rolloverId); await reportNativeAgentBrowser({ slotId: agent.id, profileId: 'gam-default', browserState: 'closing', tabId: action.tabId, observedAt: Date.now() }); await clearFleetBinding(agent.conversationKey, action.tabId); try { await chrome.tabs.remove(action.tabId); } catch {} delete mapping[agent.id]; await saveFleetTabMap(mapping); await reportNativeAgentBrowser({ slotId: agent.id, profileId: 'gam-default', browserState: 'absent', observedAt: Date.now() }); });
+        await tabOperations.run(action.tabId, async () => { await beginNativeAgentRollover(agent.id, action.rolloverId); await reportNativeAgentBrowser({ slotId: agent.id, profileId: 'gam-default', browserState: 'closing', tabId: action.tabId, observedAt: Date.now() }); await clearFleetBinding(agent.conversationKey, action.tabId); try { await chrome.tabs.remove(action.tabId); } catch (error) { await reportIncident('fleet-tab-close-failed', agent.id, { tabId: action.tabId, error: error instanceof Error ? error.message : String(error) }); } delete mapping[agent.id]; await saveFleetTabMap(mapping); await reportNativeAgentBrowser({ slotId: agent.id, profileId: 'gam-default', browserState: 'absent', observedAt: Date.now() }); });
       } else if (action.kind === 'close') {
         await tabOperations.run(action.tabId, async () => {
         await reportNativeAgentBrowser({ slotId: agent.id, profileId: 'gam-default', browserState: 'closing', tabId: action.tabId, observedAt: Date.now() });
         await clearFleetBinding(agent.conversationKey, action.tabId);
-        try { await chrome.tabs.remove(action.tabId); } catch { /* tab may already be gone */ }
+        try { await chrome.tabs.remove(action.tabId); } catch (error) { await reportIncident('fleet-tab-close-failed', agent.id, { tabId: action.tabId, error: error instanceof Error ? error.message : String(error) }); }
         delete mapping[agent.id]; await saveFleetTabMap(mapping);
         await reportNativeAgentBrowser({ slotId: agent.id, profileId: 'gam-default', browserState: 'absent', observedAt: Date.now() });
         });
