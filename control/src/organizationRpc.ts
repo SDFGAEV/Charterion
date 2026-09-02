@@ -1,6 +1,6 @@
 import type { CapabilityGrant, RpcRequest } from './contracts';
 import type { ControlPlane } from './controlPlane';
-import type { AgentWorkspaceDangerousActionPolicy, AgentWorkspaceSecurityMode, AgentWorkspaceToolPolicyState, MissionMemberRole, MissionStatus, WorkItemStatus } from './organizationContracts';
+import type { AgentWorkspaceDangerousActionPolicy, AgentWorkspaceSecurityMode, AgentWorkspaceToolPolicyState, MissionMemberRole, MissionStatus, WorkItemCompletionPolicy, WorkItemStatus } from './organizationContracts';
 import type { WorkPriority, WorkRequesterKind, WorkRequestStatus } from './workIngressContracts';
 import type { RequestOrganizationRuntimeAcquisitionInput } from './organizationRuntimeAcquisitionAuthority';
 
@@ -178,7 +178,12 @@ export class OrganizationRpcController {
 
   private workCreate(request: RpcRequest, params: Params): unknown {
     this.auth.requireAdmin(request);
-    return this.plane.organization.createWorkItem({ missionId: stringParam(params,'missionId')!, title: stringParam(params,'title')!, objective: stringParam(params,'objective')!, ownerAgentId: stringParam(params,'ownerAgentId',true), dependsOn: stringArray(params,'dependsOn') });
+    return this.plane.organization.createWorkItem({
+      missionId: stringParam(params,'missionId')!, title: stringParam(params,'title')!, objective: stringParam(params,'objective')!,
+      ownerAgentId: stringParam(params,'ownerAgentId',true),
+      completionPolicy: enumParam<WorkItemCompletionPolicy>(params,'completionPolicy',['structured-result','verified-claim'] as const, true),
+      dependsOn: stringArray(params,'dependsOn'),
+    });
   }
 
   private workStatus(request: RpcRequest, params: Params): unknown {
@@ -239,7 +244,11 @@ export class OrganizationRpcController {
 
   private requestAccept(request: RpcRequest, params: Params): unknown {
     this.auth.requireAdmin(request);
-    return this.plane.ingress.accept({ requestId: stringParam(params,'requestId')!, acceptedBy: stringParam(params,'acceptedBy')!, missionTitle: stringParam(params,'missionTitle',true), driAgentId: stringParam(params,'driAgentId',true) });
+    return this.plane.ingress.accept({
+      requestId: stringParam(params,'requestId')!, acceptedBy: stringParam(params,'acceptedBy')!,
+      missionTitle: stringParam(params,'missionTitle',true), driAgentId: stringParam(params,'driAgentId',true),
+      completionPolicy: enumParam<WorkItemCompletionPolicy>(params,'completionPolicy',['structured-result','verified-claim'] as const, true),
+    });
   }
 
   private requestReject(request: RpcRequest, params: Params): unknown {

@@ -52,7 +52,17 @@ describe('OrganizationAuthority', () => {
     expect(plane.organization.setMissionStatus(mission.id, 'active', 60).status).toBe('active');
     readyWorkspace(plane, b.id, 65);
     const work = plane.organization.createWorkItem({ missionId: mission.id, title: 'Deliver result', objective: 'Use any legitimate tools needed', ownerAgentId: b.id }, 70);
+    expect(work.completionPolicy).toBe('verified-claim');
     expect(plane.organization.setWorkStatus(work.id, 'active', 80).status).toBe('active');
+  });
+
+  it('persists an explicit structured-result completion policy for browser-only Work', () => {
+    const plane = harness();
+    const org = plane.organization.createOrganization({ name: 'Browser Operations' }, 10);
+    const agent = plane.organization.registerAgent({ organizationId: org.id, displayName: 'Operator' }, 20);
+    const mission = plane.organization.createMission({ organizationId: org.id, title: 'Observe ChatGPT', objective: 'Return a structured browser report', driAgentId: agent.id }, 30);
+    const work = plane.organization.createWorkItem({ missionId: mission.id, title: 'Observe', objective: 'Return a structured report', ownerAgentId: agent.id, completionPolicy: 'structured-result' }, 40);
+    expect(plane.organization.getWorkItem(work.id)).toMatchObject({ id: work.id, completionPolicy: 'structured-result' });
   });
 
   it('rejects cross-organization ownership and runtime-slot aliasing', () => {

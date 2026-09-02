@@ -42,7 +42,6 @@ import {
   type SendResult,
   type TaskDispatchResult,
 } from './contracts';
-
 const BINDINGS_KEY = 'bindings.v1';
 const TAB_BINDINGS_KEY = 'tabBindings.v1';
 const SEND_ATTEMPTS_KEY = 'sendAttempts.v1';
@@ -720,8 +719,10 @@ async function reconcileAgentFleetOnce(): Promise<void> {
       }
     }
     await deliverWorkerRequestMessages(snapshot);
-    void dispatchOrganizationTasks();
+    // Fleet bindings may become usable only after the content event that triggered this reconcile.
+    // Give Auto Supervisor a second scheduling opportunity against the reconciled binding state.
     kickSupervisor();
+    void dispatchOrganizationTasks();
   });
 }
 let organizationRetryTimer: number | undefined;

@@ -135,7 +135,9 @@ export class WorkAuthority {
     const task = document(input, 'task');
     const id = workId(task, 'task');
     if (task.kind !== 'work') throw new Error('Appended execution task must be work kind');
-    if (task.completionPolicy !== 'verified-claim') throw new Error('Appended execution task must use verified-claim completion');
+    if (!['reply', 'structured-result', 'verified-claim'].includes(String(task.completionPolicy))) {
+      throw new Error('Appended execution task has an unsupported completion policy');
+    }
     const dependsOn = stringIds(task.dependsOn ?? [], `task ${id}.dependsOn`);
     stringIds(task.attemptIds ?? [], `task ${id}.attemptIds`);
     return this.database.transaction(() => {

@@ -75,4 +75,19 @@ describe('OrganizationExecutionBridge', () => {
     expect(existsSync(taskWorkspace.path)).toBe(true);
     expect(h.plane.getLease(taskWorkspace.leaseId)).toMatchObject({ holderId: h.slot.id, taskId: projected.managerTaskId, status: 'active' });
   }, 30_000);
+
+  it('projects an explicitly browser-only WorkItem as a structured-result task', () => {
+    const h = harness();
+    const work = h.plane.organization.createWorkItem({
+      missionId: h.mission.id, title: 'Report browser observation',
+      objective: 'Inspect the visible ChatGPT conversation and return a factual report.',
+      ownerAgentId: h.agent.id, completionPolicy: 'structured-result',
+    }, 20);
+    h.plane.organization.setWorkStatus(work.id, 'ready', 21);
+
+    const projected = h.plane.organizationExecution.materialize(work.id, 22);
+    expect(work.completionPolicy).toBe('structured-result');
+    expect(projected.task).toMatchObject({ kind: 'work', completionPolicy: 'structured-result', organizationWorkItemId: work.id });
+    expect(h.plane.work.getTask(projected.managerTaskId)?.completionPolicy).toBe('structured-result');
+  });
 });
