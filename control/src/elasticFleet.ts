@@ -123,13 +123,22 @@ export function planElasticFleet(facts: ElasticFleetFacts): ElasticFleetDecision
       const conversationDelta = Number(Boolean(b.conversationKey)) - Number(Boolean(a.conversationKey));
       return conversationDelta || b.updatedAt - a.updatedAt || a.id.localeCompare(b.id);
     });
-  const reserved = new Set<string>();
+  const suspendedByAffinity = new Map<string, AgentSlot[]>();
+  for (const agent of suspended) {
+    const key = roleAffinityKey(agent.role);
+    const group = suspendedByAffinity.get(key);
+    if (group) group.push(agent);
+    else suspendedByAffinity.set(key, [agent]);
+  }
+  const suspendedCursor = new Map<string, number>();
   const occupiedRoles = projectAgents.map((agent) => agent.role);
   for (const [key, requested] of [...demand.entries()].sort(([a], [b]) => a.localeCompare(b))) {
     while ((affinityActive.get(key) ?? 0) < requested.required && remainingActive < facts.project.maxSlots) {
-      const candidate = suspended.find((agent) => !reserved.has(agent.id) && roleAffinityKey(agent.role) === key);
+      const candidates = suspendedByAffinity.get(key) ?? [];
+      const cursor = suspendedCursor.get(key) ?? 0;
+      const candidate = candidates[cursor];
       if (candidate) {
-        reserved.add(candidate.id);
+        suspendedCursor.set(key, cursor + 1);
         decisions.push({ kind: 'resume', slotId: candidate.id, reason: `ready work reuses ${key}` });
         affinityActive.set(key, (affinityActive.get(key) ?? 0) + 1);
         remainingActive += 1;

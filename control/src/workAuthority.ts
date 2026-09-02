@@ -74,6 +74,7 @@ function validateState(input: ReplaceKernelWorkInput): ReplaceKernelWorkInput {
   const taskIds = new Set(tasks.map((item) => workId(item, 'task')));
   const attemptIds = new Set(attempts.map((item) => workId(item, 'attempt')));
   const messageIds = new Set(messages.map((item) => workId(item, 'message')));
+  const attemptsById = new Map(attempts.map((item) => [workId(item, 'attempt'), item]));
 
   for (const attempt of attempts) {
     const taskId = typeof attempt.taskId === 'string' ? attempt.taskId : undefined;
@@ -86,14 +87,14 @@ function validateState(input: ReplaceKernelWorkInput): ReplaceKernelWorkInput {
   for (const task of tasks) {
     for (const attemptId of stringIds(task.attemptIds ?? [], `task ${task.id}.attemptIds`)) {
       if (!attemptIds.has(attemptId)) throw new Error(`Task ${workId(task, 'task')} references missing attempt ${attemptId}`);
-      const attempt = attempts.find((item) => workId(item, 'attempt') === attemptId)!;
+      const attempt = attemptsById.get(attemptId)!;
       if (attempt.taskId !== workId(task, 'task')) throw new Error(`Task ${workId(task, 'task')} does not own attempt ${attemptId}`);
     }
   }
   for (const message of messages) {
     for (const attemptId of stringIds(message.attemptIds ?? [], `message ${message.id}.attemptIds`)) {
       if (!attemptIds.has(attemptId)) throw new Error(`Message ${workId(message, 'message')} references missing attempt ${attemptId}`);
-      const attempt = attempts.find((item) => workId(item, 'attempt') === attemptId)!;
+      const attempt = attemptsById.get(attemptId)!;
       if (attempt.messageId !== workId(message, 'message')) throw new Error(`Message ${workId(message, 'message')} does not own attempt ${attemptId}`);
     }
   }
