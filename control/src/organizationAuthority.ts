@@ -17,6 +17,7 @@ import type {
   OrganizationRecord,
   OrganizationSnapshot,
   RegisterOrganizationAgentInput,
+  WorkItemCompletionPolicy,
   WorkItemRecord,
   WorkItemStatus,
 } from './organizationContracts';
@@ -88,7 +89,9 @@ function missionFrom(row: Row): MissionRecord {
 function workItemFrom(row: Row): WorkItemRecord {
   const value: WorkItemRecord = {
     id: String(row.id), missionId: String(row.mission_id), title: String(row.title), objective: String(row.objective),
-    status: String(row.status) as WorkItemRecord['status'], dependsOn: parseJsonStringArray(String(row.depends_on_json), 'organization work item dependencies'),
+    status: String(row.status) as WorkItemRecord['status'],
+    completionPolicy: String(row.completion_policy ?? 'verified-claim') as WorkItemCompletionPolicy,
+    dependsOn: parseJsonStringArray(String(row.depends_on_json), 'organization work item dependencies'),
     createdAt: Number(row.created_at), updatedAt: Number(row.updated_at),
   };
   if (row.owner_agent_id !== null) value.ownerAgentId = String(row.owner_agent_id);
@@ -490,6 +493,8 @@ export class OrganizationAuthority {
       if (agent.organizationId !== mission.organizationId || agent.status !== 'active') throw new Error('Work owner must be an active Agent in the Mission organization');
       owner = agent.id;
     }
+    const completionPolicy = input.completionPolicy ?? 'verified-claim';
+    if (!['structured-result', 'verified-claim'].includes(completionPolicy)) throw new Error('Work completion policy is invalid');
     const dependsOn = [...new Set(input.dependsOn ?? [])];
     for (const dependencyId of dependsOn) {
       const dependency = this.getWorkItem(dependencyId);
@@ -497,9 +502,9 @@ export class OrganizationAuthority {
     }
     const id = randomUUID();
     return this.database.transaction(() => {
-      this.database.db.prepare(`INSERT INTO organization_work_items(id,mission_id,title,objective,owner_agent_id,status,depends_on_json,created_at,updated_at)
-        VALUES(?,?,?,?,?,'proposed',?,?,?)`).run(id, mission.id, required(input.title, 'Work title'), required(input.objective, 'Work objective'), owner, JSON.stringify(dependsOn), now, now);
-      this.event('WORK_ITEM_CREATED', id, { missionId: mission.id, ownerAgentId: owner, dependsOn }, now);
+      this.database.db.prepare(`INSERT INTO organization_work_items(id,mission_id,title,objective,owner_agent_id,status,completion_policy,depends_on_json,created_at,updated_at)
+        VALUES(?,?,?,?,?,'proposed',?,?,?,?)`).run(id, mission.id, required(input.title, 'Work title'), required(input.objective, 'Work objective'), owner, completionPolicy, JSON.stringify(dependsOn), now, now);
+      this.event('WORK_ITEM_CREATED', id, { missionId: mission.id, ownerAgentId: owner, completionPolicy, dependsOn }, now);
       return this.getWorkItem(id);
     });
   }

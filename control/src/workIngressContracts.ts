@@ -1,3 +1,5 @@
+import type { WorkItemCompletionPolicy } from './organizationContracts';
+
 export type WorkRequesterKind = 'human' | 'external-ai' | 'internal-agent' | 'system';
 export type WorkRequestStatus = 'received' | 'accepted' | 'rejected' | 'cancelled';
 export type WorkPriority = 'low' | 'normal' | 'high' | 'urgent';
@@ -42,6 +44,7 @@ export interface AcceptWorkRequestInput {
   acceptedBy: string;
   missionTitle?: string | undefined;
   driAgentId?: string | undefined;
+  completionPolicy?: WorkItemCompletionPolicy | undefined;
 }
 
 export interface DecideWorkRequestInput {

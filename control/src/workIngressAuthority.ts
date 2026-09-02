@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { ControlDatabase } from './database';
-import type { MissionRecord, WorkItemRecord } from './organizationContracts';
+import type { MissionRecord, WorkItemCompletionPolicy, WorkItemRecord } from './organizationContracts';
 import type {
   AcceptWorkRequestInput,
   CompleteWorkItemInput,
@@ -136,16 +136,18 @@ export class WorkIngressAuthority {
       const missionId = randomUUID();
       const workItemId = randomUUID();
       const missionTitle = input.missionTitle?.trim() || request.objective.slice(0, 120);
+      const completionPolicy = input.completionPolicy ?? 'verified-claim';
+      if (!['structured-result', 'verified-claim'].includes(completionPolicy)) throw new Error('Work completion policy is invalid');
       const missionStatus = driAgentId ? 'active' : 'proposed';
       const workStatus = driAgentId ? 'ready' : 'proposed';
       this.database.db.prepare(`INSERT INTO missions(id,organization_id,project_id,title,objective,status,dri_agent_id,source_request_id,created_at,updated_at)
         VALUES(?,?,?,?,?,?,?,?,?,?)`).run(missionId, request.organizationId, request.projectId ?? null, missionTitle, request.objective, missionStatus, driAgentId, request.id, now, now);
       if (driAgentId) this.database.db.prepare("INSERT INTO mission_members(mission_id,agent_id,role,joined_at) VALUES(?,?,'contributor',?)").run(missionId, driAgentId, now);
-      this.database.db.prepare(`INSERT INTO organization_work_items(id,mission_id,title,objective,owner_agent_id,status,depends_on_json,created_at,updated_at)
-        VALUES(?,?,?,?,?,?, '[]',?,?)`).run(workItemId, missionId, missionTitle, request.objective, driAgentId, workStatus, now, now);
+      this.database.db.prepare(`INSERT INTO organization_work_items(id,mission_id,title,objective,owner_agent_id,status,completion_policy,depends_on_json,created_at,updated_at)
+        VALUES(?,?,?,?,?,?,?,'[]',?,?)`).run(workItemId, missionId, missionTitle, request.objective, driAgentId, workStatus, completionPolicy, now, now);
       this.database.db.prepare("UPDATE work_requests SET status='accepted',mission_id=?,decision_by=?,updated_at=? WHERE id=?")
         .run(missionId, acceptedBy, now, request.id);
-      this.event('WORK_REQUEST_ACCEPTED', request.id, { acceptedBy, missionId, workItemId, driAgentId }, now);
+      this.event('WORK_REQUEST_ACCEPTED', request.id, { acceptedBy, missionId, workItemId, driAgentId, completionPolicy }, now);
       return this.get(request.id);
     });
   }
@@ -231,7 +233,7 @@ export class WorkIngressAuthority {
     const mission = this.missionFor(requestId);
     if (!mission) return [];
     return (this.database.db.prepare('SELECT * FROM organization_work_items WHERE mission_id=? ORDER BY created_at,id').all(mission.id) as Row[]).map((row) => {
-      const item: WorkItemRecord = { id: String(row.id), missionId: String(row.mission_id), title: String(row.title), objective: String(row.objective), status: String(row.status) as WorkItemRecord['status'], dependsOn: JSON.parse(String(row.depends_on_json)) as string[], createdAt: Number(row.created_at), updatedAt: Number(row.updated_at) };
+      const item: WorkItemRecord = { id: String(row.id), missionId: String(row.mission_id), title: String(row.title), objective: String(row.objective), status: String(row.status) as WorkItemRecord['status'], completionPolicy: String(row.completion_policy ?? 'verified-claim') as WorkItemRecord['completionPolicy'], dependsOn: JSON.parse(String(row.depends_on_json)) as string[], createdAt: Number(row.created_at), updatedAt: Number(row.updated_at) };
       if (row.owner_agent_id !== null) item.ownerAgentId = String(row.owner_agent_id);
       return item;
     });

@@ -1,4 +1,5 @@
 import { roleAffinityKey, stableRoleLabel } from '../../shared/agentRole';
+import { isStructuredTaskResult } from '../../shared/structuredResult';
 import type { AgentSlot, ProjectCell } from './contracts';
 import type { KernelWorkSnapshot } from './workAuthority';
 
@@ -56,6 +57,10 @@ function taskTerminal(task: Record<string, unknown>, attempts: ReadonlyMap<strin
   const latestAttemptId = ids.at(-1);
   if (latestAttemptId && text(task.retryAfterAttemptId) === latestAttemptId) return false;
   if (policy === 'reply') return latestAttemptId ? text(attempts.get(latestAttemptId)?.state) === 'reply-observed' : false;
+  if (policy === 'structured-result') {
+    const attempt = latestAttemptId ? attempts.get(latestAttemptId) : undefined;
+    return text(attempt?.state) === 'reply-observed' && isStructuredTaskResult(text(attempt?.replyTextTail) ?? '');
+  }
   if (policy === 'review-pass') return latestAttemptId ? reviewAttemptPassed(attempts.get(latestAttemptId)) : false;
   if (policy === 'human-approval') {
     const decision = task.humanDecision as Record<string, unknown> | undefined;

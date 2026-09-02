@@ -4,6 +4,7 @@ export type DomainStatus = 'active' | 'archived';
 export type OrganizationAgentStatus = 'active' | 'suspended' | 'retired';
 export type MissionStatus = 'proposed' | 'active' | 'blocked' | 'completed' | 'cancelled';
 export type WorkItemStatus = 'proposed' | 'ready' | 'active' | 'blocked' | 'completed' | 'cancelled';
+export type WorkItemCompletionPolicy = 'structured-result' | 'verified-claim';
 export type MissionMemberRole = 'contributor' | 'reviewer' | 'advisor' | 'observer';
 
 export interface OrganizationRecord {
@@ -81,6 +82,7 @@ export interface WorkItemRecord {
   objective: string;
   ownerAgentId?: string | undefined;
   status: WorkItemStatus;
+  completionPolicy: WorkItemCompletionPolicy;
   dependsOn: string[];
   createdAt: number;
   updatedAt: number;
@@ -124,6 +126,7 @@ export interface CreateWorkItemInput {
   title: string;
   objective: string;
   ownerAgentId?: string | undefined;
+  completionPolicy?: WorkItemCompletionPolicy | undefined;
   dependsOn?: string[] | undefined;
 }
 

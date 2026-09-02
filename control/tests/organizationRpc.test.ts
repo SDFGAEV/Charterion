@@ -39,13 +39,17 @@ describe('organization and external work ingress RPC', () => {
 
     const department = h.plane.organization.createDepartment({ organizationId, name: 'Research' });
     const agent = h.plane.organization.registerAgent({ organizationId, displayName: 'Researcher A', primaryDepartmentId: department.id });
-    const accepted = h.router.handle({ id: 'accept', method: 'work-request.accept', auth: { adminToken: 'admin' }, params: { requestId, acceptedBy: 'human:owner', driAgentId: agent.id } });
+    const accepted = h.router.handle({ id: 'accept', method: 'work-request.accept', auth: { adminToken: 'admin' }, params: {
+      requestId, acceptedBy: 'human:owner', driAgentId: agent.id, completionPolicy: 'structured-result',
+    } });
     expect(accepted).toMatchObject({ ok: true, result: { status: 'accepted' } });
 
     const inspected = h.router.handle({ id: 'inspect', method: 'work-request.get', auth: { capabilityToken: external.token }, params: { requestId } });
     expect(inspected.ok).toBe(true);
     if (!inspected.ok) return;
-    const workItemId = ((inspected.result as { workItems: Array<{ id: string }> }).workItems[0]!).id;
+    const workItem = (inspected.result as { workItems: Array<{ id: string; completionPolicy: string }> }).workItems[0]!;
+    const workItemId = workItem.id;
+    expect(workItem.completionPolicy).toBe('structured-result');
 
     const worker = h.plane.issueCapability({ subject: agent.id, projectId: project.id, scopes: ['work:complete'], ttlMs: 60_000 });
     const completed = h.router.handle({ id: 'complete', method: 'org-work.complete', auth: { capabilityToken: worker.token }, params: {

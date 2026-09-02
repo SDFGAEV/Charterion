@@ -113,6 +113,16 @@ describe('elastic fleet planner', () => {
     });
     expect(decisions.map((item) => item.kind)).toEqual(['suspend']);
   });
+  it('stops treating a valid structured-result task as demand', () => {
+    const task = { id: 't1', project: 'Project One', targetRole: 'WORKER', completionPolicy: 'structured-result', dependsOn: [], attemptIds: ['x1'] };
+    const replyTextTail = '<GAM_RESULT>\n{"status":"completed","summary":"Observed the requested browser state","evidence":["assistant reply was captured"]}\n</GAM_RESULT>';
+    const decisions = planElasticFleet({
+      project: project({ minSlots: 0 }), agents: [agent('a1', 'WORKER')], work: work([task], [{ attemptId: 'x1', state: 'reply-observed', replyTextTail }]),
+      activeLeaseHolderIds: new Set(), unsettledBrowserSlotIds: new Set(), now: NOW, idleGraceMs: 0,
+    });
+    expect(decisions.map((item) => item.kind)).toEqual(['suspend']);
+  });
+
   it('keeps reviewer demand after an explicit failed review', () => {
     const task = { id: 'r1', project: 'Project One', targetRole: 'REVIEWER', completionPolicy: 'review-pass', dependsOn: [], attemptIds: ['x1'] };
     const replyTextTail = 'review\n<GAM_REVIEW>\n{"decision":"fail","reason":"needs fix","nextInstruction":"fix it"}\n</GAM_REVIEW>';

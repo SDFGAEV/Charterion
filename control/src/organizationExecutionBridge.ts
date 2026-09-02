@@ -78,7 +78,7 @@ export class OrganizationExecutionBridge {
     const task: WorkDocument = {
       id: managerTaskId,
       kind: 'work',
-      completionPolicy: 'verified-claim',
+      completionPolicy: workItem.completionPolicy,
       title: workItem.title,
       project: project.name,
       instruction,

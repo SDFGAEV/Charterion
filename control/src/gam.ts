@@ -154,11 +154,18 @@ function launchBrowser(noBrowser: boolean): { browser: 'launched' | 'skipped' | 
   const extension = repoRoot();
   const args = [
     `--user-data-dir=${profile}`,
+    '--remote-debugging-port=9222',
+    '--remote-allow-origins=*',
     '--new-window',
     'https://chatgpt.com/',
   ];
-  if (existsSync(join(extension, 'manifest.json'))) args.splice(1, 0, `--load-extension=${extension}`);
-  const child = spawn(chrome, args, { detached: true, windowsHide: false, stdio: 'ignore' });
+  if (existsSync(join(extension, 'manifest.json'))) args.splice(1, 0, `--disable-extensions-except=${extension}`, `--load-extension=${extension}`);
+  const child = spawn(chrome, args, {
+    detached: true,
+    windowsHide: false,
+    stdio: 'ignore',
+    env: { ...process.env, COMSPEC: process.env.COMSPEC || join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'cmd.exe') },
+  });
   child.unref();
   return { browser: 'launched', chromeProfile: profile, chromePath: chrome };
 }

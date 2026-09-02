@@ -2,7 +2,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { dirname, relative, resolve, isAbsolute } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-export const CONTROL_SCHEMA_VERSION = 25;
+export const CONTROL_SCHEMA_VERSION = 26;
 
 export class ControlDatabase {
   readonly db: DatabaseSync;
@@ -101,6 +101,7 @@ export class ControlDatabase {
     if (version < 23) this.migrateV23();
     if (version < 24) this.migrateV24();
     if (version < 25) this.migrateV25();
+    if (version < 26) this.migrateV26();
     this.db.prepare(`
       INSERT INTO schema_meta(key, value) VALUES('schema_version', ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value
@@ -768,6 +769,15 @@ export class ControlDatabase {
           SELECT RAISE(ABORT, 'Acquired runtime slot is not bound to the Organization Agent');
         END;
       `);
+    });
+  }
+
+  private migrateV26(): void {
+    this.transaction(() => {
+      const columns = this.db.prepare('PRAGMA table_info(organization_work_items)').all() as Array<{ name?: string }>;
+      if (!columns.some((column) => column.name === 'completion_policy')) {
+        this.db.exec("ALTER TABLE organization_work_items ADD COLUMN completion_policy TEXT NOT NULL DEFAULT 'verified-claim' CHECK(completion_policy IN ('structured-result','verified-claim'))");
+      }
     });
   }
 
