@@ -9,6 +9,8 @@ const contentEpoch = crypto.randomUUID();
 let observationRevision = 0;
 let lastSemanticKey = '';
 let publishTimer: number | undefined;
+let publishRunning = false;
+let publishPending = false;
 const inflightAttempts = new Set<string>();
 const deliveredInMemory = new Set<string>();
 let pendingInMemory: PendingPromptEvidence | undefined;
@@ -87,20 +89,35 @@ async function reportReplyIfReady(next = snapshot(), semanticSignature = snapsho
 }
 
 async function publishChanged(): Promise<void> {
-  const next = snapshot();
-  observationRevision += 1;
-  const semanticKey = snapshotSemanticKey(next);
-  if (semanticKey !== lastSemanticKey) {
-    lastSemanticKey = semanticKey;
-    const notice: RuntimeNotice = { type: 'content:changed', observation: observationIdentity(next, semanticKey), snapshot: next };
-    try { await chrome.runtime.sendMessage(notice); } catch { /* old content script may be detached */ }
+  if (publishRunning) {
+    publishPending = true;
+    return;
   }
-  await reportReplyIfReady(next, semanticKey);
+  publishRunning = true;
+  try {
+    do {
+      publishPending = false;
+      const next = snapshot();
+      observationRevision += 1;
+      const semanticKey = snapshotSemanticKey(next);
+      if (semanticKey !== lastSemanticKey) {
+        lastSemanticKey = semanticKey;
+        const notice: RuntimeNotice = { type: 'content:changed', observation: observationIdentity(next, semanticKey), snapshot: next };
+        try { await chrome.runtime.sendMessage(notice); } catch { /* old content script may be detached */ }
+      }
+      await reportReplyIfReady(next, semanticKey);
+    } while (publishPending);
+  } finally {
+    publishRunning = false;
+  }
 }
 
 function schedulePublish(): void {
   if (publishTimer !== undefined) window.clearTimeout(publishTimer);
-  publishTimer = window.setTimeout(() => void publishChanged(), 180);
+  publishTimer = window.setTimeout(() => {
+    publishTimer = undefined;
+    void publishChanged();
+  }, 180);
 }
 
 chrome.runtime.onMessage.addListener((message: ContentRequest, _sender, sendResponse) => {

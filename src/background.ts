@@ -20,6 +20,7 @@ import { TabOperationQueue } from './tabOperationQueue';
 import { controlFeedbackMessages } from './controlFeedback';
 import { ContentRuntimeFence } from './contentRuntimeFence';
 import { browserOperationPolicy } from './browserOperationPolicy';
+import { createBindingStore } from './bindingStore';
 import { recoveryStateForTab, snapshotForTab } from './contentRuntimeBridge';
 import { reportIncident, reportSlotRuntime, sha256Text } from './browserRuntimeReporting';
 import { PROMPT_DISPATCH_GOVERNOR_KEY, PromptDispatchGovernor } from './promptDispatchGovernor';
@@ -48,47 +49,23 @@ const SUPERVISOR_KEY = 'supervisor.v1';
 const FLEET_TABS_KEY = 'fleetTabs.v1';
 const CONTROL_REQUEST_MESSAGE_PREFIX = 'control-request:';
 let stateMutationTail: Promise<void> = Promise.resolve();
+let bindingMutationTail: Promise<void> = Promise.resolve();
 const tabOperations = new TabOperationQueue();
 const contentRuntimeFence = new ContentRuntimeFence();
 const promptDispatchGovernor = new PromptDispatchGovernor({
   read: async () => (await chrome.storage.local.get(PROMPT_DISPATCH_GOVERNOR_KEY))[PROMPT_DISPATCH_GOVERNOR_KEY],
   write: async (state) => { await chrome.storage.local.set({ [PROMPT_DISPATCH_GOVERNOR_KEY]: state }); },
 });
-function parseBinding(value: unknown): RoleBinding | undefined {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
-  const item = value as Record<string, unknown>;
-  if (typeof item.role !== 'string' || typeof item.project !== 'string' || typeof item.notes !== 'string') return undefined;
-  if (item.agentSlotId !== undefined && typeof item.agentSlotId !== 'string') return undefined;
-  return { role: item.role, project: item.project, notes: item.notes, ...(typeof item.agentSlotId === 'string' ? { agentSlotId: item.agentSlotId } : {}) };
+function serializeBindingMutation<T>(operation: () => Promise<T>): Promise<T> {
+  const run = bindingMutationTail.then(operation);
+  bindingMutationTail = run.then(() => undefined, () => undefined);
+  return run;
 }
 
-function parseBindingMap(value: unknown): Record<string, RoleBinding> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-  const result: Record<string, RoleBinding> = {};
-  for (const [key, raw] of Object.entries(value)) {
-    const binding = parseBinding(raw);
-    if (binding) result[key] = binding;
-  }
-  return result;
-}
-
-async function localBindings(): Promise<Record<string, RoleBinding>> {
-  const stored = await chrome.storage.local.get(BINDINGS_KEY);
-  return parseBindingMap(stored[BINDINGS_KEY]);
-}
-
-async function sessionBindings(): Promise<Record<string, RoleBinding>> {
-  const stored = await chrome.storage.session.get(TAB_BINDINGS_KEY);
-  return parseBindingMap(stored[TAB_BINDINGS_KEY]);
-}
-
-async function saveLocal(bindings: Record<string, RoleBinding>): Promise<void> {
-  await chrome.storage.local.set({ [BINDINGS_KEY]: bindings });
-}
-
-async function saveSession(bindings: Record<string, RoleBinding>): Promise<void> {
-  await chrome.storage.session.set({ [TAB_BINDINGS_KEY]: bindings });
-}
+const bindingStore = createBindingStore(
+  { local: chrome.storage.local, session: chrome.storage.session },
+  { persistent: BINDINGS_KEY, ephemeral: TAB_BINDINGS_KEY },
+);
 
 async function fleetTabMap(): Promise<Record<string, number>> {
   const stored = await chrome.storage.session.get(FLEET_TABS_KEY);
@@ -137,17 +114,12 @@ async function reconcileAfterRestart(): Promise<void> {
 }
 
 async function bindingFor(tabId: number, snapshot: ChatSnapshot): Promise<RoleBinding> {
-  const [persistent, ephemeral] = await Promise.all([localBindings(), sessionBindings()]);
-  const durable = persistent[snapshot.conversationKey];
-  if (durable) return durable;
-  const temporary = ephemeral[String(tabId)];
-  if (!temporary) return { ...EMPTY_BINDING };
-  if (snapshot.conversationId) {
-    persistent[snapshot.conversationKey] = temporary;
-    delete ephemeral[String(tabId)];
-    await Promise.all([saveLocal(persistent), saveSession(ephemeral)]);
-  }
-  return temporary;
+  return serializeBindingMutation(async () => {
+    const stores = await bindingStore.read();
+    const binding = bindingStore.resolve(tabId, snapshot, stores);
+    await bindingStore.persist(stores);
+    return binding;
+  });
 }
 
 async function managedTabs(attempts?: readonly SendAttemptRecord[]): Promise<ManagedTab[]> {
@@ -155,34 +127,38 @@ async function managedTabs(attempts?: readonly SendAttemptRecord[]): Promise<Man
     chrome.tabs.query({ url: ['https://chatgpt.com/*'] }),
     attempts ? Promise.resolve(undefined) : workState(),
   ]);
+  const candidates = tabs.filter((tab): tab is chrome.tabs.Tab & { id: number } => tab.id !== undefined);
+  if (candidates.length === 0) return [];
   const ledger = attempts ?? currentState?.attempts ?? [];
-  const managed = await Promise.all(tabs.filter((tab) => tab.id !== undefined).map(async (tab) => {
-    const snapshot = await snapshotForTab(tab);
-    const lastAttempt = [...ledger].reverse().find((attempt) =>
-      attemptBelongsToTab(attempt, tab.id!, snapshot),
-    );
-    const result: ManagedTab = {
-      tabId: tab.id!,
-      windowId: tab.windowId,
-      active: tab.active,
-      snapshot,
-      binding: await bindingFor(tab.id!, snapshot),
-    };
-    if (lastAttempt) result.lastAttempt = lastAttempt;
-    return result;
-  }));
-  return managed.sort((a, b) => a.tabId - b.tabId);
+  const observed = await Promise.all(candidates.map(async (tab) => ({
+    tab,
+    snapshot: await snapshotForTab(tab),
+  })));
+  return serializeBindingMutation(async () => {
+    const stores = await bindingStore.read();
+    const managed = observed
+      .sort((a, b) => a.tab.id - b.tab.id)
+      .map(({ tab, snapshot }) => {
+        const lastAttempt = [...ledger].reverse().find((attempt) =>
+          attemptBelongsToTab(attempt, tab.id, snapshot),
+        );
+        const result: ManagedTab = {
+          tabId: tab.id,
+          windowId: tab.windowId,
+          active: tab.active,
+          snapshot,
+          binding: bindingStore.resolve(tab.id, snapshot, stores),
+        };
+        if (lastAttempt) result.lastAttempt = lastAttempt;
+        return result;
+      });
+    await bindingStore.persist(stores);
+    return managed;
+  });
 }
 
 async function updateBinding(tabId: number, conversationKey: string, binding: RoleBinding): Promise<void> {
-  const [persistent, ephemeral] = await Promise.all([localBindings(), sessionBindings()]);
-  if (conversationKey.startsWith('conversation:')) {
-    persistent[conversationKey] = binding;
-    delete ephemeral[String(tabId)];
-  } else {
-    ephemeral[String(tabId)] = binding;
-  }
-  await Promise.all([saveLocal(persistent), saveSession(ephemeral)]);
+  await serializeBindingMutation(() => bindingStore.update(tabId, conversationKey, binding));
 }
 
 async function prepareAttempt(
@@ -476,22 +452,24 @@ async function retryReviewLoop(taskId: string): Promise<{ reviewTask: AgentTask;
 }
 
 async function exportStateDocument(): Promise<string> {
-  const [bindings, state, enabled] = await Promise.all([localBindings(), workState(), supervisorEnabled()]);
+  const [bindings, state, enabled] = await Promise.all([bindingStore.readPersistent(), workState(), supervisorEnabled()]);
   return stringifyPortableManagerState(createPortableManagerState(bindings, state.tasks, state.attempts, state.messages, enabled));
 }
 
 async function importStateDocument(document: string): Promise<void> {
   const imported = parsePortableManagerState(document);
-  await serializeStateMutation(async () => {
-    const current = await readWorkState();
-    await replaceWorkState(current, {
-      tasks: imported.tasks,
-      attempts: restorePortableAttempts(imported.attempts),
-      messages: imported.messages,
+  await serializeBindingMutation(async () => {
+    await serializeStateMutation(async () => {
+      const current = await readWorkState();
+      await replaceWorkState(current, {
+        tasks: imported.tasks,
+        attempts: restorePortableAttempts(imported.attempts),
+        messages: imported.messages,
+      });
+      await chrome.storage.local.set({ [BINDINGS_KEY]: imported.bindings, [SUPERVISOR_KEY]: imported.supervisorEnabled });
+      await chrome.storage.local.remove([TASKS_KEY, SEND_ATTEMPTS_KEY, MESSAGES_KEY]);
+      await chrome.storage.session.remove(TAB_BINDINGS_KEY);
     });
-    await chrome.storage.local.set({ [BINDINGS_KEY]: imported.bindings, [SUPERVISOR_KEY]: imported.supervisorEnabled });
-    await chrome.storage.local.remove([TASKS_KEY, SEND_ATTEMPTS_KEY, MESSAGES_KEY]);
-    await chrome.storage.session.remove(TAB_BINDINGS_KEY);
   });
 }
 
@@ -556,21 +534,25 @@ async function reportBrowserRuntimeFromTabs(tabs: ManagedTab[]): Promise<void> {
   });
 }
 
+const browserRuntimeReportRunner = new CoalescingRunner(async () => {
+  const state = await workState();
+  const tabs = await managedTabs(state.attempts);
+  await reportBrowserRuntimeFromTabs(tabs);
+}, (error) => {
+  void reportIncident('browser-runtime-report-failed', 'gam-default', { error: error instanceof Error ? error.message : String(error) });
+});
+
 function scheduleBrowserRuntimeReport(): void {
   if (browserReportTimer !== undefined) clearTimeout(browserReportTimer);
   browserReportTimer = setTimeout(() => {
     browserReportTimer = undefined;
-    void workState().then((state) => managedTabs(state.attempts)).then(reportBrowserRuntimeFromTabs)
-      .catch((error) => reportIncident('browser-runtime-report-failed', 'gam-default', { error: error instanceof Error ? error.message : String(error) }));
+    browserRuntimeReportRunner.kick();
   }, 250) as unknown as number;
 }
 let fleetReconcileTimer: number | undefined;
 
 async function clearFleetBinding(conversationKey: string | undefined, tabId: number | undefined): Promise<void> {
-  const [persistent, ephemeral] = await Promise.all([localBindings(), sessionBindings()]);
-  if (conversationKey) delete persistent[conversationKey];
-  if (tabId !== undefined) delete ephemeral[String(tabId)];
-  await Promise.all([saveLocal(persistent), saveSession(ephemeral)]);
+  await serializeBindingMutation(() => bindingStore.clear(conversationKey, tabId));
 }
 
 async function syncWorkerRequestMessages(snapshot: import('./nativeControl').NativeControlSnapshot): Promise<void> {
@@ -867,13 +849,21 @@ chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
 chrome.tabs.onRemoved.addListener((tabId) => {
   contentRuntimeFence.remove(tabId);
   void (async () => {
-    const [bindings, mapping] = await Promise.all([sessionBindings(), fleetTabMap()]);
-    let changed = false;
-    if (bindings[String(tabId)] !== undefined) { delete bindings[String(tabId)]; changed = true; }
+    const [mapping, bindingChanged] = await Promise.all([
+      fleetTabMap(),
+      serializeBindingMutation(async () => {
+        const bindings = await bindingStore.readEphemeral();
+        if (bindings[String(tabId)] === undefined) return false;
+        delete bindings[String(tabId)];
+        await bindingStore.writeEphemeral(bindings);
+        return true;
+      }),
+    ]);
+    let mappingChanged = false;
     for (const [slotId, mappedTabId] of Object.entries(mapping)) {
-      if (mappedTabId === tabId) { delete mapping[slotId]; changed = true; }
+      if (mappedTabId === tabId) { delete mapping[slotId]; mappingChanged = true; }
     }
-    if (changed) await Promise.all([saveSession(bindings), saveFleetTabMap(mapping)]);
+    if (mappingChanged) await saveFleetTabMap(mapping);
     await notifyManagerChanged();
     scheduleFleetReconcile(0);
   })().catch((error) => reportIncident('tab-removal-reconciliation-failed', String(tabId), { error: error instanceof Error ? error.message : String(error) }));
