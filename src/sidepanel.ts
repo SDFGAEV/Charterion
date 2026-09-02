@@ -449,7 +449,10 @@ function render(): void {
   summary.textContent = `${tabs.length} open · ${idle} idle · ${generating} generating · ${attention} attention`;
 }
 
-async function refresh(): Promise<void> {
+let refreshInFlight: Promise<void> | undefined;
+let refreshPending = false;
+
+async function refreshOnce(): Promise<void> {
   try {
     const response = await request<{ tabs: ManagedTab[]; tasks: ManagedTask[]; messages: ManagedMessage[]; supervisorEnabled: boolean }>({ type: 'manager:list' });
     tabs = response.tabs;
@@ -465,9 +468,26 @@ async function refresh(): Promise<void> {
   }
 }
 
+function refresh(): Promise<void> {
+  refreshPending = true;
+  if (refreshInFlight) return refreshInFlight;
+  refreshInFlight = (async () => {
+    do {
+      refreshPending = false;
+      await refreshOnce();
+    } while (refreshPending);
+  })().finally(() => {
+    refreshInFlight = undefined;
+  });
+  return refreshInFlight;
+}
+
 function scheduleRefresh(): void {
   if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
-  refreshTimer = window.setTimeout(() => void refresh(), 120);
+  refreshTimer = window.setTimeout(() => {
+    refreshTimer = undefined;
+    void refresh();
+  }, 120);
 }
 
 async function sendSelected(): Promise<void> {

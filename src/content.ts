@@ -8,6 +8,8 @@ const MAX_DELIVERED_ATTEMPTS = 100;
 const contentEpoch = crypto.randomUUID();
 let observationRevision = 0;
 let lastSemanticKey = '';
+let snapshotCache: ReturnType<typeof snapshotFromDocument> | undefined;
+let snapshotDirty = true;
 let publishTimer: number | undefined;
 let publishRunning = false;
 let publishPending = false;
@@ -16,7 +18,10 @@ const deliveredInMemory = new Set<string>();
 let pendingInMemory: PendingPromptEvidence | undefined;
 
 function snapshot() {
-  return snapshotFromDocument(document, location.href, `provisional:${contentEpoch}`);
+  if (!snapshotDirty && snapshotCache) return { ...snapshotCache, observedAt: Date.now() };
+  snapshotCache = snapshotFromDocument(document, location.href, `provisional:${contentEpoch}`);
+  snapshotDirty = false;
+  return snapshotCache;
 }
 
 function deliveredAttempts(): string[] {
@@ -113,6 +118,7 @@ async function publishChanged(): Promise<void> {
 }
 
 function schedulePublish(): void {
+  snapshotDirty = true;
   if (publishTimer !== undefined) window.clearTimeout(publishTimer);
   publishTimer = window.setTimeout(() => {
     publishTimer = undefined;
